@@ -80,7 +80,7 @@ cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=*** python ../ai/rag/build_index.
 
 ## 👥 团队
 
-大学生创新创业训练计划项目 · 4 人协作
+ · 4 人协作
 
 | 角色 | 职责域 |
 |---|---|
