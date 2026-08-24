@@ -45,6 +45,7 @@ xiaojietong-project/
 │   └── sql/        # 42 张表建表脚本 + 种子数据
 ├── ai/             # 微调 / RAG / 端侧 / 评估
 ├── miniprogram/    # 微信小程序前端
+├── ui/             # UI 素材：图片 / 图标 / 静态资源
 ├── docs/           # 架构 / 接口契约 / 开发文档
 ├── deploy/         # Docker / Nginx / HTTPS（规划）
 └── .github/        # Copilot 开发指令
