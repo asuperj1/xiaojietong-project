@@ -1,0 +1,28 @@
+# ---- Web 框架 ----
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+pydantic-settings>=2.2
+
+# ---- 数据库 ----
+# C++ 数据层通过 pybind11 扩展接入，此处仅需要桥接层依赖
+# （jt_db 扩展需按 db/cpp_driver/README.md 编译）
+# SQLAlchemy 仅作为复杂查询/迁移(Alembic)的辅助，不承担主数据通道
+SQLAlchemy>=2.0
+alembic>=1.13
+
+# ---- 缓存 / 异步任务 ----
+redis>=5.0
+celery>=5.3
+
+# ---- AI 相关 ----
+httpx>=0.27
+# RAG 向量化：bge-m3 embedding 经 Ollama /api/embed，向量库 ChromaDB（自动降级 numpy）
+numpy>=2.0
+chromadb>=1.5
+# 大模型/RAG 相关依赖由成员2 在 ai/ 目录维护，此处不强制
+# openai  # Ollama / OpenAI 兼容接口
+# langchain-core
+
+# ---- 工具 ----
+python-multipart>=0.0.9
