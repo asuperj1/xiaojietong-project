@@ -1,0 +1,39 @@
+# ---- 构建产物 ----
+build/
+out/
+*.o
+*.obj
+*.pyd
+*.so
+*.dll
+*.exe
+*.lib
+*.a
+*.exp
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# ---- IDE / 系统 ----
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# ---- 环境与密钥 ----
+.env
+*.env.local
+*.pem
+*.key
+
+# ---- 模型 / 数据（体积大，不入库）----
+ai/edge/*.gguf
+models/
+backend/data/
+*.log
