@@ -91,4 +91,4 @@ cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=*** python ../ai/rag/build_index.
 
 ---
 
-*吉林大学 · 大学生创新创业训练计划项目*
+
