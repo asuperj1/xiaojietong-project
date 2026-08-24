@@ -37,18 +37,20 @@
 
 ## 📁 仓库结构
 
+> 目录 → 对应开发分支
+
 ```
 xiaojietong-project/
-├── backend/        # FastAPI 后端（业务路由 + RAG/Agent 服务）
+├── backend/        # FastAPI 后端（业务路由 + RAG/Agent 服务）        → feature/backend
 ├── db/
-│   ├── cpp_driver/ # C++ 数据访问层（连接池 / DAO / pybind11）
-│   └── sql/        # 42 张表建表脚本 + 种子数据
-├── ai/             # 微调 / RAG / 端侧 / 评估
-├── miniprogram/    # 微信小程序前端
-├── ui/             # UI 素材：图片 / 图标 / 静态资源
-├── docs/           # 架构 / 接口契约 / 开发文档
-├── deploy/         # Docker / Nginx / HTTPS（规划）
-└── .github/        # Copilot 开发指令
+│   ├── cpp_driver/ # C++ 数据访问层（连接池 / DAO / pybind11）        → feature/db-cpp_driver_src
+│   └── sql/        # 42 张表建表脚本 + 种子数据                       → feature/db
+├── ai/             # 微调 / RAG / 端侧 / 评估                        → feature/backend（AI 随后端）
+├── miniprogram/    # 微信小程序前端                                  → feature/frontend
+├── ui/             # UI 素材：图片 / 图标 / 静态资源                  → feature/ui
+├── docs/           # 架构 / 接口契约 / 开发文档                       → docs
+├── deploy/         # Docker / Nginx / HTTPS（部署规划）               → （部署阶段）
+└── .github/        # Copilot 开发指令                                → docs
 ```
 
 ## 🚀 快速开始
