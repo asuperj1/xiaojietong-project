@@ -69,6 +69,44 @@ XJT_DB_PORT=3307 XJT_DB_PASSWORD=*** python -m uvicorn app.main:app --reload --p
 cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=*** python ../ai/rag/build_index.py --force
 ```
 
+## 🌿 分支架构
+
+采用 **Git Flow 简化版**：各模块在 `feature/*` 分支开发 → 合入 `dev` 联调 → 发布到 `main` 稳定版。
+
+```mermaid
+gitGraph
+    commit id: "init"
+    branch feature/backend
+    branch feature/frontend
+    branch feature/db
+    checkout feature/backend
+    commit id: "backend"
+    checkout feature/db
+    commit id: "db"
+    checkout dev
+    merge feature/backend
+    merge feature/db
+    checkout feature/frontend
+    commit id: "frontend"
+    checkout dev
+    merge feature/frontend
+    checkout main
+    merge dev
+```
+
+| 分支 | 用途 | 说明 |
+|---|---|---|
+| `main` | 正式稳定版 | 仅从 `dev` 合并，禁止直接改代码 |
+| `dev` | 联调总分支 | 汇总各 `feature/*` 做整体联调测试 |
+| `docs` | 文档 | README / 架构图 / 接口文档 / 开发手册 |
+| `feature/backend` | 后端模块 | `backend/`（FastAPI + RAG / Agent） |
+| `feature/db` | 业务数据库 | `db/sql/`（建表 SQL / 种子数据） |
+| `feature/db-cpp_driver_src` | C++ 驱动层 | `db/cpp_driver/`（连接池 / DAO / pybind11） |
+| `feature/frontend` | 小程序前端 | `miniprogram/` |
+| `feature/ui` | UI 资源 | `ui/`（图片 / 图标 / 静态资源） |
+
+> 提交流程：`feature/*` → `dev` 联调 → `main` 发布。完整规范见 [docs/BRANCH_STRATEGY.md](docs/BRANCH_STRATEGY.md)。
+
 ## 📚 文档
 
 | 文档 | 说明 |
