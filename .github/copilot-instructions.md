@@ -55,6 +55,15 @@ cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=jhq000000 python -m uvicorn app.m
 mysql -u root -P 3307 -p --default-character-set=utf8mb4 < db/sql/00_database.sql
 ```
 
+## Git 协作规范（生成 commit / 分支 / PR 时强制遵守）
+
+> 权威规范：`docs/团队Git合作协议.md`（2026-09-08 起生效）；分支速查：`docs/BRANCH_STRATEGY.md`。
+
+- **分支体系**：`main`（生产稳定，禁直推）/ `dev`（开发集成 = 协议 develop，禁直推）/ `feature/*`（模块长驻：backend·frontend·db·db-cpp_driver_src·ui）/ `docs`；临时任务分支 `feat/用户名-功能`、`fix/用户名-bug`、`docs/用户名-文档`、`refactor/用户名-模块`、`perf/用户名-优化`、`hotfix/简述`，一律从 `dev` 拉出，PR 合并后删除。
+- **Commit 消息**：`type(scope): description`，type ∈ feat｜fix｜docs｜refactor｜perf｜test｜chore；标题 ≤50 字符；禁止 `更新代码`/`修复bug` 类模糊描述；一个 commit 做一件事。
+- **PR**：目标分支为 `dev`（禁止直接指向 main）；套用 `.github/PULL_REQUEST_TEMPLATE.md` 模板；用 Squash and merge；至少 1 人 review（本人不可 approve）；冲突在本地 VS Code 解决，禁止网页在线处理。
+- 被要求生成 commit 信息、分支名、PR 描述时，一律按上述规范输出。
+
 ## 待办（按优先级，Copilot 应优先协助）
 
 - [ ] **AI 对话接入真实模型**：`services/model_client.py` 现为 Ollama 客户端但模型未就绪（降级占位）。加载微调模型后即可用。

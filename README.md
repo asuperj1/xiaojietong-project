@@ -107,6 +107,7 @@ gitGraph
 | `feature/db-cpp_driver_src` | C++ 驱动层 | `db/cpp_driver/`（连接池 / DAO / pybind11） |
 | `feature/frontend` | 小程序前端 | `miniprogram/` |
 | `feature/ui` | UI 资源 | `ui/`（图片 / 图标 / 静态资源） |
+| `feat/用户名-功能` 等 | 临时任务分支 | 从 `dev` 拉出，PR 合并后删除（见团队Git合作协议） |
 
 > 提交流程：`feature/*` → `dev` 联调 → `main` 发布。完整规范见 [docs/BRANCH_STRATEGY.md](docs/BRANCH_STRATEGY.md)。
 
@@ -117,6 +118,7 @@ gitGraph
 | [docs/architecture.md](docs/architecture.md) | 系统架构与技术决策 (ADR) |
 | [docs/api.md](docs/api.md) | 接口契约 v1.0（11 模块 ~60 接口） |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 完整开发文档与工作量 |
+| [docs/团队Git合作协议.md](docs/团队Git合作协议.md) | **Git & GitHub 协作规范（权威版）** |
 | [backend/README.md](backend/README.md) · [db/cpp_driver/README.md](db/cpp_driver/README.md) | 各层说明 |
 
 ## 👥 团队
