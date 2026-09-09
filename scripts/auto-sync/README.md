@@ -17,7 +17,7 @@
 
 ## 一、配置区（每个协作者必改/确认）
 
-打开 `scripts/auto-sync/config.sh`：
+打开 `scripts/auto-sync/config.sh`（也支持环境变量覆盖，方便脚本/本机差异）：
 
 ```bash
 REMOTE_NAME="origin"     # 主仓库远程名；git clone 后默认 origin，通常不用改
@@ -27,7 +27,10 @@ LOG_FILE=".git/auto_sync.log"           # 日志文件（.git 内）
 SCHEDULE_MINUTES=30      # 调度间隔（供 --daemon / 调度器参考）
 ```
 
+运行时可临时覆盖（不改文件）：`XJT_REMOTE_NAME=github XJT_TARGET_BRANCH=dev ./sync.sh dev`
+
 > 本项目功能先合入 `dev` 再发 `main`。**想实时跟随最新代码的协作者请把 `TARGET_BRANCH` 改为 `dev`**，并让本地停留在 `dev` 分支。
+> ⚠️ **本机开发机特殊说明**：若你的电脑把 gitee 设为 `origin`、GitHub 设为 `github`（本项目仓库即如此），自动同步应指向 **GitHub 主仓库**，请把 `REMOTE_NAME` 改为 `github`，或用环境变量 `XJT_REMOTE_NAME=github`。
 
 ## 二、本地仓库初始化
 
