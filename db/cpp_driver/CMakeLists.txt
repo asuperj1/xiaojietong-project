@@ -169,6 +169,17 @@ if(WIN32 AND EXISTS "${_mysql_dll}")
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_mysql_dll}" "${_NATIVE_DIR}")
 endif()
+if(WIN32)
+    # libmysql.dll 动态依赖 OpenSSL（libcrypto-1_1 / libssl-1_1），位于 MySQL bin/。
+    # 必须一并拷到 native/，否则 Python 加载 jt_db 时依赖 DLL 链断裂
+    # （Windows DLL 搜索不包含 sys.path，backend 侧已用 os.add_dll_directory 注册 native/）。
+    file(GLOB _mysql_ssl_dlls "${MYSQL_DIR}/bin/libcrypto*.dll" "${MYSQL_DIR}/bin/libssl*.dll")
+    foreach(_ssl_dll IN LISTS _mysql_ssl_dlls)
+        add_custom_command(TARGET jt_db POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_ssl_dll}" "${_NATIVE_DIR}")
+    endforeach()
+endif()
 
 # ---------- C++ 原生测试 ----------
 option(JT_DB_BUILD_TEST "构建 C++ 原生测试" ON)

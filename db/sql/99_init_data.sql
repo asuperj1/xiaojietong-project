@@ -23,12 +23,12 @@ INSERT INTO `quick_command` (`keyword`, `title`, `template`, `target_module`) VA
     ('查校历',    '查校历',     '查询这学期的校历安排',             'life')
 ON DUPLICATE KEY UPDATE `title` = VALUES(`title`);
 
--- Agent 工具注册表
+-- Agent 工具注册表（params_schema 为正规 JSON Schema，供 LLM Function Call 使用）
 INSERT INTO `agent_tool` (`name`, `description`, `endpoint`, `params_schema`) VALUES
-    ('reserve_seat',  '预约图书馆座位', 'library.reserve', JSON_OBJECT('seat_id', 0, 'date', '', 'begin_time', '', 'end_time', '')),
-    ('query_free_room','查询空教室',   'library.rooms',   JSON_OBJECT('campus', '', 'floor', '')),
-    ('add_reminder',  '添加提醒',      'reminder.create', JSON_OBJECT('content', '', 'remind_at', '')),
-    ('post_secondhand','发布闲置',     'secondhand.create', JSON_OBJECT('title', '', 'price', 0))
+    ('reserve_seat', '预约图书馆座位', 'library.reserve', JSON_OBJECT('type','object','properties',JSON_OBJECT('seat_id',JSON_OBJECT('type','integer','description','座位 ID（如 1=A01）'),'date',JSON_OBJECT('type','string','description','预约日期 YYYY-MM-DD'),'begin_time',JSON_OBJECT('type','string','description','开始时间 HH:MM 如 15:00'),'end_time',JSON_OBJECT('type','string','description','结束时间 HH:MM 如 17:00')),'required',JSON_ARRAY('seat_id','date','begin_time','end_time'))),
+    ('query_free_room','查询空教室',   'library.rooms',   JSON_OBJECT('type','object','properties',JSON_OBJECT('campus',JSON_OBJECT('type','string','description','校区 可空'),'floor',JSON_OBJECT('type','string','description','楼层 可空')),'required',JSON_ARRAY())),
+    ('add_reminder',  '添加提醒',      'reminder.create', JSON_OBJECT('type','object','properties',JSON_OBJECT('content',JSON_OBJECT('type','string','description','提醒内容'),'remind_at',JSON_OBJECT('type','string','description','提醒时间绝对格式 YYYY-MM-DD HH:MM（相对时间先换算）')),'required',JSON_ARRAY('content','remind_at'))),
+    ('post_secondhand','发布闲置',     'secondhand.create', JSON_OBJECT('type','object','properties',JSON_OBJECT('title',JSON_OBJECT('type','string','description','物品标题'),'price',JSON_OBJECT('type','number','description','价格元'),'description',JSON_OBJECT('type','string','description','描述 可空'),'category',JSON_OBJECT('type','string','description','分类 可空 如 教材')),'required',JSON_ARRAY('title')))
 ON DUPLICATE KEY UPDATE `description` = VALUES(`description`);
 
 -- 建筑与房间（示例）

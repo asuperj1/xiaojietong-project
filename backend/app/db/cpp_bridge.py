@@ -21,10 +21,14 @@ _NATIVE_DIR = Path(__file__).resolve().parent / "native"
 try:
     if str(_NATIVE_DIR) not in sys.path:
         sys.path.insert(0, str(_NATIVE_DIR))
+    # Windows DLL 搜索不包含 sys.path：jt_db.pyd 依赖同目录 libmysql.dll，
+    # 需显式注册 native/ 到 DLL 搜索路径（句柄须保持引用，否则目录会被移除）
+    if os.name == "nt" and hasattr(os, "add_dll_directory"):
+        _dll_search_handle = os.add_dll_directory(str(_NATIVE_DIR))
     import jt_db  # type: ignore
 
     _JT_DB_AVAILABLE = True
-except ImportError:  # pragma: no cover - 扩展未编译时的降级路径
+except (ImportError, OSError):  # pragma: no cover - 扩展缺失/加载失败时的降级路径
     jt_db = None  # type: ignore
     _JT_DB_AVAILABLE = False
 
