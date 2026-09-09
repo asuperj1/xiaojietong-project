@@ -59,6 +59,32 @@ def topic_feed(
     return ok(paged(items, len(items), page, size))
 
 
+@router.get("/mine")
+def my_topics(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    """我的帖子（含待审/被拒状态，便于前端展示审核进度）。"""
+    uid = int(user["id"])
+    offset = (page - 1) * size
+    rows = cpp_bridge.query(
+        "SELECT t.id, t.title, t.category, t.like_count, t.comment_count, t.view_count, "
+        "t.audit_status, t.ai_summary, t.is_hot, t.status, t.created_at "
+        "FROM topic t WHERE t.author_id = ? AND t.is_deleted = 0 AND t.status != 1 "
+        "ORDER BY t.id DESC LIMIT ? OFFSET ?",
+        [uid, size, offset],
+    )
+    total = cpp_bridge.query(
+        "SELECT COUNT(*) AS total FROM topic t "
+        "WHERE t.author_id = ? AND t.is_deleted = 0 AND t.status != 1",
+        [uid],
+    )
+    for r in rows:
+        r["author_name"] = user.get("nickname", "")
+    return ok(paged(rows, int(total[0]["total"]) if total else 0, page, size))
+
+
 @router.get("/{topic_id}")
 def topic_detail(topic_id: int, user: dict = Depends(get_current_user)):
     dao = cpp_bridge.forum_dao()
@@ -82,6 +108,11 @@ def topic_detail(topic_id: int, user: dict = Depends(get_current_user)):
         [int(user["id"]), topic_id],
     )
     topic["liked"] = bool(liked_rows)
+    fav_rows = cpp_bridge.query(
+        "SELECT id FROM favorite WHERE user_id = ? AND target_type = 'topic' AND target_id = ?",
+        [int(user["id"]), topic_id],
+    )
+    topic["favorited"] = bool(fav_rows)
     topic["comments"] = comments
     # 浏览量 +1
     cpp_bridge.execute("UPDATE topic SET view_count = view_count + 1 WHERE id = ?", [topic_id])

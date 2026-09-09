@@ -89,6 +89,7 @@ xiaojietong-project/
 - **SSE 流式对话**（chat/send）：sources→chunk→done 事件链，Ollama 未就绪时优雅降级
 - **事务冲突校验**：座位预约(3001)、重复投递(3002)
 - **实测通过**：登录/资料/空教室/商家/发帖/Agent任务/提醒/二手发布/预约/SSE
+- **B2 缺口接口补齐**（2026-09-08）：`GET /topics/mine`（我的帖子）、`GET /secondhand/items/mine`（我的发布）、通用收藏 `POST/GET /favorites`（target_type: topic/item，`favorite` 表已就绪）；帖子详情返回 `favorited`；契约 `docs/api.md` v1.2
 
 ### 4.4 文档
 - `docs/architecture.md`（架构+ADR）、`docs/api.md`（接口契约 v1.0，11 模块 ~60 接口）、`docs/datagrip.md`、`backend/README.md`、`db/cpp_driver/README.md`、`.github/copilot-instructions.md`
@@ -100,6 +101,18 @@ xiaojietong-project/
 - **索引**：`rag.build_index()/index_doc()` 分块 → embedding → 向量库 → 落 `knowledge_chunk`（去重哈希）→ 更新文档状态；`admin /knowledge/ingest` 入库即自动向量化
 - **检索**：`rag.retrieve()` 向量优先 + 相似度阈值过滤，失败自动降级关键词分词匹配；命令行运维 `ai/rag/build_index.py` / `retrieve.py`
 - **真实生效**：Ollama 加载 bge-m3 后执行 `cd backend && python ../ai/rag/build_index.py --force` 全量建索引
+
+### 4.6 AI 能力落地实测（2026-09-09，任务清单 B1~B5 全通）
+- **B1 本地跑通**：`backend/.venv`（Python 3.12.4）+ VS2022 编译 `jt_db.pyd` + MySQL(3306) 连接池，health `db=ok cpp_ext=True`；Swagger 全量可点
+- **B2 缺口接口**：`GET /topics/mine`、`GET /secondhand/items/mine`、通用收藏 `POST/GET /favorites`（新模块 routers/favorite.py）；回归脚本 `backend/tests/verify_b2.ps1` 全链路 PASS
+- **B3 RAG 真实建索引**：Ollama + bge-m3 拉取成功；新增知识 FAQ 种子 `db/sql/99b_knowledge_faq.sql`（9 篇校园问答）；11 篇文档全量向量化；"图书馆几点关门"命中《图书馆开放时间》(score 0.71)
+- **B4 对话接真模型**：Ollama 加载 qwen2.5:3b（`XJT_OLLAMA_MODEL=qwen2.5:3b` 注入）；chat/send SSE 流式返回基于知识库的真实回答
+- **B5 Agent Function Call**：新增 `services/agent_executor.py`（LLM 解析工具调用 + 真实执行 add_reminder/reserve_seat/query_free_room/post_secondhand）；`routers/agent.py` 改造（模型主路径 + 关键词降级兜底）；工具参数升级正规 JSON Schema（`db/sql/99c_agent_tool_schema.sql`）；一句话触发真预约/提醒实测通过
+
+### 4.7 本机环境关键修复（2026-09-09，已入代码）
+- `backend/app/db/cpp_bridge.py`：Windows 下 `os.add_dll_directory(native/)` 注册 DLL 搜索路径（否则 jt_db.pyd 依赖 libmysql.dll 加载失败）
+- `db/cpp_driver/src/mysql_connection.cpp`：prepare 后设置 `STMT_ATTR_UPDATE_MAX_LENGTH`（否则 TEXT 长文本按 255 字节缓冲截断，报"读取结果失败"）
+- `db/cpp_driver/CMakeLists.txt`：POST_BUILD 自动拷贝 MySQL bin/ 下 libcrypto/libssl-1_1 DLL 到 native/
 
 ## 5. 待办与路线图（工作量预估）
 

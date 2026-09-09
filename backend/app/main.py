@@ -16,6 +16,7 @@ from app.routers import (
     agent,
     auth,
     chat,
+    favorite,
     forum,
     health,
     job,
@@ -87,6 +88,7 @@ for r in (
     auth.router, user.router, chat.router, agent.router,
     library.router, secondhand.router, job.router, forum.router,
     map_api.router, life.router, admin.router, upload.router, health.router,
+    favorite.router,
 ):
     app.include_router(r, prefix=_api)
 

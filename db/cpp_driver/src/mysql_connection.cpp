@@ -128,6 +128,11 @@ MYSQL_STMT* MysqlConnection::prepare_statement(const std::string& sql) {
         mysql_stmt_close(stmt);
         throw DbException("SQL 预处理失败: " + err + " | SQL: " + sql);
     }
+    // 关键：开启 UPDATE_MAX_LENGTH，store_result() 后字段 metadata 的
+    // max_length 才会反映真实最大长度；否则 TEXT/VARCHAR 长内容 max_length
+    // 为 0，query() 按 255 字节缓冲取数会截断并报"读取结果失败"。
+    bool update_max_length = true;
+    mysql_stmt_attr_set(stmt, STMT_ATTR_UPDATE_MAX_LENGTH, &update_max_length);
     return stmt;
 }
 
