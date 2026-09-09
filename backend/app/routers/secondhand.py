@@ -48,6 +48,33 @@ def list_items(
     return ok(paged(items, len(items), page, size))
 
 
+@router.get("/items/mine")
+def my_items(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    """我的发布（含上下架/审核状态，便于前端管理）。"""
+    uid = int(user["id"])
+    offset = (page - 1) * size
+    rows = cpp_bridge.query(
+        "SELECT id, title, description, category, price, condition_level, images_json, "
+        "status, audit_status, trust_score, view_count, created_at "
+        "FROM secondhand_item WHERE user_id = ? AND is_deleted = 0 "
+        "ORDER BY id DESC LIMIT ? OFFSET ?",
+        [uid, size, offset],
+    )
+    total = cpp_bridge.query(
+        "SELECT COUNT(*) AS total FROM secondhand_item "
+        "WHERE user_id = ? AND is_deleted = 0",
+        [uid],
+    )
+    items = [_item_view(r) for r in rows]
+    for i in items:
+        i["seller_name"] = user.get("nickname", "")
+    return ok(paged(items, int(total[0]["total"]) if total else 0, page, size))
+
+
 class PublishIn(BaseModel):
     title: str
     description: str = ""
