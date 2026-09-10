@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     校捷通 · Ollama 微调模型一键部署（Windows / PowerShell）
 
