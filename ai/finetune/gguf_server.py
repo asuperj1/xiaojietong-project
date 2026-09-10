@@ -32,6 +32,24 @@ RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 CHUNK_SIZE = 256 * 1024
 
 
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """线程化 HTTP 服务：对端断开时不打印冗长 traceback。
+
+    大文件传输中浏览器/下载器主动断开（或校园网抖动）很常见，
+    默认实现会向控制台输出整段堆栈，干扰进度查看。
+    """
+
+    daemon_threads = True        # Ctrl+C 后不残留工作线程
+    allow_reuse_address = True   # 避免端口处于 TIME_WAIT 时无法重启
+
+    def handle_error(self, request, client_address):  # noqa: D102
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            print(f"  ! 对端断开：{client_address[0]}（{type(exc).__name__}）", flush=True)
+            return
+        super().handle_error(request, client_address)
+
+
 class SingleFileHandler(BaseHTTPRequestHandler):
     """只服务单个文件的 HTTP 处理器（支持 Range）。"""
 
@@ -113,7 +131,7 @@ class SingleFileHandler(BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
                     sent += len(chunk)
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
             print(f"  ! 对端中断（已传 {sent / 1048576:.1f} MiB）", flush=True)
 
         cost = max(time.time() - t0, 1e-6)
@@ -151,7 +169,7 @@ def main() -> int:
     print(f"监听：{args.bind}:{args.port}（支持 Range 断点续传）")
     print("按 Ctrl+C 停止服务\n")
 
-    httpd = ThreadingHTTPServer((args.bind, args.port), SingleFileHandler)
+    httpd = QuietThreadingHTTPServer((args.bind, args.port), SingleFileHandler)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
