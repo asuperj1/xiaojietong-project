@@ -148,8 +148,12 @@ class ReportIn(BaseModel):
 @router.post("/{topic_id}/report")
 def report(topic_id: int, body: ReportIn, user: dict = Depends(get_current_user)):
     with cpp_bridge.begin():
-        cpp_bridge.execute(
+        # C8 修复：last_insert_id 必须取自本次 execute 的返回值。
+        # 原写法在事务提交后用 query("SELECT LAST_INSERT_ID()") 取值，而 query() 会从
+        # 连接池取到「另一条连接」——该连接的 LAST_INSERT_ID 与本次插入无关
+        # （通常为 0 或他人最近一次插入的 id），导致返回值不可信。
+        _, report_id = cpp_bridge.execute(
             "INSERT INTO report (reporter_id, target_type, target_id, reason) VALUES (?, 'topic', ?, ?)",
             [int(user["id"]), topic_id, body.reason],
         )
-    return ok({"report_id": cpp_bridge.query("SELECT LAST_INSERT_ID() AS id")[0]["id"]})
+    return ok({"report_id": report_id})
