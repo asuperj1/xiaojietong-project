@@ -32,7 +32,9 @@ class Settings(BaseSettings):
 
     # AI 推理服务（Ollama）
     ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_model: str = "xjt-model"
+    # 校园领域微调模型（成员3 C5 产出）。未部署微调模型时可设为 qwen2.5:3b 使用基座模型。
+    # 部署方式见 docs/模型分发与部署.md（一键脚本 ai/finetune/deploy_ollama.ps1）。
+    ollama_model: str = "xjt-3b"
 
     # RAG 检索增强
     rag_embed_model: str = "bge-m3"      # 向量化模型（Ollama /api/embed）

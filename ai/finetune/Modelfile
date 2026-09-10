@@ -1,10 +1,23 @@
 # 校捷通校园助手 · Ollama 模型定义（C5）
-# 用法（在仓库根目录）：ollama create xjt-3b -f ai/finetune/Modelfile
-# 说明：FROM 指向本地导出的 GGUF（路径按本机实际情况调整；GGUF 不入 Git）
+#
+# 一键部署（推荐，会自动把下面的 FROM 替换成本机实际路径）：
+#   Windows  : powershell -ExecutionPolicy Bypass -File ai/finetune/deploy_ollama.ps1 -GgufPath <你的gguf路径>
+#   Linux/mac: bash ai/finetune/deploy_ollama.sh <你的gguf路径>
+#
+# 手动部署：
+#   1) 从团队网盘（夸克）下载 xjt-3b-f16.gguf（约 5.75 GiB），放到本机任意目录
+#   2) 把下面的 FROM 改成该文件的实际路径（Windows 分隔符写成 / 或 \\ 均可）
+#   3) 在仓库根目录执行：ollama create xjt-3b -f ai/finetune/Modelfile
+#
+# 注意：GGUF / LoRA 权重体积大，不入 Git，统一走团队网盘分发。
+# SHA256(xjt-3b-f16.gguf) = f4edd50b9d3759f8c742927a7dcf41ce979f8e2e7a93fceb6dccdb7131be75a3
 
 FROM E:/models/xjt-3b-f16.gguf
 
-SYSTEM """你是校捷通校园助手，服务吉林大学学生，回答学习、生活、办事等校园问题，简明准确。"""
+SYSTEM """你是校捷通校园助手，服务吉林大学学生，回答学习、生活、办事等校园问题。要求：先给结论再给要点，只依据校园知识回答，不确定时明确说明"建议咨询相关部门"，不要编造。"""
 
-PARAMETER temperature 0.7
+PARAMETER temperature 0.4
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.1
 PARAMETER num_ctx 4096
+
