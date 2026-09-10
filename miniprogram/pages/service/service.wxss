@@ -1,0 +1,7 @@
+/* 服务页占位样式 */
+.placeholder {
+  padding: 100rpx 0;
+  text-align: center;
+  color: #4A90D9;
+  font-size: 36rpx;
+}
