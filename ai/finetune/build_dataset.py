@@ -70,12 +70,18 @@ def load_sql_faq(path: Path) -> list[dict]:
     if not path.exists():
         return items
     text = path.read_text(encoding="utf-8", errors="ignore")
+    # 只解析 INSERT 段，避免 DELETE 语句中的标题列表被误判为文档
+    if "INSERT INTO" in text:
+        text = text.split("INSERT INTO", 1)[1]
     # 匹配 ('title', 'category', 'content'...)
     for m in re.finditer(r"\(\s*'([^']+)'\s*,\s*'([^']+)'\s*,\s*((?:'(?:[^']|'')*'\s*)+)", text):
         title, category, raw = m.group(1), m.group(2), m.group(3)
         # 拼接被切成多段的字符串字面量
         segs = re.findall(r"'((?:[^']|'')*)'", raw)
         content = "".join(segs).replace("''", "'")
+        # 知识文档正文必含句读，过滤误匹配
+        if "。" not in content and "；" not in content:
+            continue
         for sent in re.split(r"[。；;]", content):
             sent = sent.strip()
             if len(sent) < 8:
@@ -95,8 +101,10 @@ def to_chat(question: str, answer: str) -> dict:
     }
 
 
-def build(seed_path: Path, sql_path: Path, out: Path, minimum: int, seed: int = 42) -> int:
-    base = load_seed(seed_path) + load_sql_faq(sql_path)
+def build(seed_path: Path, sql_paths: list, out: Path, minimum: int, seed: int = 42) -> int:
+    base = load_seed(seed_path)
+    for p in sql_paths:
+        base += load_sql_faq(p)
     if not base:
         raise SystemExit("未采集到任何基础问答，请检查种子文件与 99b_knowledge_faq.sql")
 
@@ -146,11 +154,15 @@ def build(seed_path: Path, sql_path: Path, out: Path, minimum: int, seed: int = 
 def main() -> None:
     ap = argparse.ArgumentParser(description="构建校捷通指令微调数据集")
     ap.add_argument("--seed", default=str(HERE / "data" / "seed_qa.jsonl"), help="内置种子问答路径")
-    ap.add_argument("--sql", default=str(REPO / "db" / "sql" / "99b_knowledge_faq.sql"), help="FAQ 知识库 SQL 路径")
+    ap.add_argument("--sql", default="", help="知识库 SQL（逗号分隔）；默认自动扫描 db/sql/*knowledge*.sql")
     ap.add_argument("--out", default=str(HERE / "data" / "train.jsonl"), help="输出 train.jsonl 路径")
     ap.add_argument("--min", type=int, default=500, help="最少样本条数（默认 500）")
     args = ap.parse_args()
-    build(Path(args.seed), Path(args.sql), Path(args.out), args.min)
+    if args.sql:
+        sqls = [Path(p) for p in args.sql.split(",") if p.strip()]
+    else:
+        sqls = sorted((REPO / "db" / "sql").glob("*knowledge*.sql"))
+    build(Path(args.seed), sqls, Path(args.out), args.min)
 
 
 if __name__ == "__main__":
