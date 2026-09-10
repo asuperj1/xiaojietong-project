@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # Reset MySQL803307 root password via --init-file (MySQL official method)
 #  - fixes: space in paths requires quoting each arg for Start-Process
 # New password: jhq000000
