@@ -15,6 +15,12 @@ function handleAuthFailure(message) {
   wx.removeStorageSync(TOKEN_KEY)
   wx.removeStorageSync('refresh_token')
   wx.removeStorageSync('user')
+  // 同步清空 globalData，避免内存态与存储态不一致
+  const app = getApp()
+  if (app && app.globalData) {
+    app.globalData.token = ''
+    app.globalData.userInfo = null
+  }
   wx.showToast({ title: message || '登录已过期，请重新登录', icon: 'none' })
   wx.reLaunch({ url: '/pages/auth/login' })
 }

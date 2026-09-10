@@ -7,8 +7,9 @@ App({
   },
 
   onLaunch() {
-    // 启动时读取本地 token（仅检查，不做复杂状态管理）
+    // 启动时恢复本地登录态（token + user）
     this.globalData.token = wx.getStorageSync('token') || ''
+    this.globalData.userInfo = wx.getStorageSync('user') || null
   },
 
   // 登录态检查：无 token 时跳登录页。

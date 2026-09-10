@@ -1,2 +1,10 @@
-<!-- 登录页占位（F2 实现微信一键登录） -->
-<view class="placeholder">登录页</view>
+<!-- 登录页（F2）：微信一键登录 -->
+<view class="login">
+  <view class="brand">
+    <view class="logo">校捷通</view>
+    <view class="slogan">校园一站式智能服务平台</view>
+  </view>
+  <button class="login-btn" bindtap="onLogin" loading="{{loading}}" disabled="{{loading}}">
+    微信一键登录
+  </button>
+</view>
