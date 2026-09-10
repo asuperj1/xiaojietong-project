@@ -139,6 +139,19 @@ add_library(jt_db MODULE
 )
 target_link_libraries(jt_db PRIVATE jt_db_core pybind11::module)
 
+# ---------- C9 性能开关：MySQL IO 期间是否释放 GIL ----------
+#   ON （默认）：并发下相对 pymysql，大结果集 2.84x、分页 1.54x（后端列表查询为主，推荐）
+#   OFF        ：极小结果集的高并发点查更稳，避免 GIL 释放/获取的调度抖动
+# 切换：cmake -B build -A x64 -DJT_DB_RELEASE_GIL=OFF -DMYSQL_DIR="..."
+option(JT_DB_RELEASE_GIL "MySQL IO 期间释放 GIL（C9 并发优化）" ON)
+if(JT_DB_RELEASE_GIL)
+    target_compile_definitions(jt_db PRIVATE JT_DB_RELEASE_GIL=1)
+    message(STATUS "C9: GIL 释放 = ON（并发优化启用）")
+else()
+    target_compile_definitions(jt_db PRIVATE JT_DB_RELEASE_GIL=0)
+    message(STATUS "C9: GIL 释放 = OFF（点查密集场景）")
+endif()
+
 if(WIN32)
     set_target_properties(jt_db PROPERTIES PREFIX "" SUFFIX ".pyd")
 else()
