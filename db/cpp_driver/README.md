@@ -119,7 +119,7 @@ XJT_DB_PORT=3307 XJT_DB_PASSWORD=你的密码 python test_py.py
 |---|---|
 | 大结果集（500 行） | **2.84x** |
 | 分页查询（10 行） | 1.54x |
-| 主键点查（单行） | 0.60~0.76x |
+| 主键点查（单行） | 0.40~0.76x（抖动较大） |
 
 - **关键优化**：`JT_DB_RELEASE_GIL`（CMake 开关，**默认 ON**）—— 让 query/execute 在
   MySQL 网络与协议处理期间释放 GIL，使多个请求真正并行（参数转换与结果构造仍持 GIL）。
