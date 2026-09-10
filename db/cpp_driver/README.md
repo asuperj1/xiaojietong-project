@@ -15,18 +15,22 @@ cpp_driver/
 ├── src/                   # 对应实现
 │   ├── db_session.cpp     # 会话层（事务/池连接统一供给）
 │   └── dao/user_dao.cpp   # UserDAO（范式实现）
-├── include/jt_db/dao/     # DAO 层
-│   ├── user_dao.h         # ✅ 完整实现（范式）
-│   ├── library_dao.h      # ⏳ 骨架（座位/空教室/拥挤度，待表结构）
-│   ├── forum_dao.h        # ⏳ 骨架（帖子/评论/点赞）
-│   ├── secondhand_dao.h   # ⏳ 骨架（二手/求购/匹配）
-│   ├── job_dao.h          # ⏳ 骨架（岗位/投递/评分）
-│   └── life_dao.h         # ⏳ 骨架（通知/商家/外卖）
-├── pybind/pybind_wrapper.cpp  # pybind11 绑定（含 UserDAO）
+├── include/jt_db/dao/     # DAO 层（6 个业务域，**全部已完整实现并绑定**）
+│   ├── user_dao.h         # ✅ 用户体系
+│   ├── library_dao.h      # ✅ 图书馆（空教室/座位/预约/拥挤度）
+│   ├── forum_dao.h        # ✅ 论坛（帖子/评论/点赞/待审/热榜）
+│   ├── secondhand_dao.h   # ✅ 二手（商品/求购/匹配/下单）
+│   ├── job_dao.h          # ✅ 兼职（岗位/投递/信誉/黑名单）
+│   └── life_dao.h         # ✅ 生活（通知/商家/菜单/订单）
+├── pybind/pybind_wrapper.cpp  # pybind11 绑定（查询/写操作/事务 + 6 个 DAO）
 ├── test/
-│   ├── main.cpp           # C++ 原生测试
-│   ├── test_py.py         # Python 侧集成测试（连接池/事务）
-│   └── test_dao.py        # DAO 层集成测试
+│   ├── main.cpp                    # C++ 原生测试
+│   ├── test_py.py                  # Python 侧集成测试（连接池/事务）
+│   ├── test_dao.py                 # DAO 层集成测试
+│   ├── test_all_dao.py             # 6 个 DAO 全量断言（15 组）
+│   ├── test_last_insert_id.py      # C8 回归：last_insert_id 取值正确性
+│   ├── bench_dao.py                # C6 单线程基准（vs pymysql）
+│   └── bench_concurrent.py         # C9 并发基准（1/4/8/16 线程）
 └── CMakeLists.txt         # 跨平台构建（Win .pyd / Linux .so）
 ```
 
@@ -83,11 +87,18 @@ cmake --build build
 
 ## 运行测试
 
-先初始化数据库：
+先初始化数据库（脚本按模块拆分，执行顺序 `00 → 01..13 → 99`）：
 ```bash
-mysql -u root -p < ../sql/01_schema.sql
-mysql -u root -p xiaojietong < ../sql/02_init_data.sql
+cd ../sql
+mysql < 00_database.sql
+for f in 01_user 02_ai_chat 03_agent 04_library 05_secondhand 06_job \
+         07_forum 08_map 09_life 10_ai_train 11_audit 12_notice_delivery 13_index_optimize; do
+  mysql xiaojietong < "$f.sql"
+done
+mysql xiaojietong < 99_init_data.sql
 ```
+
+> 表清单、索引优化说明与导入细节见 `db/sql/README.md`。
 
 > 本机 MySQL 实例运行在 **3307** 端口（非默认 3306），测试前用 `XJT_DB_PORT` 指定，或按实际修改默认值。
 
@@ -101,6 +112,21 @@ Python 集成测试（验证连接池/参数化/事务）：
 cd test
 XJT_DB_PORT=3307 XJT_DB_PASSWORD=你的密码 python test_py.py
 ```
+
+## 性能（C9 实测）
+
+| 场景（16 并发，相对 pymysql 直连） | 比值 |
+|---|---|
+| 大结果集（500 行） | **2.84x** |
+| 分页查询（10 行） | 1.54x |
+| 主键点查（单行） | 0.60~0.76x |
+
+- **关键优化**：`JT_DB_RELEASE_GIL`（CMake 开关，**默认 ON**）—— 让 query/execute 在
+  MySQL 网络与协议处理期间释放 GIL，使多个请求真正并行（参数转换与结果构造仍持 GIL）。
+- pymysql 的 QPS 随并发下降 **53%**（6904→3263），而 jt_db 大结果集**上升 63%**（3398→5552）。
+- 若负载以**极小结果集的高并发点查**为主，可 `-DJT_DB_RELEASE_GIL=OFF` 规避 GIL 调度抖动。
+
+完整数据、优化前后对比与复现命令见 `docs/perf-benchmark.md` 第二部分。
 
 ## Python 使用示例
 
@@ -146,4 +172,12 @@ with jt_db.begin():                        # 事务内 DAO 走同一连接
     dao.update_role(uid, 1)
 ```
 
-其余 DAO（Library/Forum/Secondhand/Job/Life）已给出**方法签名骨架**，表结构由成员4 设计后，在 `src/dao/` 下参照 `user_dao.cpp` 范式补实现并绑定。
+**6 个 DAO 均已完整实现并绑定**，覆盖 22 张表：`src/dao/` 下依次为 `user_dao.cpp`、`library_dao.cpp`、
+`forum_dao.cpp`、`secondhand_dao.cpp`、`job_dao.cpp`、`life_dao.cpp`。
+集成验证见 `test/test_all_dao.py`（15 组断言全部通过）。
+
+### 尚未纳入 DAO 的表（属后续 C10 收敛范围）
+
+`favorite`、`report`、`agent_task`、`reminder`、`poi`、`navigation_log`、`knowledge_doc`、`knowledge_chunk` 等
+目前由后端经 `cpp_bridge.query/execute` 直接执行（共 **137 处 / 19 个文件**）——
+"所有 DB 访问走 C++ 层"已成立，但尚未收敛到 DAO 抽象，这是 C10 的目标。
