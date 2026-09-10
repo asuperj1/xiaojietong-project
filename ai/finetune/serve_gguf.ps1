@@ -46,13 +46,26 @@ $gguf = Get-Item $GgufPath
 $dir = $gguf.Directory.FullName
 Write-Host ("[1/4] 共享文件：{0}  ({1:N2} GiB)" -f $gguf.FullName, ($gguf.Length / 1GB)) -ForegroundColor Cyan
 
-# ---------- 2/4 探测 Python ----------
-$py = $null
+# ---------- 2/4 探测 Python（优先选「防火墙已放行」的解释器，队友才能直接连入） ----------
+$allowedPythons = @()
+try {
+    $allowedPythons = @(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True -ErrorAction SilentlyContinue |
+        Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
+        Where-Object { $_.Program -like '*python*.exe' } |
+        Select-Object -ExpandProperty Program -Unique |
+        Where-Object { $_ -and (Test-Path $_) })
+} catch {
+    # 无权限读取防火墙配置时忽略，退回普通探测
+}
+
 $candidates = @(
-    (Join-Path $PSScriptRoot '..\..\.venv\Scripts\python.exe'),
-    'E:\miniconda3\python.exe',
+    $allowedPythons
+    (Join-Path $PSScriptRoot '..\..\.venv\Scripts\python.exe')
+    'E:\miniconda3\python.exe'
     'E:\python314\python.exe'
-)
+) | Where-Object { $_ }
+
+$py = $null
 foreach ($c in $candidates) {
     if (Test-Path $c) { $py = (Resolve-Path $c).Path; break }
 }
@@ -63,11 +76,14 @@ if (-not $py) {
 if (-not $py) {
     throw '未找到 Python。请安装 Python，或把 python 加入 PATH 后重试。'
 }
+$pyAllowed = $allowedPythons -contains $py
 Write-Host "[2/4] Python：$py" -ForegroundColor Cyan
 
 # ---------- 3/4 防火墙 ----------
 $ruleName = 'XJT GGUF Share'
-if ($AllowFirewall) {
+if ($pyAllowed) {
+    Write-Host "[3/4] ✅ 该 Python 已在防火墙入站放行列表中，队友可直接访问（无需管理员操作）" -ForegroundColor Green
+} elseif ($AllowFirewall) {
     try {
         if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
             New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow `
@@ -100,6 +116,9 @@ Write-Host ''
 Write-Host '提示：' -ForegroundColor Yellow
 Write-Host '  · 队友与你同一校园网/局域网 → 直接访问以上任一地址，速度最快' -ForegroundColor Yellow
 Write-Host '  · 跨网络 → 需公网可达且未被校园网/路由器封禁端口；否则改用夸克网盘或 ollama push' -ForegroundColor Yellow
+if ($pyAllowed) {
+    Write-Host '  · 当前 Python 已被防火墙放行，队友应可直接下载' -ForegroundColor Green
+}
 Write-Host '  · 队友下载后务必核对 SHA256：' -ForegroundColor Yellow
 Write-Host '      f4edd50b9d3759f8c742927a7dcf41ce979f8e2e7a93fceb6dccdb7131be75a3' -ForegroundColor Gray
 Write-Host '  · 传完请按 Ctrl+C 停止服务，并及时删除防火墙规则' -ForegroundColor Yellow
