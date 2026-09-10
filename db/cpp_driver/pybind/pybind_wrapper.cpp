@@ -24,6 +24,7 @@
 #include "jt_db/dao/secondhand_dao.h"
 #include "jt_db/dao/job_dao.h"
 #include "jt_db/dao/life_dao.h"
+#include "jt_db/dao/favorite_dao.h"
 #include "jt_db/transaction.h"
 
 namespace py = pybind11;
@@ -314,4 +315,24 @@ PYBIND11_MODULE(jt_db, m) {
         .def("create_order", &LifeDAO::create_order, py::arg("user_id"),
              py::arg("merchant_id"), py::arg("items_json"), py::arg("amount"),
              "下单，返回订单 id（失败 -1）");
+
+    // ---- 通用收藏（C10 收敛：原由 favorite.py 拼原生 SQL）----
+    py::class_<FavoriteDAO>(m, "FavoriteDAO")
+        .def(py::init<>())
+        .def("is_favorited", &FavoriteDAO::is_favorited, py::arg("user_id"),
+             py::arg("target_type"), py::arg("target_id"), "是否已收藏")
+        .def("toggle", &FavoriteDAO::toggle, py::arg("user_id"),
+             py::arg("target_type"), py::arg("target_id"),
+             "幂等切换收藏：返回 True=已收藏 / False=已取消")
+        .def("target_exists", &FavoriteDAO::target_exists,
+             py::arg("target_type"), py::arg("target_id"),
+             "收藏对象是否存在且可见（topic/item）")
+        .def("page_topics", &FavoriteDAO::page_topics, py::arg("user_id"),
+             py::arg("limit"), py::arg("offset"), "我的收藏·帖子（分页）")
+        .def("count_topics", &FavoriteDAO::count_topics, py::arg("user_id"),
+             "我的收藏·帖子总数")
+        .def("page_items", &FavoriteDAO::page_items, py::arg("user_id"),
+             py::arg("limit"), py::arg("offset"), "我的收藏·物品（分页）")
+        .def("count_items", &FavoriteDAO::count_items, py::arg("user_id"),
+             "我的收藏·物品总数");
 }

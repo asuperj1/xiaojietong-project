@@ -125,6 +125,7 @@ add_library(jt_db_core STATIC
     src/dao/secondhand_dao.cpp
     src/dao/job_dao.cpp
     src/dao/life_dao.cpp
+    src/dao/favorite_dao.cpp
 )
 target_include_directories(jt_db_core PUBLIC include ${MYSQL_INCLUDE_DIR})
 target_link_libraries(jt_db_core PUBLIC ${MYSQL_LIBRARY})
