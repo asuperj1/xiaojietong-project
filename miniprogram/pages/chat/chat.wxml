@@ -1,2 +1,58 @@
-<!-- AI 对话页占位（F4 实现 SSE 流式对话） -->
-<view class="placeholder">AI助手</view>
+<!-- AI 对话页（F4）：消息列表 + 底部输入 -->
+<view class="chat-page">
+  <scroll-view
+    class="msg-scroll"
+    scroll-y
+    scroll-into-view="{{scrollIntoView}}"
+    scroll-with-animation
+  >
+    <!-- 空会话欢迎 -->
+    <view wx:if="{{messages.length === 0}}" class="welcome">
+      <view class="welcome-icon">🤖</view>
+      <view class="welcome-title">你好，我是校捷通 AI 助手</view>
+      <view class="welcome-sub">关于校园的一切，都可以问我</view>
+    </view>
+
+    <view
+      class="msg-row msg-row--{{item.role}}"
+      wx:for="{{messages}}"
+      wx:key="localId"
+      id="msg-{{item.localId}}"
+    >
+      <view class="bubble">
+        <text wx:if="{{item.content}}" class="bubble-text" user-select>{{item.content}}</text>
+        <text wx:elif="{{sending}}" class="bubble-text bubble-text--typing">正在回答…</text>
+
+        <!-- 参考资料 -->
+        <view wx:if="{{item.role === 'assistant' && item.sources.length}}" class="sources">
+          <view class="sources-title">参考资料</view>
+          <view class="source-item" wx:for="{{item.sources}}" wx:for-item="src" wx:key="id">
+            <view class="source-head">
+              <text wx:if="{{src.category}}" class="source-category">{{src.category}}</text>
+              <text class="source-title">{{src.title}}</text>
+            </view>
+            <view wx:if="{{src.content}}" class="source-content">{{src.content}}</view>
+          </view>
+        </view>
+      </view>
+    </view>
+  </scroll-view>
+
+  <!-- 底部输入栏 -->
+  <view class="input-bar">
+    <input
+      class="input"
+      value="{{inputValue}}"
+      placeholder="请输入你的问题"
+      confirm-type="send"
+      bindinput="onInput"
+      bindconfirm="onSend"
+    />
+    <button
+      class="send-btn"
+      size="mini"
+      disabled="{{sending || !inputValue}}"
+      bindtap="onSend"
+    >发送</button>
+  </view>
+</view>

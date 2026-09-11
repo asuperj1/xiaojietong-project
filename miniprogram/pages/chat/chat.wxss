@@ -1,7 +1,162 @@
-/* AI 对话页占位样式 */
-.placeholder {
-  padding: 100rpx 0;
+/* AI 对话页（F4） */
+page {
+  height: 100%;
+}
+
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  background: #f5f5f5;
+}
+
+/* 消息区 */
+.msg-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 24rpx 24rpx 0;
+  box-sizing: border-box;
+}
+
+/* 空会话欢迎 */
+.welcome {
+  padding: 160rpx 0 60rpx;
   text-align: center;
-  color: #4A90D9;
+}
+.welcome-icon {
+  font-size: 120rpx;
+  line-height: 1;
+}
+.welcome-title {
+  margin-top: 32rpx;
   font-size: 36rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.welcome-sub {
+  margin-top: 16rpx;
+  font-size: 26rpx;
+  color: #999999;
+}
+
+/* 消息行 */
+.msg-row {
+  display: flex;
+  margin-bottom: 28rpx;
+}
+.msg-row--user {
+  justify-content: flex-end;
+}
+.msg-row--assistant {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 78%;
+  padding: 20rpx 24rpx;
+  border-radius: 20rpx;
+  font-size: 30rpx;
+  line-height: 1.6;
+  box-sizing: border-box;
+}
+.msg-row--user .bubble {
+  background: #4A90D9;
+  color: #ffffff;
+  border-top-right-radius: 6rpx;
+}
+.msg-row--assistant .bubble {
+  background: #ffffff;
+  color: #333333;
+  border-top-left-radius: 6rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+}
+
+.bubble-text {
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.bubble-text--typing {
+  color: #999999;
+}
+
+/* 参考资料 */
+.sources {
+  margin-top: 20rpx;
+  padding-top: 16rpx;
+  border-top: 1rpx solid #eeeeee;
+}
+.sources-title {
+  font-size: 24rpx;
+  color: #999999;
+  margin-bottom: 12rpx;
+}
+.source-item {
+  background: #f7f9fc;
+  border-radius: 12rpx;
+  padding: 14rpx 16rpx;
+  margin-bottom: 10rpx;
+}
+.source-head {
+  display: flex;
+  align-items: center;
+}
+.source-category {
+  font-size: 20rpx;
+  color: #4A90D9;
+  background: #eef5fc;
+  border-radius: 6rpx;
+  padding: 2rpx 10rpx;
+  margin-right: 10rpx;
+}
+.source-title {
+  font-size: 26rpx;
+  color: #333333;
+  font-weight: 500;
+}
+.source-content {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: #666666;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* 底部输入栏 */
+.input-bar {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 24rpx;
+  background: #ffffff;
+  border-top: 1rpx solid #eeeeee;
+  padding-bottom: calc(16rpx + env(safe-area-inset-bottom));
+}
+.input {
+  flex: 1;
+  height: 72rpx;
+  background: #f5f5f5;
+  border-radius: 36rpx;
+  padding: 0 28rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+.send-btn {
+  margin-left: 16rpx;
+  background: #4A90D9;
+  color: #ffffff;
+  border-radius: 36rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  padding: 0 32rpx;
+  font-size: 28rpx;
+}
+.send-btn::after {
+  border: none;
+}
+.send-btn[disabled] {
+  background: #bcd6ee;
+  color: #ffffff;
 }

@@ -1,4 +1,5 @@
 {
   "usingComponents": {},
-  "navigationBarTitleText": "AI助手"
+  "navigationBarTitleText": "AI 助手",
+  "disableScroll": true
 }
