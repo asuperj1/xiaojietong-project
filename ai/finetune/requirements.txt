@@ -1,0 +1,10 @@
+# 校捷通微调流水线依赖（QLoRA / PEFT / GGUF 导出）
+# 安装：pip install -r ai/finetune/requirements.txt
+# 注意：torch 请按本机 CUDA 版本选择官方安装命令（https://pytorch.org）
+torch>=2.2
+transformers>=4.44
+peft>=0.12
+bitsandbytes>=0.43
+datasets>=2.20
+accelerate>=0.33
+sentencepiece>=0.2

@@ -1,7 +1,7 @@
-# ============================================================
+﻿# ============================================================
 # Reset MySQL803307 root password via --init-file (MySQL official method)
 #  - fixes: space in paths requires quoting each arg for Start-Process
-# New password: jhq000000
+# New password: 由参数 -NewPassword 或环境变量 XJT_NEW_DB_PASSWORD 提供（禁止硬编码）
 # Log: C:\Users\asuperj\AppData\Local\Temp\mysql_reset2.log
 # ============================================================
 $log = "C:\Users\asuperj\AppData\Local\Temp\mysql_reset2.log"
@@ -12,7 +12,10 @@ $bin     = "C:\Program Files\MySQL\MySQL Server 8.0\bin"
 $myini   = "C:\ProgramData\MySQL\MySQL Server 8.0\my.ini"
 $initSql = "C:\ProgramData\MySQL\MySQL Server 8.0\reset_root_password.sql"
 $errLog  = "C:\ProgramData\MySQL\MySQL Server 8.0\Data\DESKTOP-KF11EV8.err"
-$newpass = "jhq000000"
+$newpass = $env:XJT_NEW_DB_PASSWORD
+if (-not $newpass) {
+  throw "未提供新密码：请先设置环境变量 XJT_NEW_DB_PASSWORD，再运行本脚本。"
+}
 
 try {
   # 1. write init sql + tighten ACL

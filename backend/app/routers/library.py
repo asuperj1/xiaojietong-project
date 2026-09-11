@@ -51,13 +51,18 @@ def reserve(body: ReserveIn, user: dict = Depends(get_current_user)):
 
     with cpp_bridge.begin():
         # 冲突校验：同座位同日期、状态有效且时段重叠
+        # 审计 TXN-01 修复：原 `SELECT COUNT(*)` 在 REPEATABLE READ 下是**非锁定快照读**，
+        # 两个并发事务会同时读到 0 并各自 INSERT（seat_reservation 无唯一键兼底，
+        # 且「区间不重叠」无法用唯一键表达）→ 同一座位可被重复预约（双订）。
+        # 改为 `SELECT ... FOR UPDATE`：RR 下会对命中行加排他锁、对间隙加 gap 锁，
+        # 使同一座位的并发预约串行化。（聚合函数与 FOR UPDATE 不兼容，故改取 id）
         rows = cpp_bridge.query(
-            "SELECT COUNT(*) AS c FROM seat_reservation "
+            "SELECT id FROM seat_reservation "
             "WHERE seat_id = ? AND reserve_date = ? AND status IN (0,1) "
-            "  AND begin_time < ? AND end_time > ?",
+            "  AND begin_time < ? AND end_time > ? FOR UPDATE",
             [body.seat_id, body.date, body.end_time, body.begin_time],
         )
-        if int(rows[0]["c"]) > 0:
+        if rows:
             raise BizError(3001, "该座位此时段已被预约")
         reservation_id = cpp_bridge.library_dao().reserve(
             body.seat_id, uid, body.date, body.begin_time, body.end_time

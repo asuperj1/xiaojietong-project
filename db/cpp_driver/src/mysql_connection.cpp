@@ -2,7 +2,9 @@
 
 #include "jt_db/mysql_connection.h"
 
+#include <algorithm>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace jt_db {
@@ -128,6 +130,11 @@ MYSQL_STMT* MysqlConnection::prepare_statement(const std::string& sql) {
         mysql_stmt_close(stmt);
         throw DbException("SQL 预处理失败: " + err + " | SQL: " + sql);
     }
+    // 关键：开启 UPDATE_MAX_LENGTH，store_result() 后字段 metadata 的
+    // max_length 才会反映真实最大长度；否则 TEXT/VARCHAR 长内容 max_length
+    // 为 0，query() 按 255 字节缓冲取数会截断并报"读取结果失败"。
+    bool update_max_length = true;
+    mysql_stmt_attr_set(stmt, STMT_ATTR_UPDATE_MAX_LENGTH, &update_max_length);
     return stmt;
 }
 
@@ -176,21 +183,45 @@ QueryResult MysqlConnection::query(const std::string& sql, const Params& params)
 
             while (true) {
                 const int rc = mysql_stmt_fetch(stmt);
-                if (rc == 0) {
-                    Row row;
-                    for (unsigned int i = 0; i < ncols; ++i) {
-                        if (is_null[i]) {
-                            row[fields[i].name] = "";
-                        } else {
-                            row[fields[i].name].assign(bufs[i].data(), lens[i]);
-                        }
-                    }
-                    result.push_back(std::move(row));
-                } else if (rc == MYSQL_NO_DATA) {
+                if (rc == MYSQL_NO_DATA) {
                     break;
-                } else {
+                }
+                // rc == 0 为正常；rc == MYSQL_DATA_TRUNCATED 表示某列数据超出预分配缓冲。
+                // 典型场景：JSON / LONGTEXT 大字段 —— 其 metadata.max_length 不可靠
+                // （实测 MySQL 8 对 JSON 列返回 max_length = 0，按 255 兜底会截断），
+                // 此时不应作为错误抛出，而应用 mysql_stmt_fetch_column 按真实长度重取。
+                if (rc != 0 && rc != MYSQL_DATA_TRUNCATED) {
                     throw DbException("读取结果失败: " + std::string(mysql_stmt_error(stmt)));
                 }
+
+                Row row;
+                for (unsigned int i = 0; i < ncols; ++i) {
+                    if (is_null[i]) {
+                        row[fields[i].name] = "";
+                        continue;
+                    }
+                    if (lens[i] >= bufs[i].size()) {
+                        // 该列被截断：按实际长度重新分配并取回完整内容
+                        std::string full(lens[i], '\0');
+                        MYSQL_BIND bind2{};
+                        unsigned long real_len = 0;
+                        bool col_null = false;
+                        bind2.buffer_type = MYSQL_TYPE_STRING;
+                        bind2.buffer = full.empty() ? nullptr : &full[0];
+                        bind2.buffer_length = static_cast<unsigned long>(full.size());
+                        bind2.length = &real_len;
+                        bind2.is_null = &col_null;
+                        if (mysql_stmt_fetch_column(stmt, &bind2, i, 0) != 0) {
+                            throw DbException("重取截断列失败: " + std::string(fields[i].name));
+                        }
+                        row[fields[i].name] = col_null
+                            ? std::string()
+                            : full.substr(0, std::min<size_t>(real_len, full.size()));
+                    } else {
+                        row[fields[i].name].assign(bufs[i].data(), lens[i]);
+                    }
+                }
+                result.push_back(std::move(row));
             }
             mysql_free_result(meta);
         }

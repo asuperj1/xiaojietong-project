@@ -34,7 +34,8 @@ async def chat_send(body: ChatIn, user: dict = Depends(get_current_user)):
     if not body.content.strip() and not body.quick:
         raise err_param("内容不能为空")
 
-    # 1) 会话（不存在则新建）
+    # 1) 会话：未指定则新建；**指定时必须属于当前用户**
+    #    审计 SEC-04：否则可向他人会话注入消息，并把他人历史送入模型（提示注入外泄）
     conv_id = body.conversation_id
     if not conv_id:
         title = (body.quick or body.content).strip()[:20]
@@ -42,6 +43,13 @@ async def chat_send(body: ChatIn, user: dict = Depends(get_current_user)):
             "INSERT INTO ai_conversation (user_id, title) VALUES (?, ?)", [uid, title]
         )
         conv_id = rows[1]
+    else:
+        owned = cpp_bridge.query(
+            "SELECT id FROM ai_conversation WHERE id = ? AND user_id = ? AND is_deleted = 0",
+            [conv_id, uid],
+        )
+        if not owned:
+            raise BizError(1001, "会话不存在")
 
     # 2) 保存用户消息
     user_text = body.content or body.quick
@@ -130,6 +138,13 @@ def conversations(user: dict = Depends(get_current_user)):
 
 @router.get("/conversations/{conv_id}/messages")
 def messages(conv_id: int, user: dict = Depends(get_current_user)):
+    # 审计 SEC-03：先校验会话归属，避免遍历 conv_id 批量读取他人 AI 对话记录
+    owned = cpp_bridge.query(
+        "SELECT id FROM ai_conversation WHERE id = ? AND user_id = ? AND is_deleted = 0",
+        [conv_id, int(user["id"])],
+    )
+    if not owned:
+        raise BizError(1001, "会话不存在")
     rows = cpp_bridge.query(
         "SELECT id, role, content, created_at FROM ai_message "
         "WHERE conversation_id = ? ORDER BY id",

@@ -125,6 +125,7 @@ add_library(jt_db_core STATIC
     src/dao/secondhand_dao.cpp
     src/dao/job_dao.cpp
     src/dao/life_dao.cpp
+    src/dao/favorite_dao.cpp
 )
 target_include_directories(jt_db_core PUBLIC include ${MYSQL_INCLUDE_DIR})
 target_link_libraries(jt_db_core PUBLIC ${MYSQL_LIBRARY})
@@ -138,6 +139,19 @@ add_library(jt_db MODULE
     pybind/pybind_wrapper.cpp
 )
 target_link_libraries(jt_db PRIVATE jt_db_core pybind11::module)
+
+# ---------- C9 性能开关：MySQL IO 期间是否释放 GIL ----------
+#   ON （默认）：并发下相对 pymysql，大结果集 2.84x、分页 1.54x（后端列表查询为主，推荐）
+#   OFF        ：极小结果集的高并发点查更稳，避免 GIL 释放/获取的调度抖动
+# 切换：cmake -B build -A x64 -DJT_DB_RELEASE_GIL=OFF -DMYSQL_DIR="..."
+option(JT_DB_RELEASE_GIL "MySQL IO 期间释放 GIL（C9 并发优化）" ON)
+if(JT_DB_RELEASE_GIL)
+    target_compile_definitions(jt_db PRIVATE JT_DB_RELEASE_GIL=1)
+    message(STATUS "C9: GIL 释放 = ON（并发优化启用）")
+else()
+    target_compile_definitions(jt_db PRIVATE JT_DB_RELEASE_GIL=0)
+    message(STATUS "C9: GIL 释放 = OFF（点查密集场景）")
+endif()
 
 if(WIN32)
     set_target_properties(jt_db PROPERTIES PREFIX "" SUFFIX ".pyd")
@@ -168,6 +182,17 @@ if(WIN32 AND EXISTS "${_mysql_dll}")
     add_custom_command(TARGET jt_db POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_mysql_dll}" "${_NATIVE_DIR}")
+endif()
+if(WIN32)
+    # libmysql.dll 动态依赖 OpenSSL（libcrypto-1_1 / libssl-1_1），位于 MySQL bin/。
+    # 必须一并拷到 native/，否则 Python 加载 jt_db 时依赖 DLL 链断裂
+    # （Windows DLL 搜索不包含 sys.path，backend 侧已用 os.add_dll_directory 注册 native/）。
+    file(GLOB _mysql_ssl_dlls "${MYSQL_DIR}/bin/libcrypto*.dll" "${MYSQL_DIR}/bin/libssl*.dll")
+    foreach(_ssl_dll IN LISTS _mysql_ssl_dlls)
+        add_custom_command(TARGET jt_db POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_ssl_dll}" "${_NATIVE_DIR}")
+    endforeach()
 endif()
 
 # ---------- C++ 原生测试 ----------
