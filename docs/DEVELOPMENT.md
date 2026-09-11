@@ -181,10 +181,10 @@ xiaojietong-project/
 cmake --build db/cpp_driver/build --config Release --target jt_db
 
 # 数据层测试
-cd db/cpp_driver/test && XJT_DB_PORT=3307 XJT_DB_PASSWORD=jhq000000 python test_all_dao.py
+cd db/cpp_driver/test && XJT_DB_PORT=3307 XJT_DB_PASSWORD=${XJT_DB_PASSWORD} python test_all_dao.py
 
 # 启动后端
-cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=jhq000000 python -m uvicorn app.main:app --reload --port 8000
+cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=${XJT_DB_PASSWORD} python -m uvicorn app.main:app --reload --port 8000
 
 # 建库（utf8mb4）
 mysql -u root -P 3307 -p --default-character-set=utf8mb4 < db/sql/00_database.sql
@@ -197,7 +197,7 @@ mysql -u root -P 3307 -p --default-character-set=utf8mb4 < db/sql/00_database.sq
 
 | 项 | 值 |
 |---|---|
-| MySQL | 127.0.0.1:3307 / root / jhq000000 / xiaojietong |
+| MySQL | 127.0.0.1:3307 / root / `<XJT_DB_PASSWORD>` / xiaojietong |
 | Python | E:/miniconda3/python.exe (3.14) |
 | C++ 构建 | VS2026(MSVC) + CMake，产物 `backend/app/db/native/jt_db.pyd` |
 | 后端端口 | 8000（Swagger /docs） |

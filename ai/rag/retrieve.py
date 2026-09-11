@@ -2,7 +2,7 @@
 """RAG 检索测试脚本（向量检索 + 降级路径验证）。
 
 用法（仓库根 / Git Bash，需先启动 MySQL）：
-    cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=jhq000000 \
+    cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=${XJT_DB_PASSWORD} \
         python ../ai/rag/retrieve.py "图书馆几点关门"
     python ../ai/rag/retrieve.py "图书馆几点关门" 5   # 指定 top_k
 """

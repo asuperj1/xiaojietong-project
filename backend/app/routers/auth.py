@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import jwt
 from fastapi import APIRouter
@@ -20,6 +22,8 @@ from app.core.security import (
 from app.db import cpp_bridge
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+logger = logging.getLogger(__name__)
 
 
 class WechatLoginIn(BaseModel):
@@ -46,8 +50,19 @@ def _user_view(u: dict) -> dict:
 
 
 async def _code_to_openid(code: str) -> str:
-    """code 换 openid。未配置微信凭据时使用模拟 openid（开发模式）。"""
-    if not settings.wx_appid or not settings.wx_secret:
+    """code 换 openid。
+
+    未配置微信凭据时退化为模拟 openid —— 该行为**仅允许开发态**：
+    生产环境（XJT_ENV=prod）已在 `Settings._validate_security` 阶段拒绝启动，
+    这里再做一次请求级兜底，避免配置被绕过（审计 SEC-02）。
+    """
+    if settings.wx_login_mock:
+        if settings.is_prod:
+            raise err_server("微信登录未配置，服务拒绝该请求")
+        logger.warning(
+            "微信登录降级为 mock（openid=oXJT_DEV_<code>），仅限本地开发；"
+            "生产环境请配置 XJT_WX_APPID / XJT_WX_SECRET"
+        )
         return "oXJT_DEV_" + code
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(

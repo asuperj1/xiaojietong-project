@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>校捷通 - AI助手</title>
+<!-- Tailwind CSS (本地) -->
+<script src="https://modao.cc/agent-py/static/source/js/tailwindcss.js"></script>
+<!-- Iconify图标 -->
+<script src="https://modao.cc/agent-py/static/source/js/iconify-icon.min.js"></script>
+<style>
+        body {
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .phone-container {
+            width: 375px;
+            height: 812px;
+            background-color: white;
+            border-radius: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            border: 8px solid #111827;
+        }
+        .scrollable-content {
+            flex: 1;
+            overflow-y: auto;
+            padding-bottom: 140px;
+        }
+        .scrollable-content::-webkit-scrollbar {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+<div class="phone-container">
+<!-- 1. 顶部状态栏（与首页一致） -->
+<div class="flex justify-between items-center px-8 pt-4 pb-2 text-sm font-semibold select-none">
+<span>9:41</span>
+<div class="flex items-center space-x-1.5">
+<iconify-icon class="text-lg" icon="heroicons:signal-20-solid"></iconify-icon>
+<iconify-icon class="text-lg" icon="heroicons:wifi-20-solid"></iconify-icon>
+<iconify-icon class="text-xl rotate-90" icon="heroicons:battery-50-20-solid"></iconify-icon>
+</div>
+</div>
+<!-- 2. 应用标题区 -->
+<div class="flex justify-between items-center px-6 py-4">
+<div>
+<h1 class="text-2xl font-bold text-gray-900">AI助手</h1>
+<p class="text-sm text-gray-400 -mt-1">核心入口</p>
+</div>
+<button class="text-blue-500 text-sm font-medium">历史</button>
+</div>
+<!-- 3. 中间内容区域（可滚动） -->
+<div class="scrollable-content px-6">
+<!-- 引导性功能区 -->
+<div class="bg-blue-500 rounded-2xl px-5 py-5 mt-2 mb-6">
+<p class="text-white text-lg font-bold">一句话完成校园任务</p>
+<p class="text-white text-sm opacity-80 mt-1 leading-relaxed">查询、预约、摘要、提醒、发布都可由AI串联</p>
+</div>
+<!-- 功能按钮栏 -->
+<div class="flex space-x-2 mb-6">
+<button class="flex-1 px-3 py-2.5 rounded-xl bg-blue-500 text-white text-sm font-medium text-center">查空教室</button>
+<button class="flex-1 px-3 py-2.5 rounded-xl bg-white text-gray-700 text-sm font-medium border border-gray-200 text-center">问政策</button>
+<button class="flex-1 px-3 py-2.5 rounded-xl bg-white text-gray-700 text-sm font-medium border border-gray-200 text-center">总结通知</button>
+<button class="flex-1 px-3 py-2.5 rounded-xl bg-white text-gray-700 text-sm font-medium border border-gray-200 text-center">发布二手</button>
+</div>
+<!-- 用户提问 -->
+<div class="bg-gray-50 rounded-xl px-4 py-3 mb-4">
+<p class="text-gray-900"><span class="font-medium text-gray-700">你：</span>明天下午找一个适合自习的空教室</p>
+</div>
+<!-- AI执行计划 -->
+<div class="bg-white rounded-xl border border-gray-100 px-4 py-4 mb-4 shadow-sm">
+<h3 class="text-base font-bold text-gray-900 mb-3">AI执行计划</h3>
+<div class="space-y-3">
+<div class="flex items-center space-x-3">
+<div class="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
+<iconify-icon class="text-white text-sm" icon="heroicons:magnifying-glass-20-solid"></iconify-icon>
+</div>
+<span class="text-sm text-gray-700">识别任务：空教室查询</span>
+</div>
+<div class="flex items-center space-x-3">
+<div class="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
+<iconify-icon class="text-white text-sm" icon="heroicons:cog-6-tooth-20-solid"></iconify-icon>
+</div>
+<span class="text-sm text-gray-700">调用服务：空教室筛选</span>
+</div>
+<div class="flex items-center space-x-3">
+<div class="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
+<iconify-icon class="text-white text-sm" icon="heroicons:check-circle-20-solid"></iconify-icon>
+</div>
+<span class="text-sm text-gray-700">生成结果：推荐并可预约</span>
+</div>
+</div>
+</div>
+<!-- 结果展示 -->
+<div class="bg-white rounded-xl border border-gray-100 px-4 py-4 mb-6 shadow-sm">
+<p class="text-gray-900 font-bold text-base">结果：经信楼A305最匹配</p>
+<p class="text-gray-400 text-sm mt-1">14:00-17:00 · 容量80 · 距离430m</p>
+<button class="mt-3 px-5 py-2 rounded-lg bg-blue-500 text-white text-sm font-medium">预约</button>
+</div>
+<!-- 底部留白 -->
+<div class="mt-8 text-center">
+<p class="text-gray-300 text-xs italic">—— AI 持续为你服务 ——</p>
+</div>
+</div>
+<!-- 5. 固定对话输入框 -->
+<div class="absolute bottom-[80px] left-0 right-0 bg-white border-t border-gray-100 px-6 py-3" id="chat-input-bar">
+<div class="flex items-center space-x-2 rounded-xl border border-gray-200 px-3 py-2 bg-white">
+<!-- AI 机器人图标 -->
+<iconify-icon class="text-blue-500 text-xl flex-shrink-0" icon="heroicons:chat-bubble-left-right-20-solid"></iconify-icon>
+<!-- 文本输入框 -->
+<input class="flex-1 text-sm text-gray-700 placeholder-gray-400 outline-none border-none bg-transparent focus:ring-0" id="chat-input" placeholder="输入你的问题..." type="text"/>
+<!-- 发送按钮 -->
+<button class="flex-shrink-0 w-8 h-8 rounded-lg bg-blue-500 flex items-center justify-center hover:bg-blue-600 transition-colors" id="chat-send-btn">
+<iconify-icon class="text-white text-sm" icon="heroicons:paper-airplane-20-solid"></iconify-icon>
+</button>
+</div>
+</div>
+<!-- 4. 底部导航栏（AI 高亮选中） -->
+<div class="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 pt-3 pb-8 flex justify-between items-center">
+<a class="flex flex-col items-center text-gray-400" href="home.html">
+<iconify-icon class="text-2xl" icon="heroicons:home"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">首页</span>
+</a>
+<a class="flex flex-col items-center text-blue-500" href="ai.html">
+<iconify-icon class="text-2xl" icon="heroicons:chat-bubble-left-right-solid"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">AI</span>
+</a>
+<a class="flex flex-col items-center text-gray-400" href="services.html">
+<iconify-icon class="text-2xl" icon="heroicons:squares-2x2"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">服务</span>
+</a>
+<a class="flex flex-col items-center text-gray-400" href="community.html">
+<iconify-icon class="text-2xl" icon="heroicons:user-group"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">社区</span>
+</a>
+<a class="flex flex-col items-center text-gray-400" href="profile.html">
+<iconify-icon class="text-2xl" icon="heroicons:user"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">我的</span>
+</a>
+</div>
+</div>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const chatInput = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('chat-send-btn');
+        const scrollableContent = document.querySelector('.scrollable-content');
+
+        // 插入用户消息
+        function appendMessage(text) {
+            // 用户消息
+            const userDiv = document.createElement('div');
+            userDiv.className = 'bg-gray-50 rounded-xl px-4 py-3 mb-3';
+            userDiv.innerHTML = '<p class="text-gray-900"><span class="font-medium text-gray-700">你：</span>' + escapeHtml(text) + '</p>';
+            scrollableContent.insertBefore(userDiv, scrollableContent.querySelector('.mt-8'));
+
+            // AI 思考中占位消息
+            const aiDiv = document.createElement('div');
+            aiDiv.className = 'bg-white rounded-xl border border-gray-100 px-4 py-3 mb-4 shadow-sm';
+            aiDiv.innerHTML = '<div class="flex items-center space-x-2"><div class="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center flex-shrink-0"><iconify-icon class="text-white text-xs" icon="heroicons:chat-bubble-left-right-20-solid"></iconify-icon></div><span class="text-sm text-gray-400 italic">AI 思考中...</span></div>';
+            scrollableContent.insertBefore(aiDiv, scrollableContent.querySelector('.mt-8'));
+
+            // 滚动到底部
+            scrollableContent.scrollTop = scrollableContent.scrollHeight;
+        }
+
+        // 简单转义防止 XSS
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(str));
+            return div.innerHTML;
+        }
+
+        // 发送消息
+        function sendMessage() {
+            var text = chatInput.value.trim();
+            if (text === '') return;
+            appendMessage(text);
+            chatInput.value = '';
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        chatInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    });
+</script>
+</body>
+</html>

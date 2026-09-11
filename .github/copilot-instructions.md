@@ -45,10 +45,10 @@
 cmake --build db/cpp_driver/build --config Release --target jt_db
 
 # 跑 C++ 数据层测试（需数据库）
-cd db/cpp_driver/test && XJT_DB_PORT=3307 XJT_DB_PASSWORD=jhq000000 python test_all_dao.py
+cd db/cpp_driver/test && XJT_DB_PORT=3307 XJT_DB_PASSWORD=${XJT_DB_PASSWORD} python test_all_dao.py
 
 # 启动后端
-cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=jhq000000 python -m uvicorn app.main:app --reload --port 8000
+cd backend && XJT_DB_PORT=3307 XJT_DB_PASSWORD=${XJT_DB_PASSWORD} python -m uvicorn app.main:app --reload --port 8000
 # Swagger: http://127.0.0.1:8000/docs
 
 # 导入数据库脚本（utf8mb4 必须！）

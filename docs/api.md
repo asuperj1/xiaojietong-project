@@ -31,7 +31,7 @@ http://127.0.0.1:8000/api/v1           # 本地开发（uvicorn）
 | 0 | 成功 | — |
 | 1001~1099 | 参数错误 | 1001 参数缺失 / 1002 格式错误 |
 | 2001~2099 | 认证/权限 | 2001 未登录 / 2002 token 过期 / 2003 无权限 |
-| 3001~3099 | 业务冲突 | 3001 座位已被预约 / 3002 重复投递 |
+| 3001~3099 | 业务冲突 | 3001 座位已被预约 / 3002 重复投递 / **3003 内容未通过审核** |
 | 5001~5099 | 服务端/DB | 5001 数据库错误 / 5002 模型服务不可用 |
 
 ### 分页约定
@@ -246,7 +246,8 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 { "title":"九成新高数教材", "description":"微积分上册，无笔记", "category":"教材",
   "price":25.00, "condition_level":9, "images":["https://..."] }
 ```
-响应：`{ "item_id": 3 }`
+响应：`{ "item_id": 3, "audit_status": 1, "source": "model" }`
+> v1.5 起发布同样过内容审核：敏感词 → 3003 且 `audit_status=2`；可疑 → 待审；正常 → 立即上架。
 
 ### POST /secondhand/items/ai-describe — AI 辅助发布（图像→描述/定价）
 请求 `{ "image_url":"https://...", "user_note":"旧教材" }`
@@ -270,8 +271,14 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 响应 `data.items[]`：`{ "id":3,"title":"高数教材","price":25,"seller_name":"..." }`
 
 ### POST /secondhand/orders — 创建订单
-请求 `{ "item_id":3, "seller_id":1, "amount":25 }` → `{ "order_id": 8 }`
-> 建议事务：下单 + 物品标记已售。
+请求 `{ "item_id":3, "remark":"周末自取" }` → `{ "order_id": 8, "amount": 25.0 }`
+
+> **v1.4 契约变更（P0 安全加固）**：请求体不再接受 `seller_id` / `amount`。
+> 卖家与成交价一律由服务端从 `secondhand_item` 反查，避免客户端伪造价格或
+> 向任意卖家下单（SEC-05）。下单使用原子抢占
+> `UPDATE secondhand_item SET status=1 WHERE id=? AND status=0`，
+> 抢占失败（已售/已下架）返回业务码 `3001`，从根上防超卖（TXN-02）；
+> 购买自己发布的物品同样返回 `3001`。
 
 ---
 
@@ -312,8 +319,14 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ```
 
 ### POST /topics — 发帖
-请求 `{ "title":"求高数资料","content":"...","category":"学习" }` → `{ "topic_id": 5 }`
-> 新帖 `audit_status=0`，通过 AI 审核后对外可见。
+请求 `{ "title":"求高数资料","content":"...","category":"学习" }`
+响应 `data`：`{ "topic_id": 5, "audit_status": 1, "ai_summary": "求高数复习资料，共享笔记", "source": "model" }`
+> **自动审核（v1.5：词库 `audit_word` + 模型二次判定）**：
+> - 敏感词命中 → 拒绝：入库 `audit_status=2` 并返回**错误码 3003**；
+> - 可疑词/联系方式/外链 → `audit_status=0` 转人工待审（管理端处理）；
+> - 正常内容 → `audit_status=1` **立即可见**并附 `ai_summary` 摘要；
+> - 模型不可用 → 自动降级为规则判定，**不阻塞发帖**。
+> 轮询可见性：`GET /topics/{id}/audit-status`。
 
 ### GET /topics/mine — 我的帖子（v1.2 新增）
 查询参数：`?page=&size=`；返回自己发的全部帖子（含审核状态，便于展示"审核中/被拒"）。
@@ -335,11 +348,16 @@ event: error    data: {"code":5002,"message":"模型不可用"}
   "comments":[{"id":1,"author_name":"...","content":"...","created_at":"..."}] }
 ```
 
+### GET /topics/{id}/audit-status — 审核状态轮询（v1.5）
+响应 `data`：`{ "topic_id": 5, "audit_status": 1, "passed": true, "ai_summary": "..." }`
+> 发帖后前端轮询该接口确认可见性（audit_status：0 待审 / 1 通过 / 2 拒绝）。
+
 ### POST /topics/{id}/like — 点赞/取消
 响应：`{ "topic_id":5, "liked": true, "like_count": 13 }`
 
 ### POST /topics/{id}/comments — 评论
-请求 `{ "content":"同求" }` → `{ "comment_id": 3 }`
+请求 `{ "content":"同求" }` → `{ "comment_id": 3, "audit_status": 1 }`
+> 评论同样经内容审核（v1.5）：命中敏感词 → 返回 3003 且不入库。
 
 ### POST /topics/{id}/report — 举报
 请求 `{ "reason":"广告" }` → `{ "report_id": 1 }`
@@ -427,6 +445,10 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 请求 `{ "pass": true, "summary": "期末复习互助" }`
 > pass=true 设 `audit_status=1` + `ai_summary`；false 设 2。
 
+### POST /admin/forum/audit/batch — 批量审核（v1.5）
+请求 `{ "topic_ids": [5,6,7], "pass": true, "summary": "" }`（summary 留空则保留原摘要）
+响应 `data`：`{ "processed": 3, "audit_status": 1 }`
+
 ### GET /admin/train/corpus — 训练语料
 查询参数：`?source_type=forum&is_cleaned=0&page=&size=`
 
@@ -439,6 +461,59 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 3. **图片上传**：预留 `POST /upload/image`（multipart）→ `image_asset` 表。
 4. **日期时区**：后端统一用服务器本地时间（`Asia/Shanghai`）。
 5. **接口与 DAO 对应**：每个接口标了对应 C++ DAO，实现时直接调 `jt_db.XXXDAO()`。
+6. **健康探针（v1.6）**：`GET /health`（基础，前端存活探测）；`GET /health/detail`（可观测：Ollama 可达性/模型清单/向量库/知识库规模/检索模式与降级原因）；`GET /health/selfcheck`（一键自检 embed + 检索 + 生成）。
+7. **审核词库**：`audit_word` 表（`db/sql/11_audit.sql`），服务端 60s TTL 缓存 —— 增删词条无需重启，最多 1 分钟生效。
+
+### 12.1 新接口联调用例（B2 / B5，PowerShell 实测通过）
+
+前置：本地后端已启动（`cd backend` + `uvicorn app.main:app --port 8000`），先登录拿 token：
+
+```powershell
+$base = "http://127.0.0.1:8000/api/v1"
+$login = Invoke-RestMethod -Method Post -Uri "$base/auth/wechat-login" -ContentType "application/json" -Body '{"code":"test1"}'
+$H = @{ Authorization = "Bearer $($login.data.token)" }
+```
+
+**1) 我的帖子 / 我的发布 / 我的收藏（三个列表接口）**
+
+```powershell
+(Invoke-RestMethod -Uri "$base/topics/mine?page=1&size=10" -Headers $H).data | ConvertTo-Json -Depth 5
+(Invoke-RestMethod -Uri "$base/secondhand/items/mine?page=1&size=10" -Headers $H).data | ConvertTo-Json -Depth 5
+(Invoke-RestMethod -Uri "$base/favorites?target_type=topic&page=1&size=10" -Headers $H).data | ConvertTo-Json -Depth 5
+```
+
+**2) 收藏切换（同一请求重复调用即取消收藏）**
+
+```powershell
+$body = '{"target_type":"topic","target_id":1}'
+Invoke-RestMethod -Method Post -Uri "$base/favorites" -Headers $H -ContentType "application/json" -Body $body
+# → data: { "target_type":"topic", "target_id":1, "favorited":true }
+```
+
+**3) Agent 一句话任务（Function Call 真执行）**
+
+```powershell
+$body = '{"instruction":"提醒我明天下午4点交作业"}'
+Invoke-RestMethod -Method Post -Uri "$base/agent/tasks" -Headers $H -ContentType "application/json" -Body $body | ConvertTo-Json -Depth 6
+```
+
+实测响应（status=2 成功；模型不可用时降级为 `note` 占位，接口不报错）：
+
+```json
+{ "code": 0, "message": "ok", "data": {
+  "task_id": 3, "status": 2,
+  "plan": [ { "tool": "add_reminder", "desc": "添加提醒",
+              "result": { "reminder_id": 1, "content": "交作业", "remind_at": "2026-09-10 16:00:00" } } ],
+  "result": { "results": [ { "tool": "add_reminder", "ok": true, "desc": "添加提醒",
+              "result": { "reminder_id": 1, "content": "交作业", "remind_at": "2026-09-10 16:00:00" } } ] }
+} }
+```
+
+预约座位同理：`{"instruction":"帮我预约1号座位明天上午9点到11点"}` → `plan[0].result.reservation_id`；时段冲突时 `status=3` 且 `error` 给出冲突原因。
+
+**4) 回归脚本**：`pwsh backend/tests/verify_b2.ps1`（我的帖子 / 收藏切换 / 我的发布 全链路断言，输出 `B2 PASS`）
+
+---
 
 ## 13. 变更记录
 
@@ -448,3 +523,6 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 | v1.1 | 2026-08-24 | RAG：ingest 响应加 `status`；新增 `POST /admin/knowledge/index` 重建索引 |
 | v1.2 | 2026-09-08 | B2 补齐缺口接口：`GET /topics/mine`（我的帖子）、`GET /secondhand/items/mine`（我的发布）、通用收藏 `POST/GET /favorites`（topic/item）；帖子详情新增 `favorited` |
 | v1.3 | 2026-09-09 | B5 Agent Function Call：`POST /agent/tasks` 由模型解析意图并真实执行工具（add_reminder/reserve_seat/query_free_room/post_secondhand），响应新增 `result`（执行明细）；模型不可用时降级关键词占位 |
+| v1.4 | 2026-09-10 | **P0 安全加固（成员3）**：`POST /secondhand/orders` 请求体改为 `{item_id, remark}`，卖家/金额由服务端反查、响应新增 `amount`（SEC-05），下单原子抢占防超卖（TXN-02，冲突返回 `3001`）；聊天会话读写新增归属校验（SEC-03/04，越权返回 `1001`）；账号禁用即时生效（SEC-06，返回 `2003`）；生产环境强制校验 `XJT_JWT_SECRET` 与微信配置（SEC-01/02） |
+| v1.5 | 2026-09-10 | B6 内容审核闭环（成员2）：词库 `audit_word` + 审核留痕 `audit_log`（C7 表设计，`db/sql/11_audit.sql`）；`services/audit.py` 三级判定（pass/review/block，规则 + 模型二次判定）；发帖·评论·二手发布接入审核；拒绝错误码 **3003**；新增 `GET /topics/{id}/audit-status` 轮询与 `POST /admin/forum/audit/batch` 批量审核 |
+| v1.6 | 2026-09-10 | B8 可观测性：新增 `GET /health/detail`（Ollama·模型·向量库·知识库·检索模式与降级原因）与 `GET /health/selfcheck`（embed/检索/生成一键自检）；`/health` 保持兼容不变 |

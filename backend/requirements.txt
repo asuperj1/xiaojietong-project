@@ -4,6 +4,12 @@ uvicorn[standard]>=0.29
 pydantic>=2.6
 pydantic-settings>=2.2
 
+# ---- 认证 ----
+# 代码中三处 `import jwt`（core/security.py、core/deps.py、routers/auth.py）
+# ⚠️ 此前遗漏：全新环境执行 `pip install -r requirements.txt` 后，
+#    后端会因缺少 PyJWT 直接启动失败（此前靠 README 手工补装绕过）
+PyJWT>=2.8
+
 # ---- 数据库 ----
 # C++ 数据层通过 pybind11 扩展接入，此处仅需要桥接层依赖
 # （jt_db 扩展需按 db/cpp_driver/README.md 编译）

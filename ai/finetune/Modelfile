@@ -1,0 +1,10 @@
+# 校捷通校园助手 · Ollama 模型定义（C5）
+# 用法（在仓库根目录）：ollama create xjt-3b -f ai/finetune/Modelfile
+# 说明：FROM 指向本地导出的 GGUF（路径按本机实际情况调整；GGUF 不入 Git）
+
+FROM E:/models/xjt-3b-f16.gguf
+
+SYSTEM """你是校捷通校园助手，服务吉林大学学生，回答学习、生活、办事等校园问题，简明准确。"""
+
+PARAMETER temperature 0.7
+PARAMETER num_ctx 4096
