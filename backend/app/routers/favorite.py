@@ -28,20 +28,14 @@ class ToggleFavoriteIn(BaseModel):
 
 
 def _ensure_target_exists(target_type: str, target_id: int) -> None:
-    """校验收藏对象存在且未被删除/锁定，否则 1001。"""
-    if target_type == "topic":
-        rows = cpp_bridge.query(
-            "SELECT id FROM topic WHERE id = ? AND is_deleted = 0 AND status != 1",
-            [target_id],
-        )
-    elif target_type == "item":
-        rows = cpp_bridge.query(
-            "SELECT id FROM secondhand_item WHERE id = ? AND is_deleted = 0",
-            [target_id],
-        )
-    else:
+    """校验收藏对象存在且未被删除/锁定，否则 1001。
+
+    C10：存在性 SQL 已收敛到 C++ `FavoriteDAO::target_exists()`，
+    本函数仅负责参数白名单与错误码映射。
+    """
+    if target_type not in _ALLOWED_TARGETS:
         raise err_param("target_type 仅支持 topic / item")
-    if not rows:
+    if not cpp_bridge.favorite_dao().target_exists(target_type, target_id):
         raise BizError(1001, "收藏对象不存在")
 
 
@@ -64,25 +58,12 @@ def _item_view(i: dict) -> dict:
 @router.post("")
 def toggle_favorite(body: ToggleFavoriteIn, user: dict = Depends(get_current_user)):
     """收藏 / 取消收藏（幂等切换）。"""
-    uid = int(user["id"])
     _ensure_target_exists(body.target_type, body.target_id)
-    existed = cpp_bridge.query(
-        "SELECT id FROM favorite WHERE user_id = ? AND target_type = ? AND target_id = ?",
-        [uid, body.target_type, body.target_id],
-    )
+    # C10：先查后写的切换逻辑收敛到 FavoriteDAO（事务内保证语义）
     with cpp_bridge.begin():
-        if existed:
-            cpp_bridge.execute(
-                "DELETE FROM favorite WHERE user_id = ? AND target_type = ? AND target_id = ?",
-                [uid, body.target_type, body.target_id],
-            )
-            favorited = False
-        else:
-            cpp_bridge.execute(
-                "INSERT INTO favorite (user_id, target_type, target_id) VALUES (?, ?, ?)",
-                [uid, body.target_type, body.target_id],
-            )
-            favorited = True
+        favorited = cpp_bridge.favorite_dao().toggle(
+            int(user["id"]), body.target_type, body.target_id
+        )
     return ok(
         {
             "target_type": body.target_type,
@@ -105,43 +86,16 @@ def my_favorites(
         raise err_param("target_type 仅支持 topic / item")
     offset = (page - 1) * size
 
+    # C10：两条 JOIN 列表用 SQL 与 COUNT 均已收敛到 FavoriteDAO
+    dao = cpp_bridge.favorite_dao()
     if target_type == "topic":
-        where = (
-            "f.user_id = ? AND f.target_type = 'topic' "
-            "AND t.is_deleted = 0 AND t.status != 1"
-        )
-        rows = cpp_bridge.query(
-            "SELECT f.id AS favorite_id, f.created_at AS favorited_at, "
-            "t.id, t.title, t.category, t.like_count, t.comment_count, t.view_count, "
-            "t.audit_status, t.ai_summary, t.is_hot, t.created_at "
-            f"FROM favorite f JOIN topic t ON t.id = f.target_id WHERE {where} "
-            "ORDER BY f.id DESC LIMIT ? OFFSET ?",
-            [uid, size, offset],
-        )
-        total = cpp_bridge.query(
-            "SELECT COUNT(*) AS total "
-            f"FROM favorite f JOIN topic t ON t.id = f.target_id WHERE {where}",
-            [uid],
-        )
-        # 收藏列表中的帖子必然已被收藏过，标记 true 便于前端直接复用详情组件
-        for r in rows:
-            r["favorited"] = True
+        rows = dao.page_topics(uid, size, offset)
+        total = dao.count_topics(uid)
     else:  # item
-        where = "f.user_id = ? AND f.target_type = 'item' AND t.is_deleted = 0"
-        rows = cpp_bridge.query(
-            "SELECT f.id AS favorite_id, f.created_at AS favorited_at, "
-            "t.id, t.title, t.category, t.price, t.condition_level, t.images_json, "
-            "t.status, t.audit_status, t.trust_score, t.created_at "
-            f"FROM favorite f JOIN secondhand_item t ON t.id = f.target_id WHERE {where} "
-            "ORDER BY f.id DESC LIMIT ? OFFSET ?",
-            [uid, size, offset],
-        )
-        total = cpp_bridge.query(
-            "SELECT COUNT(*) AS total "
-            f"FROM favorite f JOIN secondhand_item t ON t.id = f.target_id WHERE {where}",
-            [uid],
-        )
-        rows = [_item_view(r) for r in rows]
-        for r in rows:
-            r["favorited"] = True
-    return ok(paged(rows, int(total[0]["total"]) if total else 0, page, size))
+        rows = [_item_view(r) for r in dao.page_items(uid, size, offset)]
+        total = dao.count_items(uid)
+
+    # 收藏列表中的对象必然已被收藏过，标记 true 便于前端直接复用详情组件
+    for r in rows:
+        r["favorited"] = True
+    return ok(paged(rows, int(total), page, size))

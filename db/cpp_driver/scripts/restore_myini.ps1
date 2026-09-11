@@ -1,4 +1,4 @@
-# Restore original my.ini from backup and start MySQL803307 (admin)
+﻿# Restore original my.ini from backup and start MySQL803307 (admin)
 $log = "C:\Users\asuperj\AppData\Local\Temp\mysql_restore.log"
 Set-Content -Path $log -Value "RESTORE START" -Encoding ASCII
 function W($m) { Add-Content -Path $log -Value $m -Encoding ASCII }
