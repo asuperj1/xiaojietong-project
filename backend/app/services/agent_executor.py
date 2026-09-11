@@ -243,14 +243,15 @@ def _exec_reserve_seat(user_id: int, task_id: int, args: dict) -> dict:
     if begin >= end:
         return {"ok": False, "error": "结束时间需晚于开始时间"}
     # 与 routers/library.py reserve 相同的冲突校验 + 落库
+    # 审计 TXN-01：同样改为 `SELECT ... FOR UPDATE` 锁定读，避免与手动预约并发双订
     with cpp_bridge.begin():
         rows = cpp_bridge.query(
-            "SELECT COUNT(*) AS c FROM seat_reservation "
+            "SELECT id FROM seat_reservation "
             "WHERE seat_id = ? AND reserve_date = ? AND status IN (0,1) "
-            "AND begin_time < ? AND end_time > ?",
+            "AND begin_time < ? AND end_time > ? FOR UPDATE",
             [seat_id, date, end, begin],
         )
-        if int(rows[0]["c"]) > 0:
+        if rows:
             return {"ok": False, "error": f"座位 {seat_id} 在 {date} {begin}-{end} 已被预约"}
         reservation_id = cpp_bridge.library_dao().reserve(
             seat_id, user_id, date, begin, end
