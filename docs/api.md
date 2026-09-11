@@ -271,8 +271,14 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 响应 `data.items[]`：`{ "id":3,"title":"高数教材","price":25,"seller_name":"..." }`
 
 ### POST /secondhand/orders — 创建订单
-请求 `{ "item_id":3, "seller_id":1, "amount":25 }` → `{ "order_id": 8 }`
-> 建议事务：下单 + 物品标记已售。
+请求 `{ "item_id":3, "remark":"周末自取" }` → `{ "order_id": 8, "amount": 25.0 }`
+
+> **v1.4 契约变更（P0 安全加固）**：请求体不再接受 `seller_id` / `amount`。
+> 卖家与成交价一律由服务端从 `secondhand_item` 反查，避免客户端伪造价格或
+> 向任意卖家下单（SEC-05）。下单使用原子抢占
+> `UPDATE secondhand_item SET status=1 WHERE id=? AND status=0`，
+> 抢占失败（已售/已下架）返回业务码 `3001`，从根上防超卖（TXN-02）；
+> 购买自己发布的物品同样返回 `3001`。
 
 ---
 
@@ -517,6 +523,6 @@ Invoke-RestMethod -Method Post -Uri "$base/agent/tasks" -Headers $H -ContentType
 | v1.1 | 2026-08-24 | RAG：ingest 响应加 `status`；新增 `POST /admin/knowledge/index` 重建索引 |
 | v1.2 | 2026-09-08 | B2 补齐缺口接口：`GET /topics/mine`（我的帖子）、`GET /secondhand/items/mine`（我的发布）、通用收藏 `POST/GET /favorites`（topic/item）；帖子详情新增 `favorited` |
 | v1.3 | 2026-09-09 | B5 Agent Function Call：`POST /agent/tasks` 由模型解析意图并真实执行工具（add_reminder/reserve_seat/query_free_room/post_secondhand），响应新增 `result`（执行明细）；模型不可用时降级关键词占位 |
-| v1.4 | 2026-09-10 | B6 内容治理：发帖自动 AI 审核（规则+模型，回写 `audit_status`/`ai_summary`）；`POST /admin/forum/audit/{id}` 请求字段与契约对齐（别名 `pass`） |
-| v1.5 | 2026-09-10 | B6 审核闭环：词库表 `audit_word`（`db/sql/11_audit.sql`）+ `services/audit.py` 三级判定（pass/review/block）；发帖·评论·二手发布接入审核；拒绝错误码 **3003**；新增 `GET /topics/{id}/audit-status` 与 `POST /admin/forum/audit/batch` |
+| v1.4 | 2026-09-10 | **P0 安全加固（成员3）**：`POST /secondhand/orders` 请求体改为 `{item_id, remark}`，卖家/金额由服务端反查、响应新增 `amount`（SEC-05），下单原子抢占防超卖（TXN-02，冲突返回 `3001`）；聊天会话读写新增归属校验（SEC-03/04，越权返回 `1001`）；账号禁用即时生效（SEC-06，返回 `2003`）；生产环境强制校验 `XJT_JWT_SECRET` 与微信配置（SEC-01/02） |
+| v1.5 | 2026-09-10 | B6 内容审核闭环（成员2）：词库 `audit_word` + 审核留痕 `audit_log`（C7 表设计，`db/sql/11_audit.sql`）；`services/audit.py` 三级判定（pass/review/block，规则 + 模型二次判定）；发帖·评论·二手发布接入审核；拒绝错误码 **3003**；新增 `GET /topics/{id}/audit-status` 轮询与 `POST /admin/forum/audit/batch` 批量审核 |
 | v1.6 | 2026-09-10 | B8 可观测性：新增 `GET /health/detail`（Ollama·模型·向量库·知识库·检索模式与降级原因）与 `GET /health/selfcheck`（embed/检索/生成一键自检）；`/health` 保持兼容不变 |

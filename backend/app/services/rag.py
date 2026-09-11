@@ -10,8 +10,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import time
 from typing import Optional
 
 from app.core.config import settings
@@ -22,6 +24,36 @@ from app.services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
+# ---------- 轻量进程内缓存与并发保护（审计 CAC-01 / CAC-04；无需引入 Redis） ----------
+# 检索结果缓存：热点问题（如「图书馆几点关门」）在 TTL 内直接命中，避免重复
+# embedding + 向量检索 + 降级全表扫。
+_RETRIEVE_CACHE: dict[tuple[str, int], tuple[float, list[dict]]] = {}
+_CACHE_TTL = 60.0     # 秒
+_CACHE_MAX = 512      # 条目上限（超限时清掉前半，简单且零依赖）
+
+# 降级路径并发闸门：关键词检索是对 knowledge_doc.content(LONGTEXT) 的全表扫描，
+# 必须限流。否则 Ollama 抖动时（熔断 30s）所有对话请求会同时全表扫并打满连接池，
+# 把 AI 故障放大成全站雪崩。
+_KEYWORD_SEM = asyncio.Semaphore(2)
+
+
+def _cache_get(key: tuple[str, int]) -> Optional[list[dict]]:
+    hit = _RETRIEVE_CACHE.get(key)
+    if not hit:
+        return None
+    ts, val = hit
+    if time.monotonic() - ts > _CACHE_TTL:
+        _RETRIEVE_CACHE.pop(key, None)
+        return None
+    return val
+
+
+def _cache_put(key: tuple[str, int], val: list[dict]) -> None:
+    if len(_RETRIEVE_CACHE) >= _CACHE_MAX:
+        for k in list(_RETRIEVE_CACHE)[: _CACHE_MAX // 2]:
+            _RETRIEVE_CACHE.pop(k, None)
+    _RETRIEVE_CACHE[key] = (time.monotonic(), val)
+
 
 # ---------------------------------------------------------------- 检索 ----
 
@@ -29,7 +61,14 @@ _TERM_SPLIT_RE = re.compile(r"[\s,，、;；/]+")
 
 
 async def _keyword_retrieve(question: str, top_k: int) -> list[dict]:
-    """降级实现：关键词 LIKE 匹配（拆分关键词，任一命中即可）。"""
+    """降级实现：关键词 LIKE 匹配（拆分关键词，任一命中即可）。
+
+    审计 CAC-01 修复点：
+      ① 原实现在 `async def` 内**同步**调用 `cpp_bridge.query`，会直接阻塞事件循环；
+         现改为 `asyncio.to_thread` 丢到工作线程执行。
+      ② 原实现无并发限制；现用 `_KEYWORD_SEM` 把降级查询并发限制在 2，
+         避免故障期间打满连接池拖垮全站。
+    """
     if not question:
         return []
     # 拆词：按空白/常见分隔符；无分隔时取整串（兼容中文长句）
@@ -41,13 +80,17 @@ async def _keyword_retrieve(question: str, top_k: int) -> list[dict]:
     for t in terms:
         params += [f"%{t}%", f"%{t}%"]
     params.append(top_k)
-    rows = cpp_bridge.query(
-        f"SELECT title, category, LEFT(content, 200) AS content, source_url "
-        f"FROM knowledge_doc WHERE status != 2 AND ({cond}) "
-        f"ORDER BY updated_at DESC LIMIT ?",
-        params,
-    )
-    return rows
+
+    def _run() -> list[dict]:
+        return cpp_bridge.query(
+            f"SELECT title, category, LEFT(content, 200) AS content, source_url "
+            f"FROM knowledge_doc WHERE status != 2 AND ({cond}) "
+            f"ORDER BY updated_at DESC LIMIT ?",
+            params,
+        )
+
+    async with _KEYWORD_SEM:
+        return await asyncio.to_thread(_run)
 
 
 def _format_hits(hits: list[dict]) -> list[dict]:
@@ -68,20 +111,35 @@ async def retrieve(question: str, top_k: Optional[int] = None) -> list[dict]:
     """检索相关知识片段，返回 [{title, category, content, source_url, score?}]。
 
     优先向量检索；embedding/向量库不可用或未命中时降级关键词匹配。
+    • 结果带 60s 进程内 TTL 缓存（CAC-04：热点问题不再重复回源）
+    • 向量库检索为同步 CPU/IO，同样丢到线程池，避免阻塞事件循环
     """
     if not question:
         return []
     top_k = top_k or settings.rag_top_k
+
+    key = (question.strip().lower(), top_k)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    result: list[dict] = []
     emb = await embedder.embed_one(question)
     if emb is not None:
         try:
             store = get_vector_store()
-            hits = store.search(emb, top_k, settings.rag_score_threshold)
+            hits = await asyncio.to_thread(
+                store.search, emb, top_k, settings.rag_score_threshold
+            )
             if hits:
-                return _format_hits(hits)
+                result = _format_hits(hits)
         except Exception as exc:  # noqa: BLE001 - 向量库异常降级
             logger.warning("向量检索异常，降级关键词：%s", exc)
-    return await _keyword_retrieve(question, top_k)
+    if not result:
+        result = await _keyword_retrieve(question, top_k)
+
+    _cache_put(key, result)
+    return result
 
 
 async def build_system_prompt(question: str) -> tuple[str, list[dict]]:

@@ -1,20 +1,22 @@
-"""内容审核服务（B6）：词库规则 + 模型二次判定。
+"""内容审核服务（B6）：词库规则 + 模型二次判定 + 审核留痕。
+
+词库与留痕表为 C7 设计（``db/sql/11_audit.sql``）：
+- ``audit_word``：敏感词库。``level`` 1 禁止 / 2 可疑；
+  ``action`` 1 拒绝 / 2 待审 / 3 打码（当前按待审处理）。
+- ``audit_log`` ：审核留痕。``source`` 1 规则 / 2 模型 / 3 人工；
+  ``result`` 0 待审 / 1 通过 / 2 拒绝。
 
 对外主入口：
-- ``check(text)`` → ``{passed, level, reason, hits}``
-  - level: ``pass``（直接通过）/ ``review``（转人工待审）/ ``block``（拒绝）
-  - 词库来源：``audit_word`` 表（level=2/action=block → 拒绝；level=1/action=review → 待审），
-    另附正则补充规则（手机号 / 联系方式 / 外链 → 待审）。
-- ``audit_content(text)`` → ``{passed, level, reason, summary, source}``
-  在 check 基础上做**模型二次判定**（可选，失败自动降级为规则，不阻塞业务）：
-  - block 直接返回；
-  - pass / review 且模型可用 → 调 Ollama 判定违规 + 生成摘要；
-    模型判违规 → 升级为 block；否则保留原级别并附摘要（source=model）。
-  - 模型不可用/超时/输出异常 → 原样返回（source=rule）。
+- ``check(text)`` → ``{passed, level, reason, hits}``（纯规则，无副作用）
+  level: ``pass`` / ``review`` / ``block``
+- ``audit_content(text, *, target_type, target_id, user_id)``
+  → ``{passed, level, reason, summary, source, cost_ms}``
+  规则 + 模型二次判定；写 ``audit_log`` 留痕、累加 ``audit_word.hit_count``；
+  模型不可用/超时 → 自动降级规则，**不阻塞业务**。
 
-调用方落库语义（forum.create_topic / comments、secondhand.publish）：
-- block  → ``audit_status=2`` + 抛 ``err_audit``（错误码 3003）
-- review → ``audit_status=0``（待人工，管理端处理）
+调用方落库语义（forum / secondhand）：
+- block  → ``audit_status=2`` + 抛 ``err_audit``（错误码 3003）；评论不入库
+- review → ``audit_status=0``（转人工待审）
 - pass   → ``audit_status=1``（立即可见）
 """
 
@@ -23,7 +25,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -33,11 +35,11 @@ from app.db import cpp_bridge
 _MODEL_TIMEOUT = 30.0
 _WORD_CACHE_TTL = 60.0  # 词库缓存秒数（避免每条内容都查库）
 
-# 正则补充规则（命中 → review 待审）
-_REGEX_RULES: list[tuple[str, str]] = [
-    (r"(?<!\d)1[3-9]\d{9}(?!\d)", "疑似广告：包含手机号"),
-    (r"(微信|QQ|VX|vx|V信|威信)\s*[:：]?\s*[A-Za-z0-9_\-]{5,}", "疑似广告：包含联系方式"),
-    (r"https?://", "疑似广告：包含外部链接"),
+# 正则补充规则：命中 → review 待审（label 用于留痕展示）
+_REGEX_RULES: list[tuple[str, str, str]] = [
+    (r"(?<!\d)1[3-9]\d{9}(?!\d)", "手机号", "疑似广告：包含手机号"),
+    (r"(微信|QQ|VX|vx|V信|威信)\s*[:：]?\s*[A-Za-z0-9_\-]{5,}", "联系方式", "疑似广告：包含联系方式"),
+    (r"https?://", "外链", "疑似广告：包含外部链接"),
 ]
 
 _MODEL_PROMPT = (
@@ -54,8 +56,25 @@ _words_cache: list[dict] = []
 _words_ts: float = 0.0
 
 
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _hit_level(row: dict) -> str:
+    """按 C7 词库语义判定命中级别：action 1 拒绝 / 2 待审 / 3 打码（按待审）。"""
+    action = _to_int(row.get("action"))
+    if action == 1:
+        return "block"
+    if action in (2, 3):
+        return "review"
+    return "block" if _to_int(row.get("level"), default=2) == 1 else "review"
+
+
 def _load_words() -> list[dict]:
-    """加载启用的词条（60s TTL 缓存）。库不可用/无表时返回空表（规则降级）。"""
+    """加载启用的词条（60s TTL 缓存）。库不可用/无表时返回空表（仅剩正则规则）。"""
     global _words_cache, _words_ts
     now = time.time()
     if _words_cache and now - _words_ts < _WORD_CACHE_TTL:
@@ -74,10 +93,7 @@ def _load_words() -> list[dict]:
 
 
 def check(text: str) -> dict:
-    """规则判定：返回 {passed, level, reason, hits}。
-
-    level: pass / review / block；block 时 passed=False。
-    """
+    """规则判定（纯函数，无副作用）：返回 {passed, level, reason, hits}。"""
     content = text or ""
     hits: list[dict] = []
     reason = ""
@@ -86,13 +102,13 @@ def check(text: str) -> dict:
     for row in _load_words():
         word = str(row.get("word") or "")
         if word and word in content:
-            action = str(row.get("action") or "review").lower()
-            hit_level = "block" if action == "block" else "review"
+            hit_level = _hit_level(row)
             hits.append(
                 {
                     "word": word,
                     "level": hit_level,
                     "category": row.get("category") or "",
+                    "from": "word",
                 }
             )
             if hit_level == "block":
@@ -104,9 +120,9 @@ def check(text: str) -> dict:
                 reason = f"命中可疑词：{word}（转人工复核）"
 
     if level != "block":
-        for pattern, why in _REGEX_RULES:
+        for pattern, label, why in _REGEX_RULES:
             if re.search(pattern, content, flags=re.IGNORECASE):
-                hits.append({"word": pattern, "level": "review", "category": "广告"})
+                hits.append({"word": label, "level": "review", "category": "广告", "from": "regex"})
                 if level == "pass":
                     level = "review"
                     reason = why
@@ -142,41 +158,78 @@ async def _model_verdict(text: str) -> Optional[dict]:
         return None
 
 
-async def audit_content(text: str) -> dict:
-    """规则 + 模型二次判定。
+async def audit_content(
+    text: str,
+    *,
+    target_type: str = "",
+    target_id: int = 0,
+    user_id: int = 0,
+) -> dict:
+    """规则 + 模型二次判定，并写入 audit_log 留痕。
 
-    返回 {passed, level, reason, summary, source}
-    source: rule（规则判定）/ model（含模型结论）
+    返回 {passed, level, reason, summary, source, cost_ms}；source: rule / model。
     """
+    t0 = time.perf_counter()
     rule = check(text)
-    result = {
-        "passed": rule["passed"],
-        "level": rule["level"],
-        "reason": rule["reason"],
-        "summary": "",
-        "source": "rule",
-    }
-    if rule["level"] == "block":
-        return result
+    level = rule["level"]
+    reason = rule["reason"]
+    hits = rule["hits"]
+    summary = ""
+    source_code = 1  # 1 规则 / 2 模型
 
-    verdict = await _model_verdict(text)
-    if verdict is None:
-        return result  # 模型不可用：按规则结果放行/待审，不阻塞
+    if level != "block":
+        verdict = await _model_verdict(text)
+        if verdict is not None:
+            source_code = 2
+            if level == "pass" and bool(verdict.get("violation")):
+                # 仅对"规则放行"的内容允许模型升级为拒绝；
+                # review（可疑词命中）按词库语义保持待人工复核
+                level = "block"
+                reason = str(verdict.get("reason") or "模型判定违规")
+            else:
+                summary = str(verdict.get("summary") or "").strip()[:500]
 
-    if rule["level"] == "pass" and bool(verdict.get("violation")):
-        # 仅对"规则放行"的内容允许模型升级为拒绝；
-        # review（可疑词命中）按契约语义保持待人工复核，不被模型升级为 block
-        result.update(
-            passed=False,
-            level="block",
-            reason=str(verdict.get("reason") or "模型判定违规"),
-            source="model",
+    cost_ms = int((time.perf_counter() - t0) * 1000)
+
+    # 词库命中计数（运营排序用；失败不影响主流程）
+    for hit in hits:
+        if hit.get("from") == "word":
+            try:
+                cpp_bridge.execute(
+                    "UPDATE audit_word SET hit_count = hit_count + 1 WHERE word = ?",
+                    [hit["word"]],
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+    # 审核留痕 audit_log（C7）：source 1规则/2模型，result 0待审/1通过/2拒绝
+    hit_words = ",".join(h["word"] for h in hits)[:500]
+    try:
+        cpp_bridge.execute(
+            "INSERT INTO audit_log (target_type, target_id, user_id, source, result, "
+            "hit_words, reason, cost_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                target_type or "",
+                _to_int(target_id),
+                _to_int(user_id),
+                source_code,
+                {"pass": 1, "review": 0, "block": 2}[level],
+                hit_words,
+                reason[:255],
+                cost_ms,
+            ],
         )
-        return result
+    except Exception:  # noqa: BLE001 - 留痕失败不影响审核主流程
+        pass
 
-    result["summary"] = str(verdict.get("summary") or "").strip()[:500]
-    result["source"] = "model"
-    return result
+    return {
+        "passed": level != "block",
+        "level": level,
+        "reason": reason,
+        "summary": summary,
+        "source": "model" if source_code == 2 else "rule",
+        "cost_ms": cost_ms,
+    }
 
 
 def status_of(level: str) -> int:

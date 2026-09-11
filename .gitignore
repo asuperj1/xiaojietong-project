@@ -39,3 +39,6 @@ gguf/
 models/
 backend/data/
 *.log
+
+# ---- 运行时上传目录（用户上传的图片，不入库）----
+backend/uploads/

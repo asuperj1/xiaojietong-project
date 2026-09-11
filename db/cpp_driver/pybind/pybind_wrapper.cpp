@@ -12,7 +12,9 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <memory>
 #include <string>
+#include <tuple>
 
 #include "jt_db/connection_pool.h"
 #include "jt_db/db_session.h"
@@ -22,6 +24,7 @@
 #include "jt_db/dao/secondhand_dao.h"
 #include "jt_db/dao/job_dao.h"
 #include "jt_db/dao/life_dao.h"
+#include "jt_db/dao/favorite_dao.h"
 #include "jt_db/transaction.h"
 
 namespace py = pybind11;
@@ -51,6 +54,36 @@ Params to_params(const py::list& list) {
 void translate_db_exception(const DbException& e) {
     PyErr_SetString(PyExc_RuntimeError, e.what());
 }
+
+// ---------------------------------------------------------------------------
+// C9 性能开关：MySQL IO 期间是否释放 GIL
+//
+//   1（默认）释放：并发下相对 pymysql，分页查询 2.14x、大结果集 2.79x。
+//        pymysql 全程持 GIL 执行 Python 字节码，多线程只能互抢；
+//        C++ 层让出 GIL 后多个请求才能真正并行。
+//   0 不释放：极小结果集（主键点查）在高并发下更稳 ——
+//        释放/获取 GIL 的调度开销会超过收益（实测 16 并发点查：1.22x vs 0.65x）。
+//
+// 切换方式：cmake -DJT_DB_RELEASE_GIL=0 或直接改本文件默认值。
+// ---------------------------------------------------------------------------
+#ifndef JT_DB_RELEASE_GIL
+#define JT_DB_RELEASE_GIL 1
+#endif
+
+// 作用域内按开关决定是否让出 GIL
+class GilIoGuard {
+public:
+    GilIoGuard() {
+#if JT_DB_RELEASE_GIL
+        release_ = std::make_unique<py::gil_scoped_release>();
+#endif
+    }
+
+private:
+#if JT_DB_RELEASE_GIL
+    std::unique_ptr<py::gil_scoped_release> release_;
+#endif
+};
 
 }  // namespace
 
@@ -93,15 +126,28 @@ PYBIND11_MODULE(jt_db, m) {
     }, "返回连接池状态 {initialized, idle, active}");
 
     m.def("ping", []() {
-        auto conn = ConnectionPool::instance().get();
-        return conn->ping();
+        bool ok = false;
+        {
+            GilIoGuard gil_guard;  // C9：按开关让出 GIL
+            auto conn = ConnectionPool::instance().get();
+            ok = conn->ping();
+        }
+        return ok;
     }, "连接池健康检查");
 
     // ---- 查询 / 写操作 ----
     m.def("query",
           [](const std::string& sql, py::list params) {
-              auto conn = DbSession::current();
-              QueryResult result = conn->query(sql, to_params(params));
+              // 参数转换需持有 GIL（需读 py::list）
+              Params p = to_params(params);
+              QueryResult result;
+              {
+                  // C9：让出 GIL，使多个请求在 MySQL 网络等待期间真正并行
+                  GilIoGuard gil_guard;
+                  auto conn = DbSession::current();
+                  result = conn->query(sql, p);
+              }
+              // 恢复持 GIL，构造 Python 对象
               py::list out;
               for (const auto& row : result) {
                   py::dict d;
@@ -117,8 +163,14 @@ PYBIND11_MODULE(jt_db, m) {
 
     m.def("execute",
           [](const std::string& sql, py::list params) {
-              auto conn = DbSession::current();
-              auto [affected, last_id] = conn->execute(sql, to_params(params));
+              Params p = to_params(params);
+              long long affected = 0;
+              long long last_id = 0;
+              {
+                  GilIoGuard gil_guard;  // C9：写操作同样让出 GIL
+                  auto conn = DbSession::current();
+                  std::tie(affected, last_id) = conn->execute(sql, p);
+              }
               return py::make_tuple(affected, last_id);
           },
           py::arg("sql"), py::arg("params") = py::list(),
@@ -131,16 +183,24 @@ PYBIND11_MODULE(jt_db, m) {
         return tx;
     }, "开启事务，返回 Transaction（支持 with 语句；块内 execute/query 走同一连接）");
 
-    auto release_txn = []() { DbSession::clear_txn(); };
+    // 审计 CON-02：解绑必须发生在事务所属线程。
+    // DbSession::clear_txn() 清的是**当前线程**的 thread_local，而 Transaction.__del__
+    // 可能在任意线程的 GC 中触发 —— 不加判断时会误清无关线程自身合法的事务绑定，
+    // 使那个线程后续 SQL 静默脱离事务（写入 autocommit）。
+    auto release_txn = [](const std::shared_ptr<Transaction>& tx) {
+        if (tx && tx->owned_by_current_thread()) {
+            DbSession::clear_txn();
+        }
+    };
 
     py::class_<Transaction, std::shared_ptr<Transaction>>(m, "Transaction")
         .def("commit", [release_txn](std::shared_ptr<Transaction>& self) {
             self->commit();
-            release_txn();
+            release_txn(self);
         }, "提交事务")
         .def("rollback", [release_txn](std::shared_ptr<Transaction>& self) {
             self->rollback();
-            release_txn();
+            release_txn(self);
         }, "回滚事务")
         .def("__enter__", [](std::shared_ptr<Transaction>& self) { return self; })
         .def("__exit__",
@@ -152,13 +212,13 @@ PYBIND11_MODULE(jt_db, m) {
                  } else {
                      self->rollback();  // 异常退出 → 回滚
                  }
-                 release_txn();
+                 release_txn(self);
                  return false;  // 不抑制异常
              },
              py::arg("exc_type"), py::arg("exc_value"), py::arg("traceback"))
         .def("__del__", [release_txn](std::shared_ptr<Transaction>& self) {
-            // 兜底：对象销毁时解除线程绑定（连接归还连接池）
-            release_txn();
+            // 兜底：对象销毁时解除线程绑定（仅限创建线程，见 release_txn 注释）
+            release_txn(self);
         }, "兜底释放（GC 时）");
 
     // ---- DAO（按业务域聚合查询；其余 DAO 待表结构确定后补充绑定）----
@@ -263,4 +323,24 @@ PYBIND11_MODULE(jt_db, m) {
         .def("create_order", &LifeDAO::create_order, py::arg("user_id"),
              py::arg("merchant_id"), py::arg("items_json"), py::arg("amount"),
              "下单，返回订单 id（失败 -1）");
+
+    // ---- 通用收藏（C10 收敛：原由 favorite.py 拼原生 SQL）----
+    py::class_<FavoriteDAO>(m, "FavoriteDAO")
+        .def(py::init<>())
+        .def("is_favorited", &FavoriteDAO::is_favorited, py::arg("user_id"),
+             py::arg("target_type"), py::arg("target_id"), "是否已收藏")
+        .def("toggle", &FavoriteDAO::toggle, py::arg("user_id"),
+             py::arg("target_type"), py::arg("target_id"),
+             "幂等切换收藏：返回 True=已收藏 / False=已取消")
+        .def("target_exists", &FavoriteDAO::target_exists,
+             py::arg("target_type"), py::arg("target_id"),
+             "收藏对象是否存在且可见（topic/item）")
+        .def("page_topics", &FavoriteDAO::page_topics, py::arg("user_id"),
+             py::arg("limit"), py::arg("offset"), "我的收藏·帖子（分页）")
+        .def("count_topics", &FavoriteDAO::count_topics, py::arg("user_id"),
+             "我的收藏·帖子总数")
+        .def("page_items", &FavoriteDAO::page_items, py::arg("user_id"),
+             py::arg("limit"), py::arg("offset"), "我的收藏·物品（分页）")
+        .def("count_items", &FavoriteDAO::count_items, py::arg("user_id"),
+             "我的收藏·物品总数");
 }

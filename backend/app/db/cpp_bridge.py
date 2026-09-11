@@ -127,6 +127,12 @@ def life_dao():
     return jt_db.LifeDAO()
 
 
+def favorite_dao():
+    """获取 C++ FavoriteDAO 实例（通用收藏，C10 收敛）。"""
+    _require_pool()
+    return jt_db.FavoriteDAO()
+
+
 def _require_pool() -> None:
     if jt_db is None:
         raise RuntimeError("jt_db C++ 扩展未编译")

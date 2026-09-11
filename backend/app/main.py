@@ -6,11 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.ratelimit import RateLimitMiddleware, default_rules
 from app.core.response import BizError
+from app.core.static_safety import SafeStaticFiles
 from app.routers import (
     admin,
     agent,
@@ -55,7 +56,15 @@ async def lifespan(app: FastAPI):
         logging.getLogger("uvicorn").warning(
             "⚠️  jt_db C++ 扩展未编译，数据库能力不可用。请构建 db/cpp_driver。"
         )
-    yield
+
+    # 浏览量聚合任务（审计 CAC-03）：读路径只自增内存，后台周期性批量落库
+    from app.core.view_counter import view_counter
+
+    view_counter.start()
+    try:
+        yield
+    finally:
+        await view_counter.stop()
 
 
 app = FastAPI(
@@ -65,12 +74,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 审计 SEC-13：原配置 allow_origins=["*"] 叠加 allow_credentials=True，
+# Starlette 会把 * 回显为请求方 Origin，等价于对全网站点开放跨域并携带凭据。
+# 本项目鉴权走 Authorization: Bearer，不依赖 Cookie，故 allow_credentials 固定为 False，
+# 允许来源改为可配置（生产环境在 config.py 中禁止使用 *）。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境收紧
-    allow_credentials=True,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# 审计 SEC-10：接口限流。后注册的中间件在 Starlette 中位于外层，会先执行，
+# 因此限流应在 CORS 之后添加，保证被拦截的请求不进入业务逻辑。
+app.add_middleware(
+    RateLimitMiddleware,
+    rules=default_rules(settings.rate_limit_login_per_minute),
+    global_limit=settings.rate_limit_per_minute,
+    enabled=settings.rate_limit_enabled,
 )
 
 
@@ -93,5 +115,11 @@ for r in (
     app.include_router(r, prefix=_api)
 
 # 静态资源（上传图片）
+# 审计 SEC-11：使用 SafeStaticFiles 附加 nosniff / CSP sandbox 等响应头，
+# 避免伪装类型的上传文件被浏览器当作 HTML/SVG 执行。
 _static_dir = Path(__file__).resolve().parent.parent / "uploads"
-app.mount("/static/uploads", StaticFiles(directory=_static_dir, check_dir=False), name="uploads")
+app.mount(
+    "/static/uploads",
+    SafeStaticFiles(directory=_static_dir, check_dir=False),
+    name="uploads",
+)
