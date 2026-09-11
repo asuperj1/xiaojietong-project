@@ -1,21 +1,52 @@
-/* 占位页通用样式 */
-.placeholder {
+/* 生活服务（F9-D） */
+.tabs {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 200rpx;
+  padding: 16rpx 24rpx;
 }
-.icon {
-  font-size: 96rpx;
-}
-.title {
-  margin-top: 24rpx;
-  font-size: 36rpx;
-  color: #333333;
-  font-weight: 600;
-}
-.tip {
-  margin-top: 12rpx;
+.tab {
   font-size: 26rpx;
-  color: #bbbbbb;
+  color: #666666;
+  padding: 8rpx 24rpx;
+  margin-right: 8rpx;
+  border-radius: 28rpx;
+  background: #ffffff;
+}
+.tab-active {
+  background: #4A90D9;
+  color: #ffffff;
+}
+.m-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.m-name {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.m-category {
+  font-size: 22rpx;
+  color: #4A90D9;
+  background: #eef5fc;
+  padding: 2rpx 14rpx;
+  border-radius: 8rpx;
+}
+.m-sub {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: #999999;
+}
+.m-meta {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: #666666;
+  display: flex;
+}
+.m-meta text {
+  margin-right: 24rpx;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
 }

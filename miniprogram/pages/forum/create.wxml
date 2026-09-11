@@ -1,0 +1,16 @@
+<!-- 发帖（F7） -->
+<view class="xj-page">
+  <view class="xj-card">
+    <input class="title-input" placeholder="标题" value="{{title}}" bindinput="onTitle" maxlength="60" />
+    <textarea class="content-input" placeholder="正文内容" value="{{content}}" bindinput="onContent" maxlength="2000"></textarea>
+    <view class="cat-row">
+      <text class="cat-label">分类</text>
+      <picker range="{{categories}}" value="{{catIndex}}" bindchange="onCatChange">
+        <view class="cat-value">{{categories[catIndex]}}</view>
+      </picker>
+    </view>
+  </view>
+  <view class="foot">
+    <button class="xj-btn-primary submit-btn" disabled="{{submitting}}" bindtap="onSubmit">发布</button>
+  </view>
+</view>

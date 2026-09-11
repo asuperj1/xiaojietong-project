@@ -1,4 +1,5 @@
 {
   "usingComponents": {},
-  "navigationBarTitleText": "二手集市"
+  "navigationBarTitleText": "二手集市",
+  "enablePullDownRefresh": true
 }

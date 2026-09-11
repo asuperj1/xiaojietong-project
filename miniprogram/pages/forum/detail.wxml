@@ -1,0 +1,49 @@
+<!-- 帖子详情（F7） -->
+<view class="xj-page detail-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card">
+      <view class="detail-title">{{topic.title}}</view>
+      <view class="detail-meta">
+        <text>{{topic.author_name}}</text>
+        <text wx:if="{{topic.category}}"> · {{topic.category}}</text>
+        <text> · {{topic.time}}</text>
+      </view>
+      <view class="detail-content">{{topic.content}}</view>
+      <view class="detail-actions">
+        <view class="act" bindtap="onLike">
+          <text>{{topic.liked ? '❤️ 已赞' : '🤍 点赞'}}</text>
+          <text class="act-num">{{topic.like_count || 0}}</text>
+        </view>
+        <view class="act" bindtap="onFavorite">
+          <text>{{topic.favorited ? '⭐ 已收藏' : '☆ 收藏'}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="xj-card">
+      <view class="cmt-title">评论（{{comments.length}}）</view>
+      <view wx:if="{{comments.length === 0}}" class="cmt-empty">暂无评论</view>
+      <view class="cmt-item" wx:for="{{comments}}" wx:key="id">
+        <view class="cmt-head">
+          <text class="cmt-author">{{item.authorName}}</text>
+          <text class="cmt-time">{{item.time}}</text>
+        </view>
+        <view class="cmt-content">{{item.content}}</view>
+      </view>
+    </view>
+  </block>
+
+  <view class="input-bar">
+    <input class="input" value="{{commentInput}}" placeholder="写下你的评论" confirm-type="send" bindinput="onCommentInput" bindconfirm="onSendComment" />
+    <button class="xj-btn-primary send-btn" size="mini" disabled="{{sending || !commentInput}}" bindtap="onSendComment">发送</button>
+  </view>
+</view>

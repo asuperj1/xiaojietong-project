@@ -1,6 +1,39 @@
-<!-- 兼职实习（占位页） -->
-<view class="placeholder">
-  <view class="icon">💼</view>
-  <view class="title">兼职实习</view>
-  <view class="tip">功能开发中，敬请期待</view>
+<!-- 兼职实习（F9-B） -->
+<view class="xj-page">
+  <view class="topbar">
+    <input class="search" placeholder="搜索岗位/企业" value="{{q}}" bindinput="onSearchInput" confirm-type="search" bindconfirm="onSearch" />
+  </view>
+  <view class="tabs">
+    <view class="tab {{typeIndex === index ? 'tab-active' : ''}}" wx:for="{{types}}" wx:key="*this" data-index="{{index}}" bindtap="onTypeChange">{{item}}</view>
+  </view>
+
+  <view wx:if="{{loading && items.length === 0}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error && items.length === 0}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="refresh">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{items.length === 0}}">
+    <view class="xj-empty"><text class="xj-empty-icon">💼</text>暂无岗位，敬请期待</view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{items}}" wx:key="id" data-id="{{item.id}}" bindtap="onItemTap">
+      <view class="job-top">
+        <text class="job-title">{{item.title}}</text>
+        <text class="job-salary">{{item.salary}}{{item.pay_unit}}</text>
+      </view>
+      <view class="job-company">{{item.company_name}}<text wx:if="{{item.location}}"> · {{item.location}}</text></view>
+      <view class="job-desc">{{item.description}}</view>
+      <view class="job-meta">
+        <text wx:if="{{item.job_type}}" class="xj-tag tag-type">{{item.job_type}}</text>
+        <text class="meta-time">{{item.time}}</text>
+      </view>
+    </view>
+    <view wx:if="{{loading}}" class="xj-loading">加载更多…</view>
+    <view wx:elif="{{finished}}" class="list-end">— 没有更多了 —</view>
+  </block>
 </view>

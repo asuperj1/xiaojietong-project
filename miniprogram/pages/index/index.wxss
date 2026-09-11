@@ -99,3 +99,41 @@
   font-size: 24rpx;
   color: #333333;
 }
+
+/* 热门帖子 */
+.hot-card {
+  background: #ffffff;
+  border-radius: 24rpx;
+  padding: 24rpx;
+  margin-top: 24rpx;
+  box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.04);
+}
+.hot-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 12rpx;
+}
+.hot-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #f5f5f5;
+}
+.hot-item:last-child {
+  border-bottom: none;
+}
+.hot-text {
+  flex: 1;
+  font-size: 28rpx;
+  color: #333333;
+  margin-right: 16rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hot-meta {
+  font-size: 22rpx;
+  color: #999999;
+}

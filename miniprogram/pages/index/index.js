@@ -21,11 +21,37 @@ Page({
       { id: 10, name: '任务中心', icon: '/static/icons/task.png', url: '/pages/agent/index', tab: false },
     ],
     quickCommands: ['查空教室', '查校历', '预约图书馆'],
+    hotTopics: [], // 首页热门帖子（F3 收尾：GET /topics/hot）
   },
 
   onLoad() {
     // 页面初始化完成后检查登录态（保留 F2 登录逻辑，不破坏）
     app.checkLogin()
+  },
+
+  onShow() {
+    // 每次回到首页刷新热门帖子
+    this.fetchHot()
+  },
+
+  fetchHot() {
+    request('/topics/hot', { data: { limit: 5 } })
+      .then((res) => {
+        const hotTopics = ((res && res.items) || []).map((t) => ({
+          id: t.id,
+          title: t.title,
+          likeCount: t.like_count || 0,
+          commentCount: t.comment_count || 0,
+        }))
+        this.setData({ hotTopics })
+      })
+      .catch(() => {
+        // 首页装饰性内容失败静默，不影响主功能
+      })
+  },
+
+  onHotTap(e) {
+    wx.navigateTo({ url: '/pages/forum/detail?id=' + e.currentTarget.dataset.id })
   },
 
   // 搜索框输入

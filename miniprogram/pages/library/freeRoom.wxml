@@ -1,6 +1,44 @@
-<!-- 查空教室（占位页） -->
-<view class="placeholder">
-  <view class="icon">🏫</view>
-  <view class="title">查空教室</view>
-  <view class="tip">功能开发中，敬请期待</view>
+<!-- 查空教室（F5） -->
+<view class="xj-page">
+  <view class="xj-card filter">
+    <view class="filter-row">
+      <input class="filter-input" placeholder="校区，可留空（如 前卫南区）" value="{{campus}}" bindinput="onCampus" />
+    </view>
+    <view class="filter-row">
+      <input class="filter-input" placeholder="楼层，可留空（如 2）" value="{{floor}}" bindinput="onFloor" />
+    </view>
+    <view class="filter-row">
+      <text class="filter-label">节次</text>
+      <picker class="filter-picker" range="{{periods}}" value="{{periodIndex}}" bindchange="onPeriod">
+        <view class="picker-value">{{periods[periodIndex]}}</view>
+      </picker>
+    </view>
+    <button class="xj-btn-primary" bindtap="onSearch">查询</button>
+  </view>
+
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{items.length === 0}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">🏫</text>暂无空教室
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{items}}" wx:key="id">
+      <view class="room-name">{{item.room_name}}</view>
+      <view class="room-sub">{{item.building_name}} · {{item.floor}} 楼</view>
+      <view class="room-tags">
+        <text class="xj-tag tag-blue">可容纳 {{item.capacity}} 人</text>
+        <text class="xj-tag {{item.has_power ? 'tag-green' : 'tag-gray'}}">{{item.has_power ? '有插座' : '无插座'}}</text>
+      </view>
+    </view>
+  </block>
 </view>

@@ -1,4 +1,5 @@
 {
   "usingComponents": {},
-  "navigationBarTitleText": "兼职实习"
+  "navigationBarTitleText": "兼职实习",
+  "enablePullDownRefresh": true
 }

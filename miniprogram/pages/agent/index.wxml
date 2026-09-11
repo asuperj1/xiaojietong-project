@@ -1,6 +1,72 @@
-<!-- 任务中心（占位页） -->
-<view class="placeholder">
-  <view class="icon">🎯</view>
-  <view class="title">任务中心</view>
-  <view class="tip">功能开发中，敬请期待</view>
+<!-- 任务中心（F9-E） -->
+<view class="xj-page">
+  <view class="seg">
+    <view class="seg-item {{tab === 'task' ? 'seg-active' : ''}}" data-tab="task" bindtap="onTab">任务</view>
+    <view class="seg-item {{tab === 'reminder' ? 'seg-active' : ''}}" data-tab="reminder" bindtap="onTab">提醒</view>
+  </view>
+
+  <!-- 任务 -->
+  <block wx:if="{{tab === 'task'}}">
+    <view class="xj-card">
+      <input class="task-input" placeholder="一句话交代任务，如：明天下午3点预约图书馆二楼靠窗座位" value="{{instruction}}" bindinput="onInstruction" confirm-type="done" />
+      <button class="xj-btn-primary task-btn" disabled="{{submitting}}" bindtap="onCreateTask">一句话搞定</button>
+    </view>
+
+    <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+    <block wx:elif="{{error}}">
+      <view class="xj-empty">
+        <text class="xj-empty-icon">⚠️</text>{{error}}
+        <view><button class="xj-btn-plain retry" bindtap="fetchTasks">重试</button></view>
+      </view>
+    </block>
+
+    <block wx:elif="{{tasks.length === 0}}">
+      <view class="xj-empty"><text class="xj-empty-icon">🎯</text>暂无任务</view>
+    </block>
+
+    <block wx:else>
+      <view class="xj-card" wx:for="{{tasks}}" wx:key="id" data-id="{{item.id}}" bindtap="onTaskTap">
+        <view class="t-top">
+          <text class="t-title">{{item.title}}</text>
+          <text class="xj-tag t-status">{{item.statusText}}</text>
+        </view>
+        <view class="t-time">{{item.time}}</view>
+        <button wx:if="{{item.cancelable}}" class="xj-btn-plain t-cancel" data-id="{{item.id}}" catchtap="onCancelTask">取消</button>
+      </view>
+    </block>
+  </block>
+
+  <!-- 提醒 -->
+  <block wx:else>
+    <view class="xj-card">
+      <input class="task-input" placeholder="提醒内容" value="{{reminderContent}}" bindinput="onReminderContent" />
+      <input class="task-input" placeholder="提醒时间，如 2026-09-12 09:00" value="{{reminderAt}}" bindinput="onReminderAt" />
+      <button class="xj-btn-primary task-btn" disabled="{{submitting}}" bindtap="onAddReminder">添加提醒</button>
+    </view>
+
+    <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+    <block wx:elif="{{error}}">
+      <view class="xj-empty">
+        <text class="xj-empty-icon">⚠️</text>{{error}}
+        <view><button class="xj-btn-plain retry" bindtap="fetchReminders">重试</button></view>
+      </view>
+    </block>
+
+    <block wx:elif="{{reminders.length === 0}}">
+      <view class="xj-empty"><text class="xj-empty-icon">⏰</text>暂无提醒</view>
+    </block>
+
+    <block wx:else>
+      <view class="xj-card" wx:for="{{reminders}}" wx:key="id">
+        <view class="r-top">
+          <text class="r-content">{{item.content}}</text>
+          <text class="xj-tag {{item.done ? 't-done' : 't-status'}}">{{item.done ? '已完成' : '待完成'}}</text>
+        </view>
+        <view class="r-time" wx:if="{{item.time}}">{{item.time}}</view>
+        <button wx:if="{{!item.done}}" class="xj-btn-plain t-cancel" data-id="{{item.id}}" bindtap="onDoneReminder">标记完成</button>
+      </view>
+    </block>
+  </block>
 </view>

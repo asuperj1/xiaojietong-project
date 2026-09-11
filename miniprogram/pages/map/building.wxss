@@ -1,0 +1,42 @@
+/* 建筑详情（F9-C） */
+.name {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #333333;
+}
+.info {
+  margin-top: 10rpx;
+  font-size: 26rpx;
+  color: #666666;
+}
+.sec-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.empty-rooms {
+  margin-top: 16rpx;
+  color: #cccccc;
+  font-size: 26rpx;
+}
+.room-item {
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid #f5f5f5;
+}
+.room-item:last-child {
+  border-bottom: none;
+}
+.room-name {
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #333333;
+}
+.room-sub {
+  margin-top: 6rpx;
+  font-size: 24rpx;
+  color: #999999;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

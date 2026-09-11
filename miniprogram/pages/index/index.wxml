@@ -49,4 +49,13 @@
       <view class="grid-name">{{item.name}}</view>
     </view>
   </view>
+
+  <!-- 热门帖子 -->
+  <view class="hot-card" wx:if="{{hotTopics.length}}">
+    <view class="hot-title">🔥 热门帖子</view>
+    <view class="hot-item" wx:for="{{hotTopics}}" wx:key="id" data-id="{{item.id}}" bindtap="onHotTap">
+      <text class="hot-text">{{item.title}}</text>
+      <text class="hot-meta">👍{{item.likeCount}} · 💬{{item.commentCount}}</text>
+    </view>
+  </view>
 </view>

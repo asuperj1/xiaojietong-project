@@ -1,21 +1,46 @@
-/* 占位页通用样式 */
-.placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 200rpx;
+/* 图书馆座位预约（F6）入口 */
+.head {
+  margin: 0 24rpx 20rpx;
 }
-.icon {
-  font-size: 96rpx;
-}
-.title {
-  margin-top: 24rpx;
-  font-size: 36rpx;
+.head-title {
+  font-size: 40rpx;
+  font-weight: 700;
   color: #333333;
-  font-weight: 600;
 }
-.tip {
-  margin-top: 12rpx;
+.head-sub {
+  margin-top: 8rpx;
   font-size: 26rpx;
-  color: #bbbbbb;
+  color: #999999;
+}
+.head-actions {
+  margin-top: 16rpx;
+}
+.head-btn {
+  width: 200rpx;
+}
+.room-name {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.room-sub {
+  margin-top: 8rpx;
+  font-size: 26rpx;
+  color: #999999;
+}
+.room-tags {
+  margin-top: 16rpx;
+}
+.tag-blue {
+  background: #eef5fc;
+  color: #4A90D9;
+  margin-right: 12rpx;
+}
+.tag-gray {
+  background: #f2f2f2;
+  color: #999999;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
 }

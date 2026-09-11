@@ -1,21 +1,136 @@
-/* 占位页通用样式 */
-.placeholder {
+/* 二手集市（F9-A） */
+.topbar {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding-top: 200rpx;
+  padding: 16rpx 24rpx;
 }
-.icon {
-  font-size: 96rpx;
+.search {
+  flex: 1;
 }
-.title {
-  margin-top: 24rpx;
-  font-size: 36rpx;
-  color: #333333;
+.search-input {
+  height: 68rpx;
+  background: #ffffff;
+  border-radius: 34rpx;
+  padding: 0 28rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+.top-actions {
+  display: flex;
+  margin-left: 16rpx;
+}
+.top-link {
+  margin-left: 24rpx;
+  font-size: 26rpx;
+  color: #4A90D9;
+}
+.tabs {
+  display: flex;
+  padding: 0 24rpx 16rpx;
+}
+.tab {
+  font-size: 26rpx;
+  color: #666666;
+  padding: 8rpx 24rpx;
+  margin-right: 8rpx;
+  border-radius: 28rpx;
+  background: #ffffff;
+}
+.tab-active {
+  background: #4A90D9;
+  color: #ffffff;
+}
+.item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.item-title {
+  flex: 1;
+  font-size: 32rpx;
   font-weight: 600;
+  color: #333333;
 }
-.tip {
+.item-price {
+  font-size: 32rpx;
+  color: #e5484d;
+  font-weight: 700;
+}
+.item-desc {
   margin-top: 12rpx;
   font-size: 26rpx;
-  color: #bbbbbb;
+  color: #666666;
+  line-height: 1.5;
+}
+.item-meta {
+  margin-top: 16rpx;
+  display: flex;
+  align-items: center;
+  font-size: 22rpx;
+  color: #999999;
+}
+.tag-cat {
+  background: #eef5fc;
+  color: #4A90D9;
+  margin-right: 16rpx;
+}
+.meta-right {
+  margin-left: auto;
+}
+.fab {
+  position: fixed;
+  right: 32rpx;
+  bottom: 80rpx;
+  background: #4A90D9;
+  color: #ffffff;
+  padding: 20rpx 32rpx;
+  border-radius: 48rpx;
+  font-size: 28rpx;
+  box-shadow: 0 6rpx 16rpx rgba(74, 144, 217, 0.4);
+}
+.list-end {
+  text-align: center;
+  color: #cccccc;
+  font-size: 24rpx;
+  padding: 20rpx 0;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}
+
+.mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 20;
+}
+.wish-panel {
+  position: fixed;
+  left: 40rpx;
+  right: 40rpx;
+  bottom: 120rpx;
+  background: #ffffff;
+  border-radius: 24rpx;
+  padding: 32rpx;
+  z-index: 21;
+}
+.wish-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 20rpx;
+}
+.wish-input {
+  height: 80rpx;
+  background: #f5f5f5;
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  margin-bottom: 16rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+.wish-btn {
+  width: 100%;
+  margin-top: 8rpx;
 }

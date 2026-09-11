@@ -1,0 +1,30 @@
+/* 我的兼职申请（F9-B） */
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.title {
+  flex: 1;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.status-tag {
+  background: #eef5fc;
+  color: #4A90D9;
+}
+.meta {
+  margin-top: 10rpx;
+  font-size: 26rpx;
+  color: #666666;
+}
+.time {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #cccccc;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}
