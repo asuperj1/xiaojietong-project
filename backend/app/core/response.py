@@ -40,6 +40,11 @@ def err_biz(message: str = "业务冲突") -> BizError:
     return BizError(3001, message)
 
 
+def err_audit(message: str = "内容未通过审核") -> BizError:
+    """内容审核拒绝（B6，错误码 3003）。"""
+    return BizError(3003, message)
+
+
 def err_server(message: str = "服务端错误") -> BizError:
     return BizError(5001, message, http_status=500)
 

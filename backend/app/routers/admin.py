@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.deps import get_current_admin
 from app.core.response import err_param, ok, paged
@@ -71,8 +71,38 @@ def pending_audit(
     return ok({"items": rows})
 
 
+class AuditBatchIn(BaseModel):
+    """批量审核入参（topic_ids + 通过与否）。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    topic_ids: list[int]
+    pass_flag: bool = Field(default=True, alias="pass")
+    summary: str = ""
+
+
+@router.post("/forum/audit/batch")
+def audit_batch(body: AuditBatchIn, _admin: dict = Depends(get_current_admin)):
+    """批量审核（B6）：一次通过/拒绝多个帖子；summary 非空时统一写入。"""
+    if not body.topic_ids:
+        raise err_param("topic_ids 不能为空")
+    status = 1 if body.pass_flag else 2
+    with cpp_bridge.begin():
+        for tid in body.topic_ids:
+            cpp_bridge.execute(
+                "UPDATE topic SET audit_status = ?, "
+                "ai_summary = IF(? = '', ai_summary, ?) WHERE id = ?",
+                [status, body.summary, body.summary, tid],
+            )
+    return ok({"processed": len(body.topic_ids), "audit_status": status})
+
+
 class AuditIn(BaseModel):
-    pass_flag: bool = True
+    """人工审核入参（字段名 pass 与契约一致，内部用 pass_flag 承载）。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    pass_flag: bool = Field(default=True, alias="pass")
     summary: str = ""
 
 

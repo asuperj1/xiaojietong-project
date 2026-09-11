@@ -1,6 +1,8 @@
 """论坛：帖子 / 评论 / 点赞 / 举报 / 热点。
 
 契约：docs/api.md §8
+审核（B6）：发帖 / 评论经 services/audit.py 判定（词库规则 + 模型二次判定）；
+拒绝返回错误码 3003；通过立即可见；可疑内容转人工待审。
 """
 
 from __future__ import annotations
@@ -9,8 +11,9 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.core.deps import get_current_user
-from app.core.response import BizError, err_param, ok, paged
+from app.core.response import BizError, err_audit, err_param, ok, paged
 from app.db import cpp_bridge
+from app.services.audit import audit_content, status_of
 
 router = APIRouter(prefix="/topics", tags=["forum"])
 
@@ -33,14 +36,30 @@ class CreateTopicIn(BaseModel):
 
 
 @router.post("")
-def create_topic(body: CreateTopicIn, user: dict = Depends(get_current_user)):
+async def create_topic(body: CreateTopicIn, user: dict = Depends(get_current_user)):
     if not body.title.strip():
         raise err_param("标题不能为空")
+    # B6 内容审核：规则 + 模型二次判定（模型不可用自动降级规则，不阻塞发帖）
+    verdict = await audit_content(f"{body.title}\n{body.content}")
     topic_id = cpp_bridge.forum_dao().create_topic(
         int(user["id"]), body.title, body.content, body.category
     )
-    # 入 AI 审核队列（实际审核由 AI 内容治理模块消费）
-    return ok({"topic_id": topic_id})
+    audit_status = status_of(verdict["level"])
+    cpp_bridge.execute(
+        "UPDATE topic SET audit_status = ?, ai_summary = ? WHERE id = ?",
+        [audit_status, verdict["summary"], topic_id],
+    )
+    if verdict["level"] == "block":
+        # 拒绝：入库标记 audit_status=2（发布者可在"我的帖子"看到），返回 3003
+        raise err_audit(verdict["reason"] or "内容未通过审核")
+    return ok(
+        {
+            "topic_id": topic_id,
+            "audit_status": audit_status,
+            "ai_summary": verdict["summary"],
+            "source": verdict["source"],
+        }
+    )
 
 
 @router.get("/hot")
@@ -87,7 +106,6 @@ def my_topics(
 
 @router.get("/{topic_id}")
 def topic_detail(topic_id: int, user: dict = Depends(get_current_user)):
-    dao = cpp_bridge.forum_dao()
     rows = cpp_bridge.query(
         "SELECT t.*, u.nickname AS author_name FROM topic t "
         "JOIN user u ON t.author_id = u.id "
@@ -119,16 +137,40 @@ def topic_detail(topic_id: int, user: dict = Depends(get_current_user)):
     return ok(topic)
 
 
+@router.get("/{topic_id}/audit-status")
+def topic_audit_status(topic_id: int, user: dict = Depends(get_current_user)):
+    """审核状态轮询（B6）：供前端发帖后确认是否可见。"""
+    rows = cpp_bridge.query(
+        "SELECT id, audit_status, ai_summary FROM topic WHERE id = ? AND is_deleted = 0",
+        [topic_id],
+    )
+    if not rows:
+        raise BizError(1001, "帖子不存在")
+    row = rows[0]
+    status = int(row["audit_status"])
+    return ok(
+        {
+            "topic_id": topic_id,
+            "audit_status": status,
+            "ai_summary": row["ai_summary"],
+            "passed": status == 1,
+        }
+    )
+
+
 class CommentIn(BaseModel):
     content: str
 
 
 @router.post("/{topic_id}/comments")
-def add_comment(topic_id: int, body: CommentIn, user: dict = Depends(get_current_user)):
+async def add_comment(topic_id: int, body: CommentIn, user: dict = Depends(get_current_user)):
     if not body.content.strip():
         raise err_param("评论不能为空")
+    verdict = await audit_content(body.content)
+    if verdict["level"] == "block":
+        raise err_audit(verdict["reason"] or "评论未通过审核")
     comment_id = cpp_bridge.forum_dao().add_comment(topic_id, int(user["id"]), body.content)
-    return ok({"comment_id": comment_id})
+    return ok({"comment_id": comment_id, "audit_status": status_of(verdict["level"])})
 
 
 @router.post("/{topic_id}/like")
