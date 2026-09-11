@@ -155,18 +155,52 @@ def match_wish(
 
 class OrderIn(BaseModel):
     item_id: int
-    seller_id: int
-    amount: float = 0
+    # ⚠️ 契约变更（审计 SEC-05）：seller_id / amount 不再由客户端提供。
+    #    原实现直接信任客户端传入的 seller_id 与 amount，可伪造卖家（嫁祸）与 0 元订单；
+    #    现改为服务端从 secondhand_item 反查真实卖家与价格。
+    remark: str = ""
 
 
 @router.post("/orders")
 def create_order(body: OrderIn, user: dict = Depends(get_current_user)):
+    """下单购买二手物品。
+
+    审计修复：
+      · SEC-05：任意登录用户曾可通过 `UPDATE ... WHERE id = ?`（无 user_id 条件）
+        把他人商品置为「已售」；现改为服务端反查归属 + 原子条件更新。
+      · TXN-02：原实现「先 INSERT 订单、再无条件 UPDATE」，并发下可重复成交（超卖）；
+        现改为「先原子占位（WHERE status = 0）→ 判 affected → 再落订单」。
+    """
+    buyer_id = int(user["id"])
     with cpp_bridge.begin():
+        # 1) 反查商品真实信息（存在 / 未删除 / 在售 / 归属）
+        rows = cpp_bridge.query(
+            "SELECT id, user_id, price, status FROM secondhand_item "
+            "WHERE id = ? AND is_deleted = 0",
+            [body.item_id],
+        )
+        if not rows:
+            raise BizError(1001, "商品不存在")
+        item = rows[0]
+        if int(item["status"]) != 0:
+            raise BizError(3001, "商品已售出或已下架")
+        seller_id = int(item["user_id"])
+        if seller_id == buyer_id:
+            raise BizError(3001, "不能购买自己发布的物品")
+        amount = float(item["price"] or 0)
+
+        # 2) 原子占位：仅当仍为「在售(0)」时才置为已售(1)，靠 affected 兜底并发
+        affected, _ = cpp_bridge.execute(
+            "UPDATE secondhand_item SET status = 1 WHERE id = ? AND status = 0",
+            [body.item_id],
+        )
+        if affected == 0:
+            raise BizError(3001, "商品已被他人抢先下单")
+
+        # 3) 落订单（卖家与金额均取自服务端，客户端无法伪造）
         order_id = cpp_bridge.secondhand_dao().create_order(
-            body.item_id, int(user["id"]), body.seller_id, body.amount
+            body.item_id, buyer_id, seller_id, amount
         )
-        # 物品标记已售
-        cpp_bridge.execute(
-            "UPDATE secondhand_item SET status = 1 WHERE id = ?", [body.item_id]
-        )
-    return ok({"order_id": order_id})
+        if order_id <= 0:
+            raise err_server("创建订单失败")
+    return ok({"order_id": order_id, "amount": amount})

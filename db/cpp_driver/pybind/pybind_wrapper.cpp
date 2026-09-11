@@ -183,16 +183,24 @@ PYBIND11_MODULE(jt_db, m) {
         return tx;
     }, "开启事务，返回 Transaction（支持 with 语句；块内 execute/query 走同一连接）");
 
-    auto release_txn = []() { DbSession::clear_txn(); };
+    // 审计 CON-02：解绑必须发生在事务所属线程。
+    // DbSession::clear_txn() 清的是**当前线程**的 thread_local，而 Transaction.__del__
+    // 可能在任意线程的 GC 中触发 —— 不加判断时会误清无关线程自身合法的事务绑定，
+    // 使那个线程后续 SQL 静默脱离事务（写入 autocommit）。
+    auto release_txn = [](const std::shared_ptr<Transaction>& tx) {
+        if (tx && tx->owned_by_current_thread()) {
+            DbSession::clear_txn();
+        }
+    };
 
     py::class_<Transaction, std::shared_ptr<Transaction>>(m, "Transaction")
         .def("commit", [release_txn](std::shared_ptr<Transaction>& self) {
             self->commit();
-            release_txn();
+            release_txn(self);
         }, "提交事务")
         .def("rollback", [release_txn](std::shared_ptr<Transaction>& self) {
             self->rollback();
-            release_txn();
+            release_txn(self);
         }, "回滚事务")
         .def("__enter__", [](std::shared_ptr<Transaction>& self) { return self; })
         .def("__exit__",
@@ -204,13 +212,13 @@ PYBIND11_MODULE(jt_db, m) {
                  } else {
                      self->rollback();  // 异常退出 → 回滚
                  }
-                 release_txn();
+                 release_txn(self);
                  return false;  // 不抑制异常
              },
              py::arg("exc_type"), py::arg("exc_value"), py::arg("traceback"))
         .def("__del__", [release_txn](std::shared_ptr<Transaction>& self) {
-            // 兜底：对象销毁时解除线程绑定（连接归还连接池）
-            release_txn();
+            // 兜底：对象销毁时解除线程绑定（仅限创建线程，见 release_txn 注释）
+            release_txn(self);
         }, "兜底释放（GC 时）");
 
     // ---- DAO（按业务域聚合查询；其余 DAO 待表结构确定后补充绑定）----
