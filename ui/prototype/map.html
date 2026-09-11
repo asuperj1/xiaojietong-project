@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>校捷通 - 校园地图</title>
+<script src="https://modao.cc/agent-py/static/source/js/tailwindcss.js"></script>
+<script src="https://modao.cc/agent-py/static/source/js/iconify-icon.min.js"></script>
+<style>
+    body {
+        background-color: #f3f4f6;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    .phone-container {
+        width: 375px;
+        height: 812px;
+        background-color: white;
+        border-radius: 40px;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        border: 8px solid #111827;
+    }
+    .scrollable-content {
+        flex: 1;
+        overflow-y: auto;
+        padding-bottom: 80px;
+    }
+    .scrollable-content::-webkit-scrollbar {
+        display: none;
+    }
+</style>
+</head>
+<body>
+<div class="phone-container">
+<!-- 顶部状态栏 -->
+<div class="flex justify-between items-center px-8 pt-4 pb-2 text-sm font-semibold select-none">
+<span>9:41</span>
+<div class="flex items-center space-x-1.5">
+<iconify-icon class="text-lg" icon="heroicons:signal-20-solid"></iconify-icon>
+<iconify-icon class="text-lg" icon="heroicons:wifi-20-solid"></iconify-icon>
+<iconify-icon class="text-xl rotate-90" icon="heroicons:battery-50-20-solid"></iconify-icon>
+</div>
+</div>
+<!-- 标题区 -->
+<div class="flex justify-between items-center px-6 py-4">
+<div class="flex items-center space-x-3">
+<a href="services.html"><iconify-icon class="text-2xl text-gray-800" icon="heroicons:arrow-left-20-solid"></iconify-icon></a>
+<h1 class="text-xl font-bold text-gray-900">校园地图</h1>
+</div>
+<span class="text-blue-500 text-sm font-medium">定位</span>
+</div>
+<div class="scrollable-content px-6">
+<!-- 地图区域 -->
+<div class="bg-blue-50 rounded-2xl h-44 flex flex-col items-center justify-center mb-5 relative">
+<div class="relative w-full h-full flex items-center justify-center">
+<div class="w-20 h-20 bg-blue-200 rounded-full flex items-center justify-center absolute" style="top:20px;left:50px;">
+<div class="w-3 h-3 bg-blue-500 rounded-full"></div>
+<span class="text-white text-[10px] font-medium ml-1">图书馆</span>
+</div>
+<div class="w-20 h-20 bg-orange-200 rounded-full flex items-center justify-center absolute" style="top:60px;left:160px;">
+<div class="w-3 h-3 bg-blue-500 rounded-full"></div>
+<span class="text-white text-[10px] font-medium ml-1">经信楼</span>
+</div>
+<div class="w-20 h-20 bg-green-200 rounded-full flex items-center justify-center absolute" style="top:30px;right:50px;">
+<div class="w-3 h-3 bg-orange-500 rounded-full"></div>
+<span class="text-white text-[10px] font-medium ml-1">食堂</span>
+</div>
+</div>
+</div>
+<!-- 定位提示 -->
+<div class="bg-white rounded-xl border border-gray-100 px-4 py-3 mb-5 shadow-sm">
+<p class="text-sm text-gray-700"><span class="font-medium">当前位置：</span>中心校区</p>
+</div>
+<!-- 建筑服务联动 -->
+<h2 class="text-base font-bold text-gray-900 mb-4">建筑服务联动</h2>
+<div class="space-y-3">
+<!-- 图书馆 -->
+<div class="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-3">
+<div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+<iconify-icon class="text-xl text-blue-500" icon="heroicons:book-open-20-solid"></iconify-icon>
+</div>
+<div>
+<p class="text-sm font-semibold text-gray-900">图书馆</p>
+<p class="text-xs text-gray-400">座位预约·馆藏查询</p>
+</div>
+</div>
+<div class="flex items-center space-x-3">
+<span class="text-[10px] text-gray-400">距离430m</span>
+<span class="bg-blue-500 text-white text-xs font-medium px-4 py-1.5 rounded-lg">进入</span>
+</div>
+</div>
+</div>
+<!-- 经信楼 -->
+<div class="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-3">
+<div class="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center">
+<iconify-icon class="text-xl text-orange-500" icon="heroicons:building-library-20-solid"></iconify-icon>
+</div>
+<div>
+<p class="text-sm font-semibold text-gray-900">经信楼</p>
+<p class="text-xs text-gray-400">空教室查询·自习区</p>
+</div>
+</div>
+<div class="flex items-center space-x-3">
+<span class="text-[10px] text-gray-400">距离120m</span>
+<span class="bg-blue-500 text-white text-xs font-medium px-4 py-1.5 rounded-lg">进入</span>
+</div>
+</div>
+</div>
+<!-- 食堂 -->
+<div class="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm">
+<div class="flex items-center justify-between">
+<div class="flex items-center space-x-3">
+<div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+<iconify-icon class="text-xl text-green-500" icon="heroicons:cake-20-solid"></iconify-icon>
+</div>
+<div>
+<p class="text-sm font-semibold text-gray-900">食堂</p>
+<p class="text-xs text-gray-400">菜品查询·拥挤度</p>
+</div>
+</div>
+<div class="flex items-center space-x-3">
+<span class="text-[10px] text-gray-400">距离200m</span>
+<span class="bg-blue-500 text-white text-xs font-medium px-4 py-1.5 rounded-lg">进入</span>
+</div>
+</div>
+</div>
+</div>
+<div class="h-6"></div>
+</div>
+<!-- 底部导航栏 -->
+<div class="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 pt-3 pb-8 flex justify-between items-center">
+<a class="flex flex-col items-center text-gray-400" href="home.html">
+<iconify-icon class="text-2xl" icon="heroicons:home-solid"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">首页</span>
+</a>
+<a class="flex flex-col items-center text-gray-400" href="ai.html">
+<iconify-icon class="text-2xl" icon="heroicons:chat-bubble-left-right"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">AI</span>
+</a>
+<a class="flex flex-col items-center text-blue-500" href="services.html">
+<iconify-icon class="text-2xl" icon="heroicons:squares-2x2"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">服务</span>
+</a>
+<a class="flex flex-col items-center text-gray-400" href="community.html">
+<iconify-icon class="text-2xl" icon="heroicons:user-group"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">社区</span>
+</a>
+<a class="flex flex-col items-center text-gray-400" href="profile.html">
+<iconify-icon class="text-2xl" icon="heroicons:user"></iconify-icon>
+<span class="text-[10px] mt-1 font-medium">我的</span>
+</a>
+</div>
+</div>
+</body>
+</html>
