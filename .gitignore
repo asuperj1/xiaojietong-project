@@ -34,6 +34,8 @@ venv/
 
 # ---- 模型 / 数据（体积大，不入库）----
 ai/edge/*.gguf
+gguf/
+*.gguf
 models/
 backend/data/
 *.log
