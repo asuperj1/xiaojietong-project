@@ -6,12 +6,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from app.core.config import settings
 from app.core.ratelimit import RateLimitMiddleware, default_rules
 from app.core.response import BizError
+from app.core.static_safety import SafeStaticFiles
 from app.routers import (
     admin,
     agent,
@@ -107,5 +107,11 @@ for r in (
     app.include_router(r, prefix=_api)
 
 # 静态资源（上传图片）
+# 审计 SEC-11：使用 SafeStaticFiles 附加 nosniff / CSP sandbox 等响应头，
+# 避免伪装类型的上传文件被浏览器当作 HTML/SVG 执行。
 _static_dir = Path(__file__).resolve().parent.parent / "uploads"
-app.mount("/static/uploads", StaticFiles(directory=_static_dir, check_dir=False), name="uploads")
+app.mount(
+    "/static/uploads",
+    SafeStaticFiles(directory=_static_dir, check_dir=False),
+    name="uploads",
+)
