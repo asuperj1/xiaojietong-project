@@ -1,8 +1,9 @@
 """AI Agent：任务创建/查询/取消、提醒。
 
 契约：docs/api.md §4
-说明：任务编排（意图解析→工具调用）为接入点，当前以关键词规则占位；
-     后续由用户的模型 Function Call 能力接管，入 agent_task 异步执行。
+说明：任务编排走 LLM Function Call（services/agent_executor.py），意图由模型解析为
+      工具调用后真实执行（写提醒/预约/发布）；模型不可用或未识别工具时降级为
+      关键词规则占位，链路不中断。
 """
 
 from __future__ import annotations
@@ -15,10 +16,11 @@ from pydantic import BaseModel
 from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
 from app.db import cpp_bridge
+from app.services import agent_executor
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
-# 意图→任务类型 关键词规则（占位；可替换为模型 Function Call）
+# 意图→任务类型 关键词规则（兜底；主路径为模型 Function Call）
 _INTENT_RULES = {
     "reserve": ("预约", "reserve_seat"),
     "remind": ("提醒", "add_reminder"),
@@ -32,30 +34,69 @@ class TaskIn(BaseModel):
 
 
 @router.post("/tasks")
-def create_task(body: TaskIn, user: dict = Depends(get_current_user)):
+async def create_task(body: TaskIn, user: dict = Depends(get_current_user)):
     instruction = body.instruction.strip()
     if not instruction:
         raise err_param("指令不能为空")
+    uid = int(user["id"])
 
-    # 占位意图识别：匹配关键词确定 task_type
-    task_type, tool = "query", ""
-    for key, (kw, t) in _INTENT_RULES.items():
-        if kw in instruction:
-            task_type, tool = key, t
-            break
-
+    # 1) 落任务（0 待执行，随后立即编排执行；Celery 异步化前保持同步）
     rows = cpp_bridge.execute(
-        "INSERT INTO agent_task (user_id, task_type, title, status) VALUES (?, ?, ?, 0)",
-        [int(user["id"]), task_type, instruction],
+        "INSERT INTO agent_task (user_id, task_type, title, status) VALUES (?, 'plan', ?, 0)",
+        [uid, instruction],
     )
     task_id = rows[1]
-    plan = [{"tool": tool, "desc": f"执行{task_type}任务"}] if tool else []
-    # TODO: 异步执行（Celery）+ 工具调用；当前置为成功占位
+
+    # 2) LLM Function Call 意图解析（None=模型不可用；[]=未识别到工具）
+    calls = await agent_executor.plan_instruction(instruction)
+
+    if calls:
+        # 3a) 主路径：真实执行工具
+        results, all_ok = agent_executor.execute_calls(uid, task_id, calls)
+        task_type = agent_executor.TOOL_TASK_TYPE.get(calls[0]["name"], "query")
+        plan = []
+        for r in results:
+            item = {"tool": r["tool"], "desc": r["desc"]}
+            if r.get("ok") and r.get("result"):
+                item["result"] = r["result"]
+            else:
+                item["error"] = r.get("error", "执行失败")
+            plan.append(item)
+        error_msg = "；".join(r.get("error", "") for r in results if not r.get("ok"))
+        status = 2 if all_ok else 3
+        result_payload = {"results": results}
+        params = json.dumps(calls, ensure_ascii=False)
+    else:
+        # 3b) 降级：关键词规则占位（保链路可用）
+        task_type, tool = "query", ""
+        for key, (kw, t) in _INTENT_RULES.items():
+            if kw in instruction:
+                task_type, tool = key, t
+                break
+        note = (
+            "模型服务不可用，任务按关键词占位完成"
+            if calls is None
+            else "未识别到可执行工具，任务已记录"
+        )
+        plan = [{"tool": tool, "desc": f"执行{task_type}任务"}] if tool else []
+        error_msg = "" if tool else note
+        result_payload = {"task_id": task_id, "note": note}
+        params = json.dumps({"instruction": instruction}, ensure_ascii=False)
+        status = 2
+
     cpp_bridge.execute(
-        "UPDATE agent_task SET status = 2, result_json = ?, finished_at = NOW() WHERE id = ?",
-        [json.dumps({"task_id": task_id}), task_id],
+        "UPDATE agent_task SET task_type = ?, status = ?, params_json = ?, result_json = ?, "
+        "error_msg = ?, started_at = NOW(), finished_at = NOW() WHERE id = ?",
+        [
+            task_type,
+            status,
+            params,
+            json.dumps(result_payload, ensure_ascii=False),
+            error_msg,
+            task_id,
+        ],
     )
-    return ok({"task_id": task_id, "status": 2, "plan": plan})
+    return ok({"task_id": task_id, "status": status, "plan": plan, "result": result_payload})
 
 
 @router.get("/tasks")

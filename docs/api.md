@@ -64,12 +64,13 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 | AI 助手 | chat/send(SSE) / chat/quick / conversations / messages / feedback |
 | Agent | tasks(创建/列表/详情/取消) / reminders(列表/创建/完成) |
 | 图书馆 | free-rooms / rooms/{id}/seats / reservations(创建/我的/取消) / occupancy |
-| 二手 | items(列表/发布/改状态/ai-describe) / wishes(创建/匹配) / orders(创建) |
+| 二手 | items(列表/发布/我的发布/改状态/ai-describe) / wishes(创建/匹配) / orders(创建) |
 | 兼职 | jobs(列表/详情/投递/可信度) / applications/me |
-| 论坛 | topics(列表/创建/详情/点赞/举报/hot/feed) / comments |
+| 论坛 | topics(列表/创建/我的/详情/点赞/举报/hot/feed) / comments |
 | 地图 | pois / nearby / navigate / building/{id} |
 | 生活 | merchants / menu / orders / notices / notice-read / notice-feed |
 | 管理 | metrics / knowledge/ingest / forum/audit / train/corpus |
+| 收藏 | favorites(切换/我的收藏，target_type: topic·item) |
 
 ---
 
@@ -254,6 +255,14 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### PUT /secondhand/items/{id}/status — 改状态
 请求 `{ "status": "1" }`（0在售 1已售 2下架）
 
+### GET /secondhand/items/mine — 我的发布（v1.2 新增）
+查询参数：`?page=&size=`
+`data.items[]`（多含 `status` / `audit_status` 供前端管理展示）：
+```json
+{ "id":3,"title":"九成新高数教材","category":"教材","price":25.00,"images":["..."],
+  "status":0,"audit_status":1,"view_count":10,"created_at":"2026-08-24 10:00" }
+```
+
 ### POST /secondhand/wishes — 发布求购
 请求 `{ "content":"求购高数教材","category":"教材","budget":30 }` → `{ "wish_id": 2 }`
 
@@ -305,6 +314,19 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### POST /topics — 发帖
 请求 `{ "title":"求高数资料","content":"...","category":"学习" }` → `{ "topic_id": 5 }`
 > 新帖 `audit_status=0`，通过 AI 审核后对外可见。
+
+### GET /topics/mine — 我的帖子（v1.2 新增）
+查询参数：`?page=&size=`；返回自己发的全部帖子（含审核状态，便于展示"审核中/被拒"）。
+`data.items[]` 结构同列表接口 + `audit_status`（0待审 1通过 2拒绝）。
+
+### 收藏（通用，v1.2 新增；支持帖子 topic / 二手物品 item）
+- `POST /favorites` — 收藏/取消收藏（切换）：请求 `{ "target_type":"topic", "target_id":5 }`
+  响应：`{ "target_type":"topic", "target_id":5, "favorited":true }`（再次调用即取消）
+- `GET /favorites?target_type=topic&page=&size=` — 我的收藏列表（分页）
+  - `target_type=topic`：`items[]` = 帖子摘要 + `favorited_at`（收藏时间）
+  - `target_type=item`：`items[]` = 物品摘要（含 images/price/status）
+  - 收藏列表自动剔除已删除/已下架对象
+- 帖子详情 `GET /topics/{id}` 响应新增 `favorited` 字段（供收藏按钮高亮）
 
 ### GET /topics/{id} — 详情（含评论）
 响应 `data`：
@@ -424,3 +446,5 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 |---|---|---|
 | v1.0 | 2026-08-24 | 初始契约：11 模块，约 60 个接口 |
 | v1.1 | 2026-08-24 | RAG：ingest 响应加 `status`；新增 `POST /admin/knowledge/index` 重建索引 |
+| v1.2 | 2026-09-08 | B2 补齐缺口接口：`GET /topics/mine`（我的帖子）、`GET /secondhand/items/mine`（我的发布）、通用收藏 `POST/GET /favorites`（topic/item）；帖子详情新增 `favorited` |
+| v1.3 | 2026-09-09 | B5 Agent Function Call：`POST /agent/tasks` 由模型解析意图并真实执行工具（add_reminder/reserve_seat/query_free_room/post_secondhand），响应新增 `result`（执行明细）；模型不可用时降级关键词占位 |
