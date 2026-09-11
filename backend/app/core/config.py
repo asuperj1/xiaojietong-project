@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     wx_appid: str = ""
     wx_secret: str = ""
 
+    # CORS（审计 SEC-13）：逗号分隔的允许来源。
+    # 本项目鉴权走 Authorization: Bearer，不依赖 Cookie，因此 main.py 固定
+    # allow_credentials=False；旧配置 allow_origins=["*"] + credentials=True
+    # 会让 Starlette 回显任意 Origin，等价于对全网站点开放。
+    # 生产环境（XJT_ENV=prod）不允许使用 * 通配，见 _validate_security。
+    cors_origins: str = "*"
+
+    # 接口限流（审计 SEC-10）：单进程内存滑动窗口。
+    # 注意：多 worker 部署时每个 worker 独立计数，如需全局限流请接 Redis。
+    rate_limit_enabled: bool = True
+    rate_limit_per_minute: int = 300         # 单 IP 全局上限（次/分钟）
+    rate_limit_login_per_minute: int = 10    # 登录/刷新单独收紧，防口令与 code 爆破
+
     # AI 推理服务（Ollama）
     ollama_base_url: str = "http://127.0.0.1:11434"
     # 校园领域微调模型（成员3 C5 产出）。未部署微调模型时可设为 qwen2.5:3b 使用基座模型。
@@ -75,6 +88,12 @@ class Settings(BaseSettings):
         """未配置微信凭据 → 走 mock openid（仅开发态允许）。"""
         return not (self.wx_appid and self.wx_secret)
 
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """CORS 允许来源列表（逗号分隔；空值回退为 *）。"""
+        items = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        return items or ["*"]
+
     # ---------- 启动校验 ----------
 
     @model_validator(mode="after")
@@ -98,6 +117,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "生产环境（XJT_ENV=prod）必须配置 XJT_WX_APPID / XJT_WX_SECRET，"
                 "否则 /auth/wechat-login 会退化为任何人可伪造的 mock 登录。"
+            )
+        if "*" in self.cors_origin_list:
+            raise ValueError(
+                "生产环境（XJT_ENV=prod）必须显式配置 XJT_CORS_ORIGINS（逗号分隔），"
+                "不允许使用 * 通配（审计 SEC-13）。"
+            )
+        if not self.rate_limit_enabled:
+            raise ValueError(
+                "生产环境（XJT_ENV=prod）必须开启 XJT_RATE_LIMIT_ENABLED（审计 SEC-10）。"
             )
         return self
 
