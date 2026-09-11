@@ -5,7 +5,15 @@
     "pages/service/service",
     "pages/forum/forum",
     "pages/user/user",
-    "pages/auth/login"
+    "pages/auth/login",
+    "pages/library/index",
+    "pages/library/freeRoom",
+    "pages/secondhand/index",
+    "pages/job/index",
+    "pages/map/index",
+    "pages/life/index",
+    "pages/life/notices",
+    "pages/agent/index"
   ],
   "window": {
     "navigationBarBackgroundColor": "#4A90D9",

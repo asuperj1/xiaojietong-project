@@ -1,0 +1,6 @@
+<!-- 查空教室（占位页） -->
+<view class="placeholder">
+  <view class="icon">🏫</view>
+  <view class="title">查空教室</view>
+  <view class="tip">功能开发中，敬请期待</view>
+</view>

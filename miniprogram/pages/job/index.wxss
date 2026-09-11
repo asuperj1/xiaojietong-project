@@ -1,0 +1,21 @@
+/* 占位页通用样式 */
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 200rpx;
+}
+.icon {
+  font-size: 96rpx;
+}
+.title {
+  margin-top: 24rpx;
+  font-size: 36rpx;
+  color: #333333;
+  font-weight: 600;
+}
+.tip {
+  margin-top: 12rpx;
+  font-size: 26rpx;
+  color: #bbbbbb;
+}

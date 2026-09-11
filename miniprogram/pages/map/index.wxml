@@ -1,0 +1,6 @@
+<!-- 校园地图（占位页） -->
+<view class="placeholder">
+  <view class="icon">🗺️</view>
+  <view class="title">校园地图</view>
+  <view class="tip">功能开发中，敬请期待</view>
+</view>
