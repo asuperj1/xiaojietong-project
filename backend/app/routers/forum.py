@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
+from app.core.view_counter import view_counter
 from app.db import cpp_bridge
 
 router = APIRouter(prefix="/topics", tags=["forum"])
@@ -114,8 +115,9 @@ def topic_detail(topic_id: int, user: dict = Depends(get_current_user)):
     )
     topic["favorited"] = bool(fav_rows)
     topic["comments"] = comments
-    # 浏览量 +1
-    cpp_bridge.execute("UPDATE topic SET view_count = view_count + 1 WHERE id = ?", [topic_id])
+    # 浏览量 +1（审计 CAC-03）：读路径只做内存自增，由后台任务周期批量落库，
+    # 避免热门帖被并发浏览时所有请求争用同一行的排他锁（write hotspot）。
+    view_counter.bump(topic_id)
     return ok(topic)
 
 

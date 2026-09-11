@@ -56,7 +56,15 @@ async def lifespan(app: FastAPI):
         logging.getLogger("uvicorn").warning(
             "⚠️  jt_db C++ 扩展未编译，数据库能力不可用。请构建 db/cpp_driver。"
         )
-    yield
+
+    # 浏览量聚合任务（审计 CAC-03）：读路径只自增内存，后台周期性批量落库
+    from app.core.view_counter import view_counter
+
+    view_counter.start()
+    try:
+        yield
+    finally:
+        await view_counter.stop()
 
 
 app = FastAPI(
