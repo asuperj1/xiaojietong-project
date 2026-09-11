@@ -1,18 +1,20 @@
 """二手：物品 / 求购 / 匹配 / 订单。
 
 契约：docs/api.md §6
+审核（B6）：发布经 services/audit.py 判定（拒绝返回 3003；可疑转人工待审）。
 """
 
 from __future__ import annotations
 
-import math
+import json
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.core.deps import get_current_user
-from app.core.response import BizError, err_param, ok, paged
+from app.core.response import BizError, err_audit, err_param, ok, paged
 from app.db import cpp_bridge
+from app.services.audit import audit_content, status_of
 
 router = APIRouter(prefix="/secondhand", tags=["secondhand"])
 
@@ -25,8 +27,6 @@ def _item_view(i: dict) -> dict:
 
 
 def _parse_json(raw) -> list:
-    import json
-
     if not raw:
         return []
     try:
@@ -85,13 +85,29 @@ class PublishIn(BaseModel):
 
 
 @router.post("/items")
-def publish(body: PublishIn, user: dict = Depends(get_current_user)):
+async def publish(body: PublishIn, user: dict = Depends(get_current_user)):
     if not body.title.strip():
         raise err_param("标题不能为空")
     item_id = cpp_bridge.secondhand_dao().publish(
         int(user["id"]), body.title, body.description, body.category, body.price
     )
-    return ok({"item_id": item_id})
+    # B6 内容审核（先入库拿到 item_id，审核留痕 audit_log 需要 target_id）
+    verdict = await audit_content(
+        f"{body.title}\n{body.description}",
+        target_type="item",
+        target_id=item_id,
+        user_id=int(user["id"]),
+    )
+    audit_status = status_of(verdict["level"])
+    cpp_bridge.execute(
+        "UPDATE secondhand_item SET audit_status = ? WHERE id = ?",
+        [audit_status, item_id],
+    )
+    if verdict["level"] == "block":
+        raise err_audit(verdict["reason"] or "内容未通过审核")
+    return ok(
+        {"item_id": item_id, "audit_status": audit_status, "source": verdict["source"]}
+    )
 
 
 class AiDescribeIn(BaseModel):
