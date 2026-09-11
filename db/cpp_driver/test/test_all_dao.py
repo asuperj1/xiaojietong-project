@@ -6,7 +6,7 @@
 写操作均在事务内执行并回滚，避免污染种子数据。
 
 用法：
-  XJT_DB_PASSWORD=jhq000000 python test_all_dao.py
+  XJT_DB_PASSWORD=${XJT_DB_PASSWORD} python test_all_dao.py
 """
 
 import os
