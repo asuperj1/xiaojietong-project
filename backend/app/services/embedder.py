@@ -45,7 +45,11 @@ class OllamaEmbedder:
     async def _request(self, texts: list[str]) -> list[list[float]] | None:
         """请求 Ollama /api/embed。失败返回 None（不抛异常）。"""
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout)) as client:
+            # trust_env=False：隔离系统/环境代理。Ollama 是本地服务，若 httpx 误读系统代理
+            # （Windows 注册表 IE 代理 / HTTP_PROXY）会得到 502 —— 与审计 SEC-23 同源。
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self.timeout), trust_env=False
+            ) as client:
                 resp = await client.post(
                     f"{self.base_url}/api/embed",
                     json={"model": self.model, "input": texts},
@@ -108,7 +112,10 @@ class OllamaEmbedder:
     async def available(self) -> bool:
         """探测 Ollama 是否可用且模型存在。"""
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            # 同上：本地服务不走代理
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0), trust_env=False
+            ) as client:
                 resp = await client.get(f"{self.base_url}/api/tags")
                 if resp.status_code != 200:
                     return False
