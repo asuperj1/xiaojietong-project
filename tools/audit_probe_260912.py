@@ -6,10 +6,25 @@
 
 前置：后端已启动（默认 127.0.0.1:8000）。
 运行：
-    d:\\xiaojietongproject\\.venv\\Scripts\\python.exe tools\\audit_probe_260912.py
+    python -X utf8 tools/audit_probe_260912.py
 
-⚠️ 探针 1/2 会向 /auth/wechat-login 发送 27 次请求（dev 态 mock 登录，会创建
-   oXJT_DEV_* 用户）。若随后要跑限流验证脚本，请先重启后端清空计数。
+------------------------------------------------------------------ 写副作用披露
+⚠️ 本脚本**并非纯只读**：探针 1/2 会向 `/auth/wechat-login` 发送 27 次请求
+   （dev 态 mock 登录），每次都会**新建一个 `nickname` 以 `oXJT_DEV_` 开头的用户**
+   （openid 形如 `oXJT_DEV_<随机>`）。
+
+影响：
+  1. `user` 表会**累积测试用户**（一轮跑完约 +27 行）；
+  2. 若随后跑限流验证脚本（`backend/tests/verify_p1_ratelimit.py`），
+     **请先重启后端**清空内存计数器，否则结果不可信；
+  3. 登录失败计数若按账号维度统计，可能被这些残留账号影响。
+
+清理（封测前建议执行）：
+    DELETE FROM user WHERE nickname LIKE 'oXJT_DEV_%';
+    -- 若该批用户已产生内容，请先删除其内容行再删用户（外键约束）
+
+后续（已排入二阶段任务 `T-01`）：增加 `--cleanup`（跑完自动清理）与
+`--strict`（探针失败时返回非 0 退出码，便于 CI 判定）。
 """
 
 from __future__ import annotations

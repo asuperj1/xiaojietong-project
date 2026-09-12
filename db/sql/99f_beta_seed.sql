@@ -8,9 +8,25 @@
 --         xiaojietong -e "source db/sql/99f_beta_seed.sql"
 -- 幂等：固定 id 段先删后插，可重复执行。
 -- 编号段：9001~9010（与业务自增数据隔离，便于清理）
+--
+-- ⚠️⚠️ 仅用于**封测 / 本地测试库**，禁止对生产库执行（本文件含 DELETE）⚠️⚠️
+-- 安全闸门：执行前必须显式放行，否则脚本会立即报错中止：
+--   mysql --host=127.0.0.1 --port=3307 -uroot -p --default-character-set=utf8mb4 \
+--         --init-command="SET @xjt_beta_seed=1" xiaojietong < db/sql/99f_beta_seed.sql
+--   （交互式：先 `SET @xjt_beta_seed=1;` 再 `source db/sql/99f_beta_seed.sql`）
+-- 回滚：见文件末尾「回滚」。
 -- =============================================================================
 SET NAMES utf8mb4;
 USE xiaojietong;
+
+-- ---------- ⛔ 安全闸门（勿删；未放行则在此处报错中止） ----------
+SET @xjt_beta_seed := IFNULL(@xjt_beta_seed, 0);
+SET @xjt_gate_sql := IF(@xjt_beta_seed = 1,
+    'SELECT ''✅ 封测种子闸门已放行，开始写入'' AS gate',
+    'SELECT 1 FROM `__已阻止执行_本文件仅供封测库使用_请按文件头说明使用_init-command__`');
+PREPARE xjt_gate FROM @xjt_gate_sql;
+EXECUTE xjt_gate;
+DEALLOCATE PREPARE xjt_gate;
 
 -- ---------- 清理（幂等） ----------
 DELETE FROM job_post      WHERE id BETWEEN 9001 AND 9010;
@@ -113,3 +129,10 @@ SELECT 'company'       AS 表, COUNT(*) AS 条数 FROM company       WHERE id BE
 UNION ALL SELECT 'job_post',      COUNT(*) FROM job_post      WHERE id BETWEEN 9001 AND 9010
 UNION ALL SELECT 'campus_notice', COUNT(*) FROM campus_notice WHERE id BETWEEN 9001 AND 9020
 UNION ALL SELECT 'poi(99e)',      COUNT(*) FROM poi;
+
+-- =============================================================================
+-- 回滚（需同样放行闸门；仅删固定 id 段，不影响业务自增数据）
+-- =============================================================================
+-- DELETE FROM job_post      WHERE id BETWEEN 9001 AND 9010;
+-- DELETE FROM company       WHERE id BETWEEN 9001 AND 9010;
+-- DELETE FROM campus_notice WHERE id BETWEEN 9001 AND 9020;

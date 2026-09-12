@@ -17,6 +17,8 @@ ui/
 │   └── business/           # 业务类：课表 / 图书馆 / 校园卡 / 二手 / AI
 ├── images/                 # 原型中的配图（JPEG，已语义化命名）
 ├── prototype/              # 18 个 HTML 原型页存档（设计蓝本，浏览器直接打开）
+│   ├── _all.html           # ★ 总览页：一屏缩略预览全部 18 个原型
+│   └── vendor/             # ★ 本地化第三方脚本（见 §4.1，勿手动改）
 ├── manifest.json           # 素材索引（图标分类 + 使用页面 + 图片说明 + 原型页清单）
 ├── yemian.drawio           # 页面流程图（drawio 源文件）
 └── README.md               # 本文件
@@ -109,7 +111,22 @@ ui/
 | 其他 | `map`（校园地图）、`recommend_explain`（推荐说明） |
 | 状态页 | `loading`（加载）、`empty`（空结果）、`error`（错误） |
 
-> ⚠️ 原型依赖 CDN（Tailwind CSS 与 Iconify 均由 `modao.cc` 远程加载），**离线打开会丢失样式与图标**；图标请直接取本目录 `icons/` 下的本地 SVG。
+### 4.1 离线化第三方依赖（`prototype/vendor/`）
+
+> 历史问题：原型原先从 `modao.cc` CDN 加载 Tailwind CSS 与 Iconify，**离线 / 内网打开会丢失样式与图标**（封测演示现场尤易翻车）。
+
+已于 **2026-09-12** 完成本地化：
+
+| 文件 | 作用 | 来源 |
+|---|---|---|
+| `prototype/vendor/tailwindcss.js`（约 397 KB） | Tailwind Play CDN 脚本 | 官方 CDN 快照 |
+| `prototype/vendor/iconify-icon.min.js`（约 21 KB） | Iconify Web Component | 官方 CDN 快照 |
+
+- 18 个原型页的 `<script src="...">` 已全部改为**相对路径** `vendor/*.js` → **断网可用**。
+- `prototype/_all.html` 为**总览页**，一屏缩略预览全部 18 页，适合汇报 / 评审时快速翻页。
+
+> ⚠️ `vendor/` 下为**第三方压缩产物，勿手动修改**；升级请整文件替换并同步本表。
+> 图标仍为本地 SVG（`icons/`），与 `vendor/` 无关。
 
 ---
 

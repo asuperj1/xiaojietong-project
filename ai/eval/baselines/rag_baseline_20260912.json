@@ -1,6 +1,7 @@
 {
   "meta": {
-    "dataset": "D:\\xiaojietongproject\\xiaojietong-project\\ai\\eval\\rag_questions.json",
+    "dataset": "ai/eval/rag_questions.json",
+    "_note_paths": "历史冻结产物：所有路径均相对于仓库根记录（原记录为作者机器绝对路径，已规范化）",
     "top_k": 3,
     "generated_at": "2026-09-12 19:09:38"
   },

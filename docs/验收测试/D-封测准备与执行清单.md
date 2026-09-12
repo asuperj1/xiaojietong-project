@@ -32,7 +32,7 @@
 | 4 | 环境三件套在线（MySQL / 后端 / Ollama） | ✅ 已验证 | 成员3 |
 | 5 | 种子数据齐备 | ✅ **已完成**（§4） | 成员3 |
 | 6 | 开机自检通过（阻塞项 = 0） | ⚠️ 当前 1 项（Ollama 502，合并后自动消除） | 成员3 |
-| 7 | 测试基线冻结（记录 commit） | ⏳ 合并后记录 | 成员3 |
+| 7 | 测试基线冻结（记录 commit） | ⏳ **正式开测当日**记录 `git rev-parse --short dev` 到 C 分册；冻结后 `dev` 只收非破坏性修复 | 成员3 |
 
 > **第 2、3 项是"封测前必修"**：第 2 项导致**登录首屏头像 403**；第 3 项导致**待审违规内容对所有人可见**（答辩现场最易被戳破）。
 
@@ -70,15 +70,17 @@ E:\miniconda3\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 | # | 数据 | 命令 | 实测结果 |
 |---|---|---|---|
 | 1 | **POI 种子**（8 个校园点位，来自 PR #42 的 `99e`） | `mysql ... xiaojietong < db/sql/99e_poi_seed.sql` | ✅ POI **0 → 8** |
-| 2 | **静态字典种子**（公司 3 / 岗位 6 / 通知 8） | `mysql ... xiaojietong < db/sql/99f_beta_seed.sql` | ✅ 全部写入 |
+| 2 | **静态字典种子**（公司 3 / 岗位 6 / 通知 8） | `mysql ... --init-command="SET @xjt_beta_seed=1" xiaojietong < db/sql/99f_beta_seed.sql` | ✅ 全部写入 |
 | 3 | **动态业务种子**（二手 5 / 帖 5 / 求购 1 / 收藏 2 / 标签） | `python -X utf8 tools/seed_testdata.py` | ✅ **20/20 成功** |
 
 ```powershell
 # 完整执行（在项目根目录）
 $m = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
-cmd /c "`"$m`" --host=127.0.0.1 --port=3307 -uroot -p --default-character-set=utf8mb4 xiaojietong < db\sql\99f_beta_seed.sql"
+cmd /c "`"$m`" --host=127.0.0.1 --port=3307 -uroot -p --default-character-set=utf8mb4 --init-command="SET @xjt_beta_seed=1" xiaojietong < db\sql\99f_beta_seed.sql"
 python -X utf8 tools/seed_testdata.py
 ```
+
+> ⚠️ `99f_beta_seed.sql` **内置安全闸门**：不加 `--init-command="SET @xjt_beta_seed=1"` 会**立即报错中止**，以免误在生产库执行（文件内含 `DELETE`）。
 
 **种子账号**（`seed_testdata.py` 自动创建，可直接在 A 分册中当「甲 / 乙 / 丙」用）：
 
@@ -103,7 +105,7 @@ python -X utf8 tools/preflight_check.py
 
 **判据**：`阻塞项 = 0` 才可开测。
 
-**当前实测**（`dev@7a3260c`，即 **未合并 PR #42** 的状态）：
+**当前实测**（`dev@bbb2ca9`，PR #42 已合入；**待 `fix/sec23`（PR #48）合入后重跑**）：
 
 | 轮次 | 结果 |
 |---|---|
@@ -117,7 +119,7 @@ python -X utf8 tools/preflight_check.py
 ## 6. 封测执行清单
 
 ### D-1（准备日，半天）
-- ☐ 合并 PR #42 → 记录 `dev` commit 到 C 分册
+- ☐ 合并 `fix/sec23`（PR #48）→ 记录 `dev` commit 到 C 分册
 - ☐ 补 `auth.py` 头像 `resign`（1 行）
 - ☐ 二手读路径加 `audit_status` 过滤
 - ☐ 重跑 `pytest tests -q` + `tools/e2e_connectivity.py`
@@ -165,7 +167,7 @@ python -X utf8 tools/preflight_check.py
 | P0 缺陷 | **0 未关闭** |
 | A 分册通过率 | ≥ 95% |
 | B-1 契约 / B-2 鉴权 / B-4 并发 | **100%** |
-| RAG hit@3 | ≥ 80%（当前实测 **100%**） |
+| RAG hit@3 | ≥ 80%（实测 **100%**）；⚠️ 负样本误命中 **100% 未达标**（`C20` 待做 —— 不阻塞封测，但**必须如实记录**） |
 | `pytest` | 全绿（当前 **7 passed**） |
 
 ---
