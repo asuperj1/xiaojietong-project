@@ -14,6 +14,7 @@ from app.core.deps import get_current_user
 from app.core.response import BizError, err_audit, err_param, ok, paged
 from app.core.view_counter import view_counter
 from app.db import cpp_bridge
+from app.services import recommend
 from app.services.audit import audit_content, status_of
 
 router = APIRouter(prefix="/topics", tags=["forum"])
@@ -80,9 +81,12 @@ def topic_feed(
     size: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user),
 ):
-    """个性化推荐（占位）：先按时间序，后续接入用户标签/浏览历史。"""
-    items = cpp_bridge.forum_dao().page_topics(page, size, "", audited_only=True)
-    return ok(paged(items, len(items), page, size))
+    """个性化推荐（B11）：兴趣标签 + 行为偏好 + 热度 + 时效混合打分，逐条附推荐理由。
+
+    冷启动（无标签/无行为数据）自然回落为热度排序，不报错。
+    """
+    items, total = recommend.build_feed(user, page, size)
+    return ok(paged(items, total, page, size))
 
 
 @router.get("/mine")
