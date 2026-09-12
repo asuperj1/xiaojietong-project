@@ -1,0 +1,105 @@
+/* 帖子详情（F7） */
+.detail-page {
+  padding-bottom: 140rpx;
+}
+.detail-title {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #333333;
+}
+.detail-meta {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: #999999;
+}
+.detail-content {
+  margin-top: 20rpx;
+  font-size: 30rpx;
+  color: #333333;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.detail-actions {
+  margin-top: 24rpx;
+  display: flex;
+  border-top: 1rpx solid #f0f0f0;
+  padding-top: 20rpx;
+}
+.act {
+  margin-right: 48rpx;
+  font-size: 26rpx;
+  color: #4A90D9;
+  display: flex;
+  align-items: center;
+}
+.act-num {
+  margin-left: 8rpx;
+  color: #999999;
+}
+/* 点赞请求中：视觉反馈 + 忽略后续点击（见 onLike 的 liking 标志） */
+.act--busy {
+  opacity: 0.5;
+}
+.cmt-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.cmt-empty {
+  margin-top: 20rpx;
+  color: #cccccc;
+  font-size: 26rpx;
+}
+.cmt-item {
+  padding: 20rpx 0;
+  border-bottom: 1rpx solid #f5f5f5;
+}
+.cmt-head {
+  display: flex;
+  justify-content: space-between;
+}
+.cmt-author {
+  font-size: 26rpx;
+  color: #4A90D9;
+}
+.cmt-time {
+  font-size: 22rpx;
+  color: #cccccc;
+}
+.cmt-content {
+  margin-top: 10rpx;
+  font-size: 28rpx;
+  color: #333333;
+}
+.input-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 16rpx 24rpx;
+  background: #ffffff;
+  border-top: 1rpx solid #eeeeee;
+  padding-bottom: calc(16rpx + env(safe-area-inset-bottom));
+}
+.input {
+  flex: 1;
+  height: 72rpx;
+  background: #f5f5f5;
+  border-radius: 36rpx;
+  padding: 0 28rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+.send-btn {
+  margin-left: 16rpx;
+  height: 72rpx;
+  line-height: 72rpx;
+  padding: 0 32rpx;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

@@ -1,0 +1,49 @@
+/* 发布二手（F9-A） */
+.f-input {
+  height: 80rpx;
+  font-size: 32rpx;
+  border-bottom: 1rpx solid #f0f0f0;
+}
+.f-textarea {
+  margin-top: 16rpx;
+  width: 100%;
+  height: 240rpx;
+  font-size: 28rpx;
+  line-height: 1.6;
+  box-sizing: border-box;
+}
+.f-row {
+  margin-top: 20rpx;
+  display: flex;
+  align-items: center;
+}
+.f-label {
+  width: 100rpx;
+  color: #666666;
+  font-size: 28rpx;
+}
+.f-picker {
+  background: #f5f5f5;
+  border-radius: 12rpx;
+  padding: 12rpx 28rpx;
+  font-size: 28rpx;
+}
+.f-price {
+  flex: 1;
+  height: 68rpx;
+  background: #f5f5f5;
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+.ai-btn {
+  margin-top: 24rpx;
+  width: 100%;
+}
+.foot {
+  padding: 0 24rpx;
+}
+.submit-btn {
+  width: 100%;
+}

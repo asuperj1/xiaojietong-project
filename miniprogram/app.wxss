@@ -1,0 +1,68 @@
+/* 全局样式（F1A 最小骨架） */
+/* 主题色 #4A90D9，见 miniprogram/前端页面规格.md §0 */
+page {
+  background-color: #f5f5f5;
+  color: #333333;
+  font-size: 28rpx;
+  line-height: 1.6;
+}
+
+/* ===== F5-F9 公共样式（新增，不影响既有页面） ===== */
+.xj-page {
+  min-height: 100vh;
+  padding: 24rpx 0 60rpx;
+  box-sizing: border-box;
+}
+.xj-card {
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 24rpx;
+  margin: 0 24rpx 20rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
+}
+.xj-loading {
+  padding: 120rpx 40rpx;
+  text-align: center;
+  color: #999999;
+  font-size: 28rpx;
+}
+.xj-empty {
+  padding: 100rpx 40rpx;
+  text-align: center;
+  color: #999999;
+  font-size: 28rpx;
+}
+.xj-empty-icon {
+  display: block;
+  font-size: 80rpx;
+  margin-bottom: 16rpx;
+}
+.xj-btn-primary {
+  background: #4A90D9;
+  color: #ffffff;
+  border-radius: 36rpx;
+  font-size: 28rpx;
+}
+.xj-btn-primary::after {
+  border: none;
+}
+.xj-btn-primary[disabled] {
+  background: #bcd6ee;
+  color: #ffffff;
+}
+.xj-btn-plain {
+  background: #ffffff;
+  color: #4A90D9;
+  border: 1rpx solid #4A90D9;
+  border-radius: 36rpx;
+  font-size: 28rpx;
+}
+.xj-btn-plain::after {
+  border: none;
+}
+.xj-tag {
+  display: inline-block;
+  font-size: 22rpx;
+  padding: 2rpx 12rpx;
+  border-radius: 8rpx;
+}

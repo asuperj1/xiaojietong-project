@@ -1,0 +1,31 @@
+<!-- 通知公告（F9-D） -->
+<view class="xj-page">
+  <view class="seg">
+    <view class="seg-item {{mode === 'all' ? 'seg-active' : ''}}" data-mode="all" bindtap="onMode">全部通知</view>
+    <view class="seg-item {{mode === 'feed' ? 'seg-active' : ''}}" data-mode="feed" bindtap="onMode">为我推荐</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{items.length === 0}}">
+    <view class="xj-empty"><text class="xj-empty-icon">📢</text>暂无通知</view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{items}}" wx:key="id" data-id="{{item.id}}" bindtap="onItemTap">
+      <view class="n-title">{{item.title}}</view>
+      <view class="n-meta">
+        <text wx:if="{{item.source}}">{{item.source}}</text>
+        <text wx:if="{{item.category}}"> · {{item.category}}</text>
+        <text class="n-time">{{item.time}}</text>
+      </view>
+    </view>
+  </block>
+</view>

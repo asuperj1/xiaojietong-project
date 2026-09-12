@@ -1,0 +1,22 @@
+<!-- 二手商品详情（F9-A） -->
+<view class="xj-page">
+  <view class="xj-card">
+    <view class="top">
+      <text class="title">{{title}}</text>
+      <text class="price">¥{{price}}</text>
+    </view>
+    <view class="tags" wx:if="{{category || condition || trust}}">
+      <text wx:if="{{category}}" class="xj-tag tag-cat">{{category}}</text>
+      <text wx:if="{{condition}}" class="xj-tag tag-gray">成色 {{condition}}</text>
+      <text wx:if="{{trust}}" class="xj-tag tag-green">可信度 {{trust}}</text>
+    </view>
+    <view class="desc" wx:if="{{description}}">{{description}}</view>
+    <view class="seller" wx:if="{{seller || created}}">卖家：{{seller}}<text wx:if="{{created}}"> · {{created}}</text></view>
+  </view>
+
+  <view class="xj-card">
+    <view class="remark-label">购买备注（可选）</view>
+    <input class="remark-input" placeholder="如：希望周六当面交易" value="{{remark}}" bindinput="onRemark" />
+    <button class="xj-btn-primary buy-btn" disabled="{{buying}}" bindtap="onBuy">立即购买</button>
+  </view>
+</view>
