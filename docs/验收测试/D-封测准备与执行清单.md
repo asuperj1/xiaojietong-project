@@ -13,7 +13,7 @@
 |---|---|
 | 版本号 | **`v1.0.0-rc1`**（第一个封测候选版本） |
 | 覆盖范围 | 基础功能 12 模块 + 一阶段创新模块「已到货项」 |
-| 后端基线 | `dev` 合并 **PR #42**（head `7c8cd11`）后的提交 |
+| 后端基线 | **`dev@bbb2ca9`**（PR #42 **已合入** `dev`） |
 | 前端基线 | `feature/frontend`（已合入 `dev`，含 29 页） |
 | **不含** | 二阶段科研内容（C22~C27）、部署上线（Docker/HTTPS/域名）、多模态、`ai/edge/` |
 | 封测形式 | **封闭测试**：内部 3~5 人 + 邀请 2~3 位同学，按 A 分册（用户视角）实操 |
@@ -26,7 +26,7 @@
 
 | # | 条件 | 状态 | 负责 |
 |---|---|---|---|
-| 1 | **PR #42 合并进 `dev`** | ⏳ 待合并（第三轮评测已 **Approve**） | 成员2 / 负责人 |
+| 1 | ~~PR #42 合并进 `dev`~~ → **已完成**（`dev@bbb2ca9`） | ✅ 已合入 | — |
 | 2 | ⚠️ **`auth.py` 头像补 `resign`**（第三轮新发现，1 行） | ❌ 待修 | 成员2 |
 | 3 | ⚠️ **二手读路径加 `audit_status` 过滤**（`DATA-01`，实测已确证泄漏） | ❌ 待修 | 成员3 / 成员2 |
 | 4 | 环境三件套在线（MySQL / 后端 / Ollama） | ✅ 已验证 | 成员3 |
@@ -44,7 +44,7 @@
 # ── 步骤 1：数据库（MySQL 8.0 @ 3307）──────────────────────────
 # 确认 45 张表
 & "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" --host=127.0.0.1 --port=3307 `
-  -uroot -pjhq000000 -N -e "use xiaojietong; SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='xiaojietong';"
+  -uroot -p -N -e "use xiaojietong; SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='xiaojietong';"
 
 # ── 步骤 2：种子数据（★ 见 §4，三条命令）────────────────────────
 
@@ -53,7 +53,7 @@ ollama serve        # 或用桌面版；确认 ollama list 有 qwen2.5:3b / xjt-
 
 # ── 步骤 4：启动后端（★ 注意 --host 0.0.0.0，真机封测必需）────────
 cd backend
-$env:XJT_DB_PASSWORD='jhq000000'; $env:XJT_DB_PORT='3307'
+$env:XJT_DB_PASSWORD='<your-local-password>'; $env:XJT_DB_PORT='3307'
 Remove-Item Env:XJT_ENV -ErrorAction SilentlyContinue      # 清残留，否则 prod 硬校验会拒绝启动
 E:\miniconda3\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
@@ -71,13 +71,13 @@ E:\miniconda3\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 |---|---|---|---|
 | 1 | **POI 种子**（8 个校园点位，来自 PR #42 的 `99e`） | `mysql ... xiaojietong < db/sql/99e_poi_seed.sql` | ✅ POI **0 → 8** |
 | 2 | **静态字典种子**（公司 3 / 岗位 6 / 通知 8） | `mysql ... xiaojietong < db/sql/99f_beta_seed.sql` | ✅ 全部写入 |
-| 3 | **动态业务种子**（二手 5 / 帖 5 / 求购 1 / 收藏 2 / 标签） | `E:/miniconda3/python.exe -X utf8 tools/seed_testdata.py` | ✅ **20/20 成功** |
+| 3 | **动态业务种子**（二手 5 / 帖 5 / 求购 1 / 收藏 2 / 标签） | `python -X utf8 tools/seed_testdata.py` | ✅ **20/20 成功** |
 
 ```powershell
 # 完整执行（在项目根目录）
 $m = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
-cmd /c "`"$m`" --host=127.0.0.1 --port=3307 -uroot -pjhq000000 --default-character-set=utf8mb4 xiaojietong < db\sql\99f_beta_seed.sql"
-E:/miniconda3/python.exe -X utf8 tools/seed_testdata.py
+cmd /c "`"$m`" --host=127.0.0.1 --port=3307 -uroot -p --default-character-set=utf8mb4 xiaojietong < db\sql\99f_beta_seed.sql"
+python -X utf8 tools/seed_testdata.py
 ```
 
 **种子账号**（`seed_testdata.py` 自动创建，可直接在 A 分册中当「甲 / 乙 / 丙」用）：
@@ -96,7 +96,7 @@ E:/miniconda3/python.exe -X utf8 tools/seed_testdata.py
 ## 5. 开机自检（每次封测前必跑）
 
 ```powershell
-E:/miniconda3/python.exe -X utf8 tools/preflight_check.py
+python -X utf8 tools/preflight_check.py
 ```
 
 **9 组检查**：E1 后端 / E2 组件与版本 / E3 模型清单 / E4 登录 / **E5 种子数据** / **E6 签名闭环** / E7 前端配置 / E8 十二模块冒烟 / E9 已知缺陷复核
@@ -110,7 +110,7 @@ E:/miniconda3/python.exe -X utf8 tools/preflight_check.py
 | 首次 | ✅ 23 ｜ ❌ 5 ｜ 阻塞 **5** |
 | 补种子数据后 | ✅ **27** ｜ ❌ **1** ｜ 阻塞 **1** |
 
-唯一剩余项：`E2.3 Ollama 可达 = false` —— **原因已定位**：系统代理把本地 11434 拦成 502（直连 200 正常）。该问题由 **PR #42 的 `SEC-23` 修复**（`trust_env=False`）解决，故**合并后此项自动通过**。
+唯一剩余项：`E2.3 Ollama 可达 = false` —— **原因已定位**：系统代理把本地 11434 拦成 502（直连 200 正常）。该问题由 **`fix/sec23-ollama-proxy-isolation`（PR #48）的 `trust_env=False`** 修复 → **合入 `dev` 后此项自动通过**。
 
 ---
 
@@ -188,7 +188,7 @@ E:/miniconda3/python.exe -X utf8 tools/preflight_check.py
 |---|---|---|---|
 | 1 | **二手待审内容泄漏**（`DATA-01` 确证） | 甲发布含敏感词商品 → `audit_status=0` → **乙列表立即可见**（5→6 件）；对照论坛则**他人看不到**待审帖 | **封测前必修** |
 | 2 | **`auth.py` 头像未重签名** | `auth.py:43` 仍是裸路径（`user.py` 已修） | 合并前补 1 行 |
-| 3 | **Ollama 被系统代理拦成 502** | 直连 `11434` → 200；走代理 → **502** | 已由 PR #42 的 `SEC-23` 解决，合并后自动通过 |
+| 3 | **Ollama 被系统代理拦成 502** | 直连 `11434` → 200；走代理 → **502** | 已由 **`fix/sec23`（PR #48）** 解决，合入 `dev` 后自动通过 |
 | 4 | **`job_post.status` 语义反直觉** | 写 `1` 时 `GET /jobs` 返回空；写 `0` 才可见 | 已在 `99f_beta_seed.sql` 注明并修正 |
 | 5 | `preflight_check.py` 初版误判 | `/health` 不走 `{code,data}`；收藏真实路径是 `/favorites` 而非 `/favorites/me` | 已修正脚本 |
 
@@ -199,7 +199,7 @@ E:/miniconda3/python.exe -X utf8 tools/preflight_check.py
 | 测试方案（主方案 + A/B/C 分册） | **100%** |
 | 自检工具 | **100%** |
 | 种子数据 | **100%** |
-| 环境就绪 | **~80%**（差 PR #42 合并 + 代理/Ollama 联通） |
+| 环境就绪 | **~80%**（差 `fix/sec23` 合入 + 代理/Ollama 联通） |
 | **待修代码** | **2 项**（`auth.py` 1 行；二手审核过滤） |
 | **综合** | **可进入 D-1，前提是先完成 2 项修复** |
 
@@ -208,23 +208,23 @@ E:/miniconda3/python.exe -X utf8 tools/preflight_check.py
 ## 10. 命令速查
 
 ```powershell
-cd d:\xiaojietongproject\xiaojietong-project   # 项目根
+cd <repo-root>   # 项目根
 
 # 自检（每次封测前）
-E:/miniconda3/python.exe -X utf8 tools/preflight_check.py
+python -X utf8 tools/preflight_check.py
 
 # 种子数据
-E:/miniconda3/python.exe -X utf8 tools/seed_testdata.py
+python -X utf8 tools/seed_testdata.py
 $m = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
-cmd /c "`"$m`" --host=127.0.0.1 --port=3307 -uroot -pjhq000000 --default-character-set=utf8mb4 xiaojietong < db\sql\99f_beta_seed.sql"
+cmd /c "`"$m`" --host=127.0.0.1 --port=3307 -uroot -p --default-character-set=utf8mb4 xiaojietong < db\sql\99f_beta_seed.sql"
 
 # 冒烟三件套
-cd backend; E:/miniconda3/python.exe -m pytest tests -q
-cd ..; E:/miniconda3/python.exe -X utf8 tools/e2e_connectivity.py
+cd backend; python -m pytest tests -q
+cd ..; python -X utf8 tools/e2e_connectivity.py
 
 # 审计复核（对照已知缺陷）
-E:/miniconda3/python.exe -X utf8 tools/audit_recheck_260912.py
+python -X utf8 tools/audit_recheck_260912.py
 
 # AI 检索质量（须在 backend/ 目录跑，因向量库路径是相对路径）
-cd backend; E:/miniconda3/python.exe -X utf8 ..\ai\eval\rag_bench.py
+cd backend; python -X utf8 ..\ai\eval\rag_bench.py
 ```

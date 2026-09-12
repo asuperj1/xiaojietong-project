@@ -17,13 +17,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import re
 import sys
 
 import httpx
 
-ROOT = pathlib.Path(r"d:\xiaojietongproject\xiaojietong-project\ui\prototype")
+# 根目录由脚本位置推导（不再写死作者机器路径）
+ROOT = pathlib.Path(__file__).resolve().parent.parent / "ui" / "prototype"
 
 CDN = [
     ("https://modao.cc/agent-py/static/source/js/tailwindcss.js", "tailwindcss.js"),
@@ -62,7 +64,8 @@ def main() -> int:
         pass
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--proxy", default="http://127.0.0.1:7897", help='代理地址，传 "" 表示不走代理')
+    ap.add_argument("--proxy", default=os.environ.get("XJT_PROXY") or None,
+                    help="代理地址（默认读环境变量 XJT_PROXY；不设则直连）")
     args = ap.parse_args()
 
     print("=" * 74)
