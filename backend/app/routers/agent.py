@@ -1,10 +1,10 @@
 """AI Agent：任务创建/查询/取消、提醒。
 
 契约：docs/api.md §4
-编排（B5 + B7）三级链路：
-1. 模型可用 → LLM Function Call（services/agent_executor.py）；
-2. 模型不可用/未返回工具 → 规则执行器（services/rule_executor.py，**真写库**）；
-3. 两者都未识别 → status=3 失败 + error_msg（**禁止假成功**）。
+编排三级链路（B5 + B7）见 services/agent_runner.py：
+1. 模型可用 → LLM Function Call；2. 模型不可用 → 规则执行器（真写库）；
+3. 两者都未识别 → status=3 失败（禁止假成功）。
+B15：任务经 Celery 异步执行（未启用时 eager 同步，行为与旧版一致）。
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from pydantic import BaseModel
 from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
 from app.db import cpp_bridge
-from app.services import agent_executor, rule_executor
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -27,64 +26,43 @@ class TaskIn(BaseModel):
 
 
 @router.post("/tasks")
-async def create_task(body: TaskIn, user: dict = Depends(get_current_user)):
+def create_task(body: TaskIn, user: dict = Depends(get_current_user)):
+    """创建 Agent 任务（B15：Celery 异步执行）。
+
+    - Celery 启用：投递后立即返回 `status=0`，前端轮询 `GET /agent/tasks/{id}`；
+    - 未启用（无 Redis）：eager 就地同步执行，响应与旧版一致（含执行结果）。
+    """
+    from app.core.config import settings
+    from app.tasks import run_agent_task
+
     instruction = body.instruction.strip()
     if not instruction:
         raise err_param("指令不能为空")
     uid = int(user["id"])
 
-    # 1) 落任务（0 待执行，随后立即编排执行；Celery 异步化前保持同步）
+    # 1) 落任务（0 待执行）
     rows = cpp_bridge.execute(
         "INSERT INTO agent_task (user_id, task_type, title, status) VALUES (?, 'plan', ?, 0)",
         [uid, instruction],
     )
     task_id = rows[1]
 
-    # 2) 三级链路：模型 Function Call → 规则执行器 → 明确失败
-    calls = await agent_executor.plan_instruction(instruction)
-    source = "model"
-    if not calls:
-        calls = rule_executor.parse(instruction)
-        source = "rule"
-
-    if calls:
-        # 真实执行工具（写库）：add_reminder / reserve_seat / query_free_room / post_secondhand
-        results, all_ok = agent_executor.execute_calls(uid, task_id, calls)
-        task_type = agent_executor.TOOL_TASK_TYPE.get(calls[0]["name"], "query")
-        plan = []
-        for r in results:
-            item = {"tool": r["tool"], "desc": r["desc"]}
-            if r.get("ok") and r.get("result"):
-                item["result"] = r["result"]
-            else:
-                item["error"] = r.get("error", "执行失败")
-            plan.append(item)
-        error_msg = "；".join(r.get("error", "") for r in results if not r.get("ok"))
-        status = 2 if all_ok else 3
-        result_payload = {"source": source, "results": results}
-        params = json.dumps(calls, ensure_ascii=False)
-    else:
-        # 3) 模型与规则都未识别 → 明确失败（不再出现"未执行任何工具却报成功"）
-        task_type = "unknown"
-        status = 3
-        error_msg = "无法识别指令意图：模型未返回工具调用，规则也未匹配"
-        plan = []
-        result_payload = {"source": "none", "results": [], "note": error_msg}
-        params = json.dumps({"instruction": instruction}, ensure_ascii=False)
-
-    cpp_bridge.execute(
-        "UPDATE agent_task SET task_type = ?, status = ?, params_json = ?, result_json = ?, "
-        "error_msg = ?, started_at = NOW(), finished_at = NOW() WHERE id = ?",
-        [
-            task_type,
-            status,
-            params,
-            json.dumps(result_payload, ensure_ascii=False),
-            error_msg,
-            task_id,
-        ],
-    )
-    return ok({"task_id": task_id, "status": status, "plan": plan, "result": result_payload})
+    # 2) 投递 Celery 任务（B15）：eager 模式同步返回结果；异步模式由前端轮询
+    task = run_agent_task.delay(uid, task_id, instruction)
+    if settings.celery_enabled:
+        return ok(
+            {
+                "task_id": task_id,
+                "status": 0,
+                "plan": [],
+                "result": {
+                    "async": True,
+                    "celery_task_id": task.id,
+                    "note": "任务已投递，请轮询 GET /agent/tasks/{task_id}",
+                },
+            }
+        )
+    return ok(task.result)
 
 
 @router.get("/tasks")

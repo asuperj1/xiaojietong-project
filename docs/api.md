@@ -165,6 +165,7 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 > ② 模型不可用/未返回工具时，**规则执行器兜底**（`services/rule_executor.py`，`source=rule`，同样真实写库）；
 > ③ 两者都未识别 → `status=3` + `error_msg`（**不再出现"未执行工具却报成功"的假成功**）。
 > 规则兜底支持的指令示例：「10 分钟后提醒我交作业」「帮我预约 1 号座位明天上午 9 点到 11 点」「查一下空教室」「出一本高数教材，25 元」。
+> **v1.13 异步执行（B15）**：任务经 Celery 投递 —— 启用（`XJT_CELERY_ENABLED=true` + Redis + worker）时立即返回 `status=0`（`result.async=true`、`result.celery_task_id`），前端轮询 `GET /agent/tasks/{id}` 获取终态；未启用时 eager 就地同步执行，响应与旧版一致（直接含 `status=2/3` 与执行结果）。
 
 ### GET /agent/tasks — 任务列表
 查询参数 `?status=&page=&size=`；`data.items[]`：
@@ -503,9 +504,13 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 请求 `{ "title":"图书馆借阅规则","category":"图书馆","content":"...","source_url":"..." }`
 响应：`{ "doc_id":1, "chunks":12, "status":"ok" }`（写库后自动分块+向量化；embedding 未就绪时 `status="embed_failed"`，Ollama 就绪后重跑建索引）
 
-### POST /admin/knowledge/index — 重建知识库索引
+### POST /admin/knowledge/index — 重建知识库索引（B15 异步化）
 查询参数：`?force=true`（全量重建，默认 false 只处理待向量化文档）
-响应：`{ "total":12, "ok":12, "failed":0, "details":[{"doc_id":1,"chunks":12,"status":"ok"}] }`
+- Celery 启用：响应 `{ "async": true, "celery_task_id": "..." }`，用下方状态接口查询进度；
+- 未启用（无 Redis）：eager 同步执行，响应 `{ "total":12, "ok":12, "failed":0, "details":[...] }`（与旧版一致）。
+
+### GET /admin/knowledge/index-status/{task_id} — 索引构建状态（v1.13 新增）
+响应 `data`：`{ "task_id":"...", "state":"SUCCESS", "result": { "total":27, "ok":27, "failed":0 } }`
 
 ### GET /admin/forum/audit — 待审核帖子
 `data.items[]`：`{ "id":5,"title":"...","content":"...","author_id":1 }`（对应 `ForumDAO.pending_audit`）
@@ -600,4 +605,5 @@ Invoke-RestMethod -Method Post -Uri "$base/agent/tasks" -Headers $H -ContentType
 | v1.10 | 2026-09-12 | B11 推荐数据消费：`GET /topics/feed` 由纯时间序升级为混合打分（兴趣标签 + 行为偏好 + 热度 + 时效），逐条返回 `score/reason/matched_tags`；冷启动回落热度榜（`services/recommend.py`） |
 | v1.11 | 2026-09-12 | B13 路网导航：`POST /map/navigate` 由两点直线升级为网格 A* 路网寻路（`services/route.py`，30m 网格 + 建筑 45m 缓冲障碍 + 共线压缩）；响应新增 `straight_distance`（绕行对比）/`algorithm`/`start_source`（起点来源），起点缺省改为距目标最近的 POI |
 | v1.12 | 2026-09-12 | B14 上传加固与存储抽象：新增 `core/url_sign.py`（HMAC 签名 + 过期）与 `services/storage.py`（本地 / S3 / OSS 可切换）；`POST /upload/image` 返回签名访问 URL，`/static/uploads/*` 校验签名（无签名/过期返回 403）；配合既有魔数白名单与安全响应头构成完整上传安全基线 |
+| v1.13 | 2026-09-12 | B15 异步化：接入 Celery + Redis（`core/celery_app.py` + `app/tasks.py`），Agent 任务与知识库索引构建改经队列投递；未启用时 eager 就地同步执行（行为与旧版一致）；新增 `GET /admin/knowledge/index-status/{task_id}`；`GET /health/detail` 新增 `celery` 运行模式字段 |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |

@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     upload_url_ttl_seconds: int = 604800      # 签名有效期（7 天）
     upload_url_secret: str = ""               # 留空则从 jwt_secret 派生
 
+    # ---------- 异步任务（B15：Celery + Redis）----------
+    # false=无 Redis 环境：eager 就地同步执行（行为与旧实现一致，链路已接 Celery）；
+    # true=真异步：需启动 Redis 与 worker——
+    #   celery -A app.core.celery_app:celery_app worker -l info -P solo
+    celery_enabled: bool = False
+    celery_broker_url: str = "redis://127.0.0.1:6379/0"
+    celery_result_backend: str = "redis://127.0.0.1:6379/1"
+
     # ---------- 派生属性 ----------
 
     @property

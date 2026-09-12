@@ -14,6 +14,7 @@ import time
 import httpx
 from fastapi import APIRouter
 
+from app.core.celery_app import celery_status
 from app.core.config import settings
 from app.db import cpp_bridge
 from app.services import rag
@@ -116,6 +117,7 @@ async def health_detail():
         "knowledge": {"docs": docs, "chunks": chunks},
         "retrieval_mode": retrieval_mode,
         "degrade_reason": degrade_reason,
+        "celery": celery_status(),
     }
 
 

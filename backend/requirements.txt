@@ -18,10 +18,12 @@ PyJWT>=2.8
 SQLAlchemy>=2.0
 alembic>=1.13
 
-# ---- 缓存 / 异步任务 ----
-# 说明：**当前未使用**（Agent 任务、索引构建均为同步执行）；
-#       Celery + Redis 异步化见任务排期 B15，届时启用。
-redis>=5.0
+# ---- 缓存 / 异步任务（B15 已接入）----
+# Agent 长任务与知识库索引构建经 Celery 投递；未启用
+# （XJT_CELERY_ENABLED=false）时降级 eager 就地同步执行，无需 Redis 亦可运行。
+# ⚠️ redis-py 固定在 4.x：5.x 客户端默认协商 RESP3（HELLO 命令），
+#    与 Windows 常用 Redis 5.0.14 不兼容（报 unknown command `HELLO`）。
+redis>=4.5.2,<5
 celery>=5.3
 
 # ---- AI 相关 ----
