@@ -1,0 +1,36 @@
+/* 登录页样式（主题色 #4A90D9） */
+.login {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 200rpx;
+}
+
+.brand {
+  text-align: center;
+  margin-bottom: 140rpx;
+}
+
+.logo {
+  font-size: 64rpx;
+  font-weight: bold;
+  color: #4A90D9;
+}
+
+.slogan {
+  margin-top: 20rpx;
+  font-size: 26rpx;
+  color: #999999;
+}
+
+.login-btn {
+  width: 80%;
+  background-color: #4A90D9;
+  color: #ffffff;
+  font-size: 32rpx;
+  border-radius: 48rpx;
+}
+
+.login-btn::after {
+  border: none;
+}

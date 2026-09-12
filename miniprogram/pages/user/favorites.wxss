@@ -1,0 +1,44 @@
+/* 我的收藏（F8） */
+.seg {
+  display: flex;
+  margin: 0 24rpx 20rpx;
+  background: #ffffff;
+  border-radius: 20rpx;
+  overflow: hidden;
+}
+.seg-item {
+  flex: 1;
+  text-align: center;
+  height: 80rpx;
+  line-height: 80rpx;
+  font-size: 28rpx;
+  color: #666666;
+}
+.seg-active {
+  background: #4A90D9;
+  color: #ffffff;
+}
+.fav-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.fav-meta {
+  margin-top: 12rpx;
+  display: flex;
+  align-items: center;
+  font-size: 24rpx;
+  color: #999999;
+}
+.fav-price {
+  color: #e5484d;
+  font-weight: 600;
+  margin-right: 20rpx;
+}
+.fav-time {
+  margin-left: auto;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

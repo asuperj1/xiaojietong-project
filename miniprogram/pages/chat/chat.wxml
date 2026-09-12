@@ -1,0 +1,74 @@
+<!-- AI 对话页（F4）：顶部操作条 + 消息列表 + 底部输入 -->
+<view class="chat-page">
+  <!-- 顶部操作条：【+ 新会话】/【历史】 -->
+  <view class="top-bar">
+    <button class="top-btn" bindtap="onNewConversation">+ 新会话</button>
+    <button class="top-btn" bindtap="onHistory">历史</button>
+  </view>
+
+  <scroll-view
+    class="msg-scroll"
+    scroll-y
+    scroll-into-view="{{scrollIntoView}}"
+    scroll-with-animation
+  >
+    <!-- 空会话欢迎 -->
+    <view wx:if="{{messages.length === 0}}" class="welcome">
+      <view class="welcome-icon">🤖</view>
+      <view class="welcome-title">你好，我是校捷通 AI 助手</view>
+      <view class="welcome-sub">关于校园的一切，都可以问我</view>
+    </view>
+
+    <view
+      class="msg-row msg-row--{{item.role}}"
+      wx:for="{{messages}}"
+      wx:key="localId"
+      id="msg-{{item.localId}}"
+    >
+      <view class="bubble">
+        <text wx:if="{{item.content}}" class="bubble-text" user-select>{{item.content}}</text>
+        <text wx:elif="{{sending && !item.stopped}}" class="bubble-text bubble-text--typing">正在回答…</text>
+
+        <!-- 主动停止提示 -->
+        <view wx:if="{{item.stopped}}" class="stopped-tip">已停止生成</view>
+
+        <!-- 参考资料 -->
+        <view wx:if="{{item.role === 'assistant' && item.sources.length}}" class="sources">
+          <view class="sources-title">参考资料</view>
+          <view class="source-item" wx:for="{{item.sources}}" wx:for-item="src" wx:key="id">
+            <view class="source-head">
+              <text wx:if="{{src.category}}" class="source-category">{{src.category}}</text>
+              <text class="source-title">{{src.title}}</text>
+            </view>
+            <view wx:if="{{src.content}}" class="source-content">{{src.content}}</view>
+          </view>
+        </view>
+      </view>
+    </view>
+  </scroll-view>
+
+  <!-- 底部输入栏 -->
+  <view class="input-bar">
+    <input
+      class="input"
+      value="{{inputValue}}"
+      placeholder="请输入你的问题"
+      confirm-type="send"
+      bindinput="onInput"
+      bindconfirm="onSend"
+    />
+    <button
+      wx:if="{{sending}}"
+      class="stop-btn"
+      size="mini"
+      bindtap="onStop"
+    >停止</button>
+    <button
+      wx:else
+      class="send-btn"
+      size="mini"
+      disabled="{{!inputValue}}"
+      bindtap="onSend"
+    >发送</button>
+  </view>
+</view>

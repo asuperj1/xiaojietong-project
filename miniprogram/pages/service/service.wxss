@@ -1,0 +1,26 @@
+/* 服务页（业务大宫格） */
+.grid-card {
+  display: flex;
+  flex-wrap: wrap;
+  background: #ffffff;
+  border-radius: 24rpx;
+  margin: 0 24rpx;
+  padding: 16rpx 0;
+}
+.grid-item {
+  width: 25%;
+  text-align: center;
+  padding: 24rpx 0;
+  box-sizing: border-box;
+}
+.grid-icon {
+  width: 96rpx;
+  height: 96rpx;
+  display: block;
+  margin: 0 auto;
+}
+.grid-name {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: #333333;
+}

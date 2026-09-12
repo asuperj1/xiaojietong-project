@@ -1,0 +1,139 @@
+/* 首页（F3）：白底、蓝色主色、圆角卡片、简洁校园风格 */
+.page {
+  min-height: 100vh;
+  padding: 24rpx 32rpx 60rpx;
+  box-sizing: border-box;
+}
+
+/* 顶部标题 */
+.header {
+  margin: 8rpx 0 20rpx;
+}
+.brand {
+  font-size: 48rpx;
+  font-weight: 700;
+  color: #4A90D9;
+}
+
+/* 欢迎区 */
+.welcome {
+  background: linear-gradient(135deg, #4A90D9, #6FB1E8);
+  border-radius: 24rpx;
+  padding: 36rpx 32rpx;
+  color: #ffffff;
+  margin-bottom: 24rpx;
+}
+.welcome-title {
+  font-size: 36rpx;
+  font-weight: 600;
+}
+.welcome-sub {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  opacity: 0.9;
+}
+
+/* 搜索框 */
+.search-bar {
+  display: flex;
+  align-items: center;
+  background: #ffffff;
+  border-radius: 40rpx;
+  padding: 16rpx 28rpx;
+  box-shadow: 0 4rpx 16rpx rgba(74, 144, 217, 0.08);
+  margin-bottom: 24rpx;
+}
+.search-icon {
+  font-size: 28rpx;
+  margin-right: 12rpx;
+}
+.search-input {
+  flex: 1;
+  font-size: 28rpx;
+}
+
+/* 快捷指令 */
+.quick-row {
+  display: flex;
+  margin: 0 -8rpx 24rpx;
+}
+.quick-chip {
+  flex: 1;
+  margin: 0 8rpx;
+  text-align: center;
+  background: #eef5fc;
+  color: #4A90D9;
+  border: 2rpx solid #4A90D9;
+  border-radius: 36rpx;
+  padding: 14rpx 0;
+  font-size: 26rpx;
+  font-weight: 500;
+}
+.quick-chip--disabled {
+  opacity: 0.5;
+}
+
+/* 10 宫格 */
+.grid-card {
+  display: flex;
+  flex-wrap: wrap;
+  background: #ffffff;
+  border-radius: 24rpx;
+  padding: 16rpx 0;
+  box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.04);
+}
+.grid-item {
+  width: 20%;
+  text-align: center;
+  padding: 20rpx 0;
+  box-sizing: border-box;
+}
+.grid-icon {
+  width: 96rpx;
+  height: 96rpx;
+  display: block;
+  margin: 0 auto;
+}
+.grid-name {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: #333333;
+}
+
+/* 热门帖子 */
+.hot-card {
+  background: #ffffff;
+  border-radius: 24rpx;
+  padding: 24rpx;
+  margin-top: 24rpx;
+  box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.04);
+}
+.hot-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 12rpx;
+}
+.hot-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #f5f5f5;
+}
+.hot-item:last-child {
+  border-bottom: none;
+}
+.hot-text {
+  flex: 1;
+  font-size: 28rpx;
+  color: #333333;
+  margin-right: 16rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hot-meta {
+  font-size: 22rpx;
+  color: #999999;
+}

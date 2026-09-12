@@ -1,0 +1,34 @@
+<!-- 我的（F8） -->
+<view class="xj-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card profile">
+      <image wx:if="{{user.avatar}}" class="avatar" src="{{user.avatar}}" mode="aspectFill" />
+      <view wx:else class="avatar avatar-text">{{user.nickname ? user.nickname[0] : '校'}}</view>
+      <view class="profile-info">
+        <view class="nickname">{{user.nickname || '未设置昵称'}}</view>
+        <view class="sub">{{user.student_no || '学号未设置'}}<text wx:if="{{user.major}}"> · {{user.major}}</text></view>
+        <view class="sub" wx:if="{{user.grade || user.campus}}">{{user.grade}}<text wx:if="{{user.campus}}"> · {{user.campus}}</text></view>
+      </view>
+    </view>
+
+    <view class="xj-card menu">
+      <view class="menu-item" wx:for="{{menus}}" wx:key="name" data-url="{{item.url}}" bindtap="onMenuTap">
+        <text>{{item.name}}</text>
+        <text class="arrow">›</text>
+      </view>
+    </view>
+
+    <view class="logout-wrap">
+      <button class="xj-btn-plain logout-btn" bindtap="logout">退出登录</button>
+    </view>
+  </block>
+</view>

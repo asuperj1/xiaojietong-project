@@ -1,0 +1,79 @@
+/* 兼职实习（F9-B） */
+.topbar {
+  padding: 16rpx 24rpx;
+}
+.search {
+  height: 68rpx;
+  background: #ffffff;
+  border-radius: 34rpx;
+  padding: 0 28rpx;
+  font-size: 28rpx;
+  box-sizing: border-box;
+}
+.tabs {
+  display: flex;
+  padding: 0 24rpx 16rpx;
+}
+.tab {
+  font-size: 26rpx;
+  color: #666666;
+  padding: 8rpx 24rpx;
+  margin-right: 8rpx;
+  border-radius: 28rpx;
+  background: #ffffff;
+}
+.tab-active {
+  background: #4A90D9;
+  color: #ffffff;
+}
+.job-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.job-title {
+  flex: 1;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.job-salary {
+  font-size: 32rpx;
+  color: #e5484d;
+  font-weight: 700;
+}
+.job-company {
+  margin-top: 10rpx;
+  font-size: 26rpx;
+  color: #666666;
+}
+.job-desc {
+  margin-top: 12rpx;
+  font-size: 26rpx;
+  color: #999999;
+  line-height: 1.5;
+}
+.job-meta {
+  margin-top: 16rpx;
+  display: flex;
+  align-items: center;
+}
+.tag-type {
+  background: #eef5fc;
+  color: #4A90D9;
+}
+.meta-time {
+  margin-left: auto;
+  font-size: 22rpx;
+  color: #cccccc;
+}
+.list-end {
+  text-align: center;
+  color: #cccccc;
+  font-size: 24rpx;
+  padding: 20rpx 0;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

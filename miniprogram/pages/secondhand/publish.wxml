@@ -1,0 +1,21 @@
+<!-- 发布二手（F9-A） -->
+<view class="xj-page">
+  <view class="xj-card">
+    <input class="f-input" placeholder="标题（如 高数教材 9 成新）" value="{{title}}" bindinput="onTitle" maxlength="60" />
+    <textarea class="f-textarea" placeholder="描述物品成色、购入渠道等" value="{{description}}" bindinput="onDescription" maxlength="2000"></textarea>
+    <view class="f-row">
+      <text class="f-label">分类</text>
+      <picker range="{{cats}}" value="{{catIndex}}" bindchange="onCatChange">
+        <view class="f-picker">{{cats[catIndex]}}</view>
+      </picker>
+    </view>
+    <view class="f-row">
+      <text class="f-label">价格</text>
+      <input class="f-price" type="digit" placeholder="元" value="{{price}}" bindinput="onPrice" />
+    </view>
+    <button class="xj-btn-plain ai-btn" disabled="{{aiLoading}}" bindtap="onAiDescribe">{{aiLoading ? 'AI 生成中…' : 'AI 帮我描述'}}</button>
+  </view>
+  <view class="foot">
+    <button class="xj-btn-primary submit-btn" disabled="{{submitting}}" bindtap="onSubmit">发布</button>
+  </view>
+</view>

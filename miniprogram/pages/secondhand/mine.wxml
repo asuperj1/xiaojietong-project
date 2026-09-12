@@ -1,0 +1,33 @@
+<!-- 我的发布（F9-A） -->
+<view class="xj-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{items.length === 0}}">
+    <view class="xj-empty"><text class="xj-empty-icon">🛍️</text>还没有发布闲置物品</view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{items}}" wx:key="id">
+      <view class="top">
+        <text class="title">{{item.title}}</text>
+        <text class="xj-tag status-tag">{{item.statusText}}</text>
+      </view>
+      <view class="meta">
+        <text wx:if="{{item.auditText}}" class="audit">{{item.auditText}}</text>
+        <text class="price">¥{{item.price}}</text>
+        <text class="time">{{item.time}}</text>
+      </view>
+      <view class="actions" wx:if="{{item.onSale || item.offSale}}">
+        <button wx:if="{{item.onSale}}" class="xj-btn-plain act-btn" data-id="{{item.id}}" data-status="2" bindtap="onToggleStatus">下架</button>
+        <button wx:if="{{item.offSale}}" class="xj-btn-primary act-btn" data-id="{{item.id}}" data-status="0" bindtap="onToggleStatus">上架</button>
+      </view>
+    </view>
+  </block>
+</view>

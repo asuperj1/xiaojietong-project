@@ -1,0 +1,28 @@
+<!-- 订单详情（F9-D） -->
+<view class="xj-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card">
+      <view class="top">
+        <text class="status">{{order.statusText}}</text>
+        <text class="pay">实付 ¥{{order.pay_amount}}</text>
+      </view>
+      <view class="time">{{order.time}}</view>
+    </view>
+    <view class="xj-card">
+      <view class="sec-title">商品明细</view>
+      <view class="item" wx:for="{{items}}" wx:key="id">
+        <text>{{item.name}}</text>
+        <text>x{{item.num}}</text>
+      </view>
+    </view>
+  </block>
+</view>
