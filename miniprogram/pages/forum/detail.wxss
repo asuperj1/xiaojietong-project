@@ -37,6 +37,10 @@
   margin-left: 8rpx;
   color: #999999;
 }
+/* 点赞请求中：视觉反馈 + 忽略后续点击（见 onLike 的 liking 标志） */
+.act--busy {
+  opacity: 0.5;
+}
 .cmt-title {
   font-size: 30rpx;
   font-weight: 600;

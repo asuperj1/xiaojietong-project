@@ -10,18 +10,38 @@ const BASE_URL = 'http://127.0.0.1:8000/api/v1'
 // token 在本地存储中的键名（与 app.js 及规格书 §0 登录页保持一致）
 const TOKEN_KEY = 'token'
 
+// 登录态失效的错误码：2001 未登录 / 2002 token 失效 / 2003 无权限
+// 后端 2003（HTTP 403）当前由 core/deps.py 的 get_current_user 用于「用户不存在」「账号已禁用」，
+// 小程序端只调用用户接口，因此 2003 同属登录态失效，需与 2001/2002 一并处理；
+// （get_current_admin 的「需要管理员权限」小程序不会触发）
+const AUTH_FAILURE_CODES = [2001, 2002, 2003]
+
+// 按错误码生成提示文案：2003 场景给出「账号已被禁用」的明确指引
+function authFailureMessage(code, message) {
+  if (code === 2003) {
+    const text = String(message || '')
+    // 后端默认文案为「无权限」，对用户无意义；命中禁用时统一给可操作提示
+    if (!text || text === '无权限' || text.indexOf('禁用') !== -1) {
+      return '账号已被禁用，请联系管理员'
+    }
+    return text
+  }
+  return message || '登录已过期，请重新登录'
+}
+
 // 登录失效统一处理：清理无效登录态并跳转登录页（request 与 sseRequest 共用，保证语义一致）
-function handleAuthFailure(message) {
+function handleAuthFailure(code, message) {
   wx.removeStorageSync(TOKEN_KEY)
   wx.removeStorageSync('refresh_token')
   wx.removeStorageSync('user')
   // 同步清空 globalData，避免内存态与存储态不一致
-  const app = getApp()
+  // （此处位于回调中，App 已初始化；仍做存在性判断以防异常环境）
+  const app = typeof getApp === 'function' ? getApp() : null
   if (app && app.globalData) {
     app.globalData.token = ''
     app.globalData.userInfo = null
   }
-  wx.showToast({ title: message || '登录已过期，请重新登录', icon: 'none' })
+  wx.showToast({ title: authFailureMessage(code, message), icon: 'none' })
   wx.reLaunch({ url: '/pages/auth/login' })
 }
 
@@ -70,9 +90,9 @@ function request(path, { method = 'GET', data = {} } = {}) {
         err.code = code
         err.message = message || '请求失败'
 
-        // 登录失效（未登录 / token 过期）：复用统一登录失效处理
-        if (code === 2001 || code === 2002) {
-          handleAuthFailure(message)
+        // 登录态失效（未登录 / token 过期 / 账号禁用）：复用统一登录失效处理
+        if (AUTH_FAILURE_CODES.indexOf(code) !== -1) {
+          handleAuthFailure(code, message)
           reject(err)
           return
         }
@@ -195,6 +215,10 @@ function sseRequest(path, data = {}, { onSources, onChunk, onDone, onError } = {
         // 文档定义的 error 事件：后端当前不一定发送，收到则转 onError
         const e = new Error((payload && payload.message) || '服务返回错误')
         if (payload && payload.code) e.code = payload.code
+        // 事件内携带登录态失效码时同样统一处理，保证与 request() 语义一致
+        if (payload && AUTH_FAILURE_CODES.indexOf(payload.code) !== -1) {
+          handleAuthFailure(payload.code, payload.message)
+        }
         safeError(e)
         break
       }
@@ -245,9 +269,9 @@ function sseRequest(path, data = {}, { onSources, onChunk, onDone, onError } = {
     const err = new Error(message || '请求失败')
     err.code = code
     err.message = message || '请求失败'
-    if (code === 2001 || code === 2002) {
+    if (AUTH_FAILURE_CODES.indexOf(code) !== -1) {
       // handleAuthFailure 内部已含 toast，避免重复提示
-      handleAuthFailure(message)
+      handleAuthFailure(code, message)
       safeError(err)
       return
     }

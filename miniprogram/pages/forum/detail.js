@@ -11,6 +11,7 @@ Page({
     loading: true,
     error: '',
     sending: false,
+    liking: false,
   },
 
   onLoad(options) {
@@ -38,16 +39,21 @@ Page({
   },
 
   onLike() {
+    // 后端为 toggle 语义：请求期间忽略后续点击，避免连点两次把状态翻转回原点
+    if (this.data.liking) return
     const id = this.data.id
+    this.setData({ liking: true })
     request('/topics/' + id + '/like', { method: 'POST' })
       .then((res) => {
         const topic = this.data.topic
+        // 不做前端乐观更新，一律以服务端返回的 liked / like_count 为准
         this.setData({
           'topic.liked': !!res.liked,
           'topic.like_count': res.like_count != null ? res.like_count : topic.like_count,
+          liking: false,
         })
       })
-      .catch(() => {})
+      .catch(() => this.setData({ liking: false }))
   },
 
   onFavorite() {

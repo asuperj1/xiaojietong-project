@@ -22,15 +22,19 @@ Page({
     this.setData({ loading: true, error: '' })
     request('/favorites', { data: { target_type: this.data.tab } })
       .then((res) => {
-        const items = ((res && res.items) || []).map((it) => ({
-          id: it.id,
-          title: it.title,
-          category: it.category,
-          price: it.price,
-          likeCount: it.like_count,
-          commentCount: it.comment_count,
-          time: formatTime(it.favorited_at || it.created_at),
-        }))
+        const items = ((res && res.items) || []).map((it) => {
+          // 后端收藏对象 id 可能为字符串：统一归一化为数字，否则 onItemTap 的严格相等匹配不上
+          const numId = Number(it.id)
+          return {
+            id: Number.isFinite(numId) ? numId : it.id,
+            title: it.title,
+            category: it.category,
+            price: it.price,
+            likeCount: it.like_count,
+            commentCount: it.comment_count,
+            time: formatTime(it.favorited_at || it.created_at),
+          }
+        })
         this.setData({ items, loading: false })
       })
       .catch(() => this.setData({ loading: false, error: '加载失败，请稍后重试' }))

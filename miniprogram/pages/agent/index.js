@@ -34,12 +34,18 @@ Page({
     this.setData({ loading: true, error: '' })
     request('/agent/tasks', { data: { page: 1, size: 20 } })
       .then((res) => {
-        const tasks = ((res && res.items) || []).map((t) => ({
-          ...t,
-          statusText: STATUS_TEXT[Number(t.status)] || '未知',
-          time: formatTime(t.created_at),
-          cancelable: Number(t.status) === 0 || Number(t.status) === 1,
-        }))
+        const tasks = ((res && res.items) || []).map((t) => {
+          // 后端任务 id 可能为字符串（如 "1"）：统一规范为数字，
+          // 否则 dataset 取回后 Number(...) 与字符串 id 严格相等匹配不上，点击无反应
+          const numId = Number(t.id)
+          return {
+            ...t,
+            id: Number.isFinite(numId) ? numId : t.id,
+            statusText: STATUS_TEXT[Number(t.status)] || '未知',
+            time: formatTime(t.created_at),
+            cancelable: Number(t.status) === 0 || Number(t.status) === 1,
+          }
+        })
         this.setData({ tasks, loading: false })
       })
       .catch(() => this.setData({ loading: false, error: '加载失败，请稍后重试' }))

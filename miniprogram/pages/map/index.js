@@ -23,7 +23,10 @@ Page({
   },
 
   onCatChange(e) {
-    this.setData({ catIndex: Number(e.detail.value) }, () => this.fetch())
+    // 分类 tab 是 bindtap（不是 picker）：索引来自 data-index，e.detail 中没有 value
+    const index = Number(e.currentTarget.dataset.index)
+    if (!Number.isInteger(index) || index < 0 || index >= this.data.cats.length) return
+    this.setData({ catIndex: index }, () => this.fetch())
   },
 
   onSearchInput(e) {
@@ -41,6 +44,11 @@ Page({
         let items = (res && res.items) || []
         const q = (this.data.q || '').trim()
         if (q) items = items.filter((it) => (it.name || '').indexOf(q) !== -1)
+        items = items.map((it) => {
+          // 后端 poi.id 可能为字符串：统一归一化为数字，否则 onPoiTap 严格相等匹配不上
+          const numId = Number(it.id)
+          return { ...it, id: Number.isFinite(numId) ? numId : it.id }
+        })
         this.setData({ items, loading: false })
       })
       .catch(() => this.setData({ loading: false, error: '加载失败，请稍后重试' }))
@@ -54,7 +62,13 @@ Page({
         request('/map/nearby', {
           data: { lat: loc.latitude, lng: loc.longitude, radius: 1000 },
         })
-          .then((res) => this.setData({ items: (res && res.items) || [], loading: false }))
+          .then((res) => {
+            const items = ((res && res.items) || []).map((it) => {
+              const numId = Number(it.id)
+              return { ...it, id: Number.isFinite(numId) ? numId : it.id }
+            })
+            this.setData({ items, loading: false })
+          })
           .catch(() => this.setData({ loading: false, error: '加载失败，请稍后重试' }))
       },
       fail: () => wx.showToast({ title: '无法获取位置', icon: 'none' }),

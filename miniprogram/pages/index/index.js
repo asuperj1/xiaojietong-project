@@ -1,8 +1,6 @@
 // 首页（Tab）—— F3：10 宫格入口 + 快捷指令
 const { request } = require('../../services/request')
 
-const app = getApp()
-
 Page({
   data: {
     keyword: '',        // 搜索框输入
@@ -25,8 +23,10 @@ Page({
   },
 
   onLoad() {
+    // getApp() 需在页面生命周期内调用（模块顶层时 App 可能尚未初始化完成）
+    this._app = getApp()
     // 页面初始化完成后检查登录态（保留 F2 登录逻辑，不破坏）
-    app.checkLogin()
+    if (this._app) this._app.checkLogin()
   },
 
   onShow() {
@@ -63,7 +63,8 @@ Page({
   onSearch() {
     const keyword = (this.data.keyword || '').trim()
     // 暂存关键词，供 F4 的 AI 页读取后自动带入
-    if (keyword && app.globalData) app.globalData.pendingSearch = keyword
+    const app = this._app || getApp()
+    if (keyword && app && app.globalData) app.globalData.pendingSearch = keyword
     wx.switchTab({ url: '/pages/chat/chat' })
   },
 

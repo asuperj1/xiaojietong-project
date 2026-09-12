@@ -32,7 +32,7 @@ Page({
     q: '',
     items: [],
     page: 1,
-    loading: true,
+    loading: false, // 初始必须为 false：fetchList() 用 loading 防重复请求，若初始为 true 则首次进入不请求
     error: '',
     finished: false,
     // 求购表单
@@ -43,7 +43,17 @@ Page({
   },
 
   onLoad() {
+    // 首屏加载：只在 onLoad 发一次，onShow 不无条件刷新（避免重复首屏请求）
     this.fetchList(true)
+  },
+
+  onShow() {
+    // 发布成功返回时按需刷新（标记由 publish.js 置位），消费后立即清空
+    const app = getApp()
+    if (app && app.globalData && app.globalData.secondhandNeedRefresh) {
+      app.globalData.secondhandNeedRefresh = false
+      this.refresh()
+    }
   },
 
   onPullDownRefresh() {
@@ -56,7 +66,10 @@ Page({
   },
 
   onCatChange(e) {
-    this.setData({ catIndex: Number(e.detail.value) }, () => this.refresh())
+    // 分类 tab 是 bindtap（不是 picker）：索引来自 data-index，e.detail 中没有 value
+    const index = Number(e.currentTarget.dataset.index)
+    if (!Number.isInteger(index) || index < 0 || index >= CATS.length) return
+    this.setData({ catIndex: index }, () => this.refresh())
   },
 
   onSearchInput(e) {
@@ -72,7 +85,12 @@ Page({
   },
 
   fetchList(reset, done) {
-    if (this.data.loading) return
+    if (this.data.loading) {
+      // 已有请求在途：不重复发起，但仍需回调 done（下拉刷新需停止动画，否则会一直转）
+      // 用 typeof 判断：bindtap="refresh" 会把事件对象当 done 传入
+      if (typeof done === 'function') done()
+      return
+    }
     const cat = CATS[this.data.catIndex]
     const page = reset ? 1 : this.data.page
     this.setData({ loading: true, error: '' })
@@ -91,11 +109,11 @@ Page({
           loading: false,
           finished: raw.length < 20,
         })
-        if (done) done()
+        if (typeof done === 'function') done()
       })
       .catch(() => {
         this.setData({ loading: false, error: '加载失败，请稍后重试' })
-        if (done) done()
+        if (typeof done === 'function') done()
       })
   },
 

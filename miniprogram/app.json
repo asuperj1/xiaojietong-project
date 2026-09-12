@@ -2,6 +2,7 @@
   "pages": [
     "pages/index/index",
     "pages/chat/chat",
+    "pages/chat/history",
     "pages/service/service",
     "pages/forum/forum",
     "pages/user/user",

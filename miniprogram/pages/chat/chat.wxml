@@ -1,5 +1,11 @@
-<!-- AI 对话页（F4）：消息列表 + 底部输入 -->
+<!-- AI 对话页（F4）：顶部操作条 + 消息列表 + 底部输入 -->
 <view class="chat-page">
+  <!-- 顶部操作条：【+ 新会话】/【历史】 -->
+  <view class="top-bar">
+    <button class="top-btn" bindtap="onNewConversation">+ 新会话</button>
+    <button class="top-btn" bindtap="onHistory">历史</button>
+  </view>
+
   <scroll-view
     class="msg-scroll"
     scroll-y
@@ -21,7 +27,10 @@
     >
       <view class="bubble">
         <text wx:if="{{item.content}}" class="bubble-text" user-select>{{item.content}}</text>
-        <text wx:elif="{{sending}}" class="bubble-text bubble-text--typing">正在回答…</text>
+        <text wx:elif="{{sending && !item.stopped}}" class="bubble-text bubble-text--typing">正在回答…</text>
+
+        <!-- 主动停止提示 -->
+        <view wx:if="{{item.stopped}}" class="stopped-tip">已停止生成</view>
 
         <!-- 参考资料 -->
         <view wx:if="{{item.role === 'assistant' && item.sources.length}}" class="sources">
@@ -49,9 +58,16 @@
       bindconfirm="onSend"
     />
     <button
+      wx:if="{{sending}}"
+      class="stop-btn"
+      size="mini"
+      bindtap="onStop"
+    >停止</button>
+    <button
+      wx:else
       class="send-btn"
       size="mini"
-      disabled="{{sending || !inputValue}}"
+      disabled="{{!inputValue}}"
       bindtap="onSend"
     >发送</button>
   </view>

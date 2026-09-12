@@ -27,16 +27,22 @@ Page({
     const path = this.data.mode === 'feed' ? '/life/notice-feed' : '/life/notices'
     request(path, { data: { page: 1, size: 20 } })
       .then((res) => {
-        const items = ((res && res.items) || []).map((n) => ({
-          ...n,
-          time: formatTime(n.publish_time),
-        }))
+        const items = ((res && res.items) || []).map((n) => {
+          // 后端通知 id 可能为字符串（如 "1"）：统一规范为数字，
+          // 否则 dataset 取回后 Number(...) 与字符串 id 严格相等匹配不上，点击无反应
+          const numId = Number(n.id)
+          return {
+            ...n,
+            id: Number.isFinite(numId) ? numId : n.id,
+            time: formatTime(n.publish_time),
+          }
+        })
         this.setData({ items, loading: false })
-        if (done) done()
+        if (typeof done === 'function') done()
       })
       .catch(() => {
         this.setData({ loading: false, error: '加载失败，请稍后重试' })
-        if (done) done()
+        if (typeof done === 'function') done()
       })
   },
 

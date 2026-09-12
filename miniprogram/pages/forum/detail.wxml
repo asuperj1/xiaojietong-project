@@ -19,7 +19,7 @@
       </view>
       <view class="detail-content">{{topic.content}}</view>
       <view class="detail-actions">
-        <view class="act" bindtap="onLike">
+        <view class="act {{liking ? 'act--busy' : ''}}" bindtap="onLike">
           <text>{{topic.liked ? '❤️ 已赞' : '🤍 点赞'}}</text>
           <text class="act-num">{{topic.like_count || 0}}</text>
         </view>

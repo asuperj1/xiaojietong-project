@@ -29,7 +29,12 @@ Page({
     this.setData({ loading: true, error: '' })
     request('/life/merchants/' + this.data.merchantId + '/menu')
       .then((res) => {
-        const items = ((res && res.items) || []).map((it) => ({ ...it, num: 0 }))
+        const items = ((res && res.items) || []).map((it) => {
+          // 后端菜单 id 可能为字符串（如 "2"）：统一规范为数字，
+          // 否则 dataset 取回后 Number(...) 与字符串 id 严格相等匹配不上，加购无反应
+          const numId = Number(it.id)
+          return { ...it, id: Number.isFinite(numId) ? numId : it.id, num: 0 }
+        })
         this.setData({ items, loading: false })
         this.recompute()
       })

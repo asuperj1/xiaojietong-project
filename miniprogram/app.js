@@ -5,6 +5,8 @@ App({
     token: '',      // 登录后由登录页写入
     userInfo: null, // 登录后缓存当前用户信息
     pendingSearch: '', // 首页搜索框携带的关键词，AI 页 onShow 读取后自动发送
+    chatRestore: null, // AI 历史会话回传：{ conversationId, messages }，chat 页读取后立即清空
+    secondhandNeedRefresh: false, // 二手发布成功后置 true，集市列表页 onShow 按需刷新
   },
 
   onLaunch() {

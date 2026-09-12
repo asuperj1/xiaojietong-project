@@ -1,8 +1,6 @@
 // 我的页（Tab）—— F8：用户基础信息 + 各业务入口 + 退出登录
 const { request } = require('../../services/request')
 
-const app = getApp()
-
 Page({
   data: {
     loading: true,
@@ -42,7 +40,9 @@ Page({
         wx.removeStorageSync('token')
         wx.removeStorageSync('refresh_token')
         wx.removeStorageSync('user')
-        if (app.globalData) {
+        // getApp() 在方法内按需获取（不在模块顶层调用）
+        const app = getApp()
+        if (app && app.globalData) {
           app.globalData.token = ''
           app.globalData.userInfo = null
         }

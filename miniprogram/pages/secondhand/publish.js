@@ -46,6 +46,9 @@ Page({
     })
       .then(() => {
         this.setData({ submitting: false })
+        // 打标记，让集市列表页在 onShow 时按需刷新（与 forumNeedRefresh 同一模式）
+        const app = getApp()
+        if (app && app.globalData) app.globalData.secondhandNeedRefresh = true
         wx.showToast({ title: '发布成功', icon: 'success' })
         setTimeout(() => wx.navigateBack(), 800)
       })

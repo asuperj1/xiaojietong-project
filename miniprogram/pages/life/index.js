@@ -27,21 +27,26 @@ Page({
   },
 
   onCatChange(e) {
-    this.setData({ catIndex: Number(e.detail.value) }, () => this.fetch())
+    // 分类 tab 是 bindtap（不是 picker）：索引来自 data-index，e.detail 中没有 value
+    const index = Number(e.currentTarget.dataset.index)
+    if (!Number.isInteger(index) || index < 0 || index >= CATS.length) return
+    this.setData({ catIndex: index }, () => this.fetch())
   },
 
   fetch(done) {
+    // 兜底：即使 catIndex 非法（NaN/越界）也不会取到 undefined.value 而抛错
+    const cat = CATS[this.data.catIndex] || CATS[0]
     this.setData({ loading: true, error: '' })
     request('/life/merchants', {
-      data: { category: CATS[this.data.catIndex].value, page: 1, size: 20 },
+      data: { category: cat.value, page: 1, size: 20 },
     })
       .then((res) => {
         this.setData({ items: (res && res.items) || [], loading: false })
-        if (done) done()
+        if (typeof done === 'function') done()
       })
       .catch(() => {
         this.setData({ loading: false, error: '加载失败，请稍后重试' })
-        if (done) done()
+        if (typeof done === 'function') done()
       })
   },
 
