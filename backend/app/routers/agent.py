@@ -1,9 +1,10 @@
 """AI Agent：任务创建/查询/取消、提醒。
 
 契约：docs/api.md §4
-说明：任务编排走 LLM Function Call（services/agent_executor.py），意图由模型解析为
-      工具调用后真实执行（写提醒/预约/发布）；模型不可用或未识别工具时降级为
-      关键词规则占位，链路不中断。
+编排（B5 + B7）三级链路：
+1. 模型可用 → LLM Function Call（services/agent_executor.py）；
+2. 模型不可用/未返回工具 → 规则执行器（services/rule_executor.py，**真写库**）；
+3. 两者都未识别 → status=3 失败 + error_msg（**禁止假成功**）。
 """
 
 from __future__ import annotations
@@ -16,17 +17,9 @@ from pydantic import BaseModel
 from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
 from app.db import cpp_bridge
-from app.services import agent_executor
+from app.services import agent_executor, rule_executor
 
 router = APIRouter(prefix="/agent", tags=["agent"])
-
-# 意图→任务类型 关键词规则（兜底；主路径为模型 Function Call）
-_INTENT_RULES = {
-    "reserve": ("预约", "reserve_seat"),
-    "remind": ("提醒", "add_reminder"),
-    "query": ("查询", "query_free_room"),
-    "publish": ("发布", "post_secondhand"),
-}
 
 
 class TaskIn(BaseModel):
@@ -47,11 +40,15 @@ async def create_task(body: TaskIn, user: dict = Depends(get_current_user)):
     )
     task_id = rows[1]
 
-    # 2) LLM Function Call 意图解析（None=模型不可用；[]=未识别到工具）
+    # 2) 三级链路：模型 Function Call → 规则执行器 → 明确失败
     calls = await agent_executor.plan_instruction(instruction)
+    source = "model"
+    if not calls:
+        calls = rule_executor.parse(instruction)
+        source = "rule"
 
     if calls:
-        # 3a) 主路径：真实执行工具
+        # 真实执行工具（写库）：add_reminder / reserve_seat / query_free_room / post_secondhand
         results, all_ok = agent_executor.execute_calls(uid, task_id, calls)
         task_type = agent_executor.TOOL_TASK_TYPE.get(calls[0]["name"], "query")
         plan = []
@@ -64,25 +61,16 @@ async def create_task(body: TaskIn, user: dict = Depends(get_current_user)):
             plan.append(item)
         error_msg = "；".join(r.get("error", "") for r in results if not r.get("ok"))
         status = 2 if all_ok else 3
-        result_payload = {"results": results}
+        result_payload = {"source": source, "results": results}
         params = json.dumps(calls, ensure_ascii=False)
     else:
-        # 3b) 降级：关键词规则占位（保链路可用）
-        task_type, tool = "query", ""
-        for key, (kw, t) in _INTENT_RULES.items():
-            if kw in instruction:
-                task_type, tool = key, t
-                break
-        note = (
-            "模型服务不可用，任务按关键词占位完成"
-            if calls is None
-            else "未识别到可执行工具，任务已记录"
-        )
-        plan = [{"tool": tool, "desc": f"执行{task_type}任务"}] if tool else []
-        error_msg = "" if tool else note
-        result_payload = {"task_id": task_id, "note": note}
+        # 3) 模型与规则都未识别 → 明确失败（不再出现"未执行任何工具却报成功"）
+        task_type = "unknown"
+        status = 3
+        error_msg = "无法识别指令意图：模型未返回工具调用，规则也未匹配"
+        plan = []
+        result_payload = {"source": "none", "results": [], "note": error_msg}
         params = json.dumps({"instruction": instruction}, ensure_ascii=False)
-        status = 2
 
     cpp_bridge.execute(
         "UPDATE agent_task SET task_type = ?, status = ?, params_json = ?, result_json = ?, "

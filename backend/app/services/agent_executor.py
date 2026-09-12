@@ -17,7 +17,7 @@ Ollama 未就绪 / 模型未返回工具调用时返回 None，由路由层回�
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
 import httpx
@@ -109,13 +109,16 @@ async def plan_instruction(instruction: str) -> Optional[list[dict]]:
     tools = load_tools()
     if not tools:
         return None
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_dt = datetime.now()
     system = (
-        "你是校捷通的 AI Agent，把用户的自然语言指令解析为工具调用。"
-        f"当前时间：{now}。\n"
-        "规则：1) 相对时间（今天/明天/后天/今晚/下午4点等）一律换算为绝对时间，"
+        "你是校捷通的 AI Agent，把用户的自然语言指令解析为工具调用。\n"
+        f"时间换算基准：当前时间 {now_dt.strftime('%Y-%m-%d %H:%M:%S')}；"
+        f"今天={now_dt.strftime('%Y-%m-%d')}，"
+        f"明天={(now_dt + timedelta(days=1)).strftime('%Y-%m-%d')}，"
+        f"后天={(now_dt + timedelta(days=2)).strftime('%Y-%m-%d')}。\n"
+        "规则：1) 相对时间（今天/明天/后天/今晚/下午4点等）必须按上述基准换算为绝对时间，"
         "格式 YYYY-MM-DD HH:MM；2) 只调用提供的工具，arguments 必须是合法 JSON 且参数齐全；"
-        "3) 日期取未来最近的自然日；4) 指令无法匹配任何工具时不要调用工具。"
+        "3) 指令无法匹配任何工具时不要调用工具。"
     )
     payload = {
         "model": settings.ollama_model,
