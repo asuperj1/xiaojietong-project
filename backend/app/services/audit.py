@@ -148,7 +148,7 @@ async def _model_verdict(text: str) -> Optional[dict]:
         "options": {"temperature": 0.1},
     }
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(_MODEL_TIMEOUT)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_MODEL_TIMEOUT), trust_env=False) as client:
             resp = await client.post(f"{settings.ollama_base_url}/api/chat", json=payload)
         if resp.status_code != 200:
             return None

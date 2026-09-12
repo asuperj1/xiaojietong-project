@@ -23,7 +23,7 @@ class ModelClient:
         """流式对话，逐块产出文本。失败/未就绪时产出占位说明。"""
         payload = {"model": self.model, "messages": messages, "stream": True}
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0), trust_env=False) as client:
                 async with client.stream(
                     "POST", f"{self.base_url}/api/chat", json=payload
                 ) as resp:
