@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     rag_score_threshold: float = 0.35    # 相似度阈值（低于则视为未收录）
     rag_vector_dir: str = "data/rag"     # 向量库持久化目录（相对 backend/）
 
+    # ---------- 文件存储与上传访问（B14）----------
+    # local=本地文件系统；s3/oss=对象存储（接口已预留，接入 SDK 后启用）
+    storage_backend: str = "local"
+    # 上传资源访问签名（默认开启）：/static/uploads 需携带 ?e=过期&s=签名 才能访问，
+    # 防止任意人枚举/盗链；上传接口返回的 url 会自动附带签名。
+    upload_signed_url_enabled: bool = True
+    upload_url_ttl_seconds: int = 604800      # 签名有效期（7 天）
+    upload_url_secret: str = ""               # 留空则从 jwt_secret 派生
+
     # ---------- 派生属性 ----------
 
     @property
