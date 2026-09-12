@@ -1,0 +1,204 @@
+{
+  "version": "1.0",
+  "created": "2026-09-12",
+  "task": "C14 · RAG 检索质量评估框架（标注集）",
+  "source": "题目依据 db/sql/99b_knowledge_faq.sql（9 篇）与 99d_knowledge_more.sql（18 篇）共 27 篇知识库文档编写",
+  "metrics": "hit@1 / hit@3 / hit@5 / MRR / 空结果率 / 负样本误命中率",
+  "notes": [
+    "expected_titles 为「期望命中的 knowledge_doc.title」，命中判定 = 检索结果的 title 命中其中任意一项",
+    "问题均为口语化提问（刻意与文档标题措辞不同），以检验语义检索泛化能力；若只用关键词 LIKE 匹配，命中率会显著低于向量检索 —— 这正是评估框架要暴露的差距",
+    "最后 2 条为负样本（expected_titles 为空）：知识库确实未收录，检索应返回空或低分，不应误报命中",
+    "key_points 供后续 C20（引用反向校验）与人工复核参考答案使用"
+  ],
+  "questions": [
+    {
+      "id": "Q01",
+      "category": "图书馆",
+      "question": "图书馆几点关门？",
+      "expected_titles": ["图书馆开放时间"],
+      "key_points": ["8:00-22:00", "节假日/寒暑假以公告为准", "闭馆前 15 分钟停止借还"]
+    },
+    {
+      "id": "Q02",
+      "category": "图书馆",
+      "question": "本科生一次最多能借几本书？",
+      "expected_titles": ["图书馆借阅规则"],
+      "key_points": ["本科生 10 册 / 借期 30 天", "研究生 20 册 / 60 天"]
+    },
+    {
+      "id": "Q03",
+      "category": "图书馆",
+      "question": "书还晚了要交滞纳金吗，多少钱？",
+      "expected_titles": ["图书馆借阅规则"],
+      "key_points": ["每册每天 0.1 元", "可续借 1 次、续期 30 天"]
+    },
+    {
+      "id": "Q04",
+      "category": "图书馆",
+      "question": "想找个安静的地方小组讨论，哪里能约研讨间？",
+      "expected_titles": ["图书馆研讨间与自助设备"],
+      "key_points": ["研讨间预约方式与自助设备位置"]
+    },
+    {
+      "id": "Q05",
+      "category": "图书馆",
+      "question": "放假回家了还能查知网论文吗？",
+      "expected_titles": ["图书馆电子资源与校外访问"],
+      "key_points": ["校外访问方式（VPN/代理/CARSI）"]
+    },
+    {
+      "id": "Q06",
+      "category": "生活",
+      "question": "感冒发烧了去哪个医院看？",
+      "expected_titles": ["校医院就医指南"],
+      "key_points": ["校医院位置/门诊时间", "急诊 24 小时"]
+    },
+    {
+      "id": "Q07",
+      "category": "生活",
+      "question": "在校医院看病能报销吗？要准备什么材料？",
+      "expected_titles": ["校医院就医指南"],
+      "key_points": ["需先开转诊单", "发票/费用明细/病历/转诊单", "30 天内提交"]
+    },
+    {
+      "id": "Q08",
+      "category": "生活",
+      "question": "饭卡丢了怎么挂失补办？",
+      "expected_titles": ["校园卡使用指南"],
+      "key_points": ["小程序/自助终端挂失", "带身份证或学生证到校园卡服务中心"]
+    },
+    {
+      "id": "Q09",
+      "category": "生活",
+      "question": "校车几分钟一趟，在哪儿坐？",
+      "expected_titles": ["校车时刻查询"],
+      "key_points": ["校车线路与时刻"]
+    },
+    {
+      "id": "Q10",
+      "category": "生活",
+      "question": "宿舍里能用热得快、电磁炉吗？",
+      "expected_titles": ["宿舍生活指南"],
+      "key_points": ["违规电器说明与安全要求"]
+    },
+    {
+      "id": "Q11",
+      "category": "生活",
+      "question": "我的快递到了去哪里取？",
+      "expected_titles": ["快递收发服务"],
+      "key_points": ["快递点位置与取件方式"]
+    },
+    {
+      "id": "Q12",
+      "category": "生活",
+      "question": "心理压力大，学校有免费的心理咨询吗？",
+      "expected_titles": ["心理咨询预约"],
+      "key_points": ["预约方式与咨询地点"]
+    },
+    {
+      "id": "Q13",
+      "category": "生活",
+      "question": "宿舍水管漏了找谁修，怎么报修？",
+      "expected_titles": ["宿舍报修与后勤服务"],
+      "key_points": ["报修渠道与响应时限"]
+    },
+    {
+      "id": "Q14",
+      "category": "教务",
+      "question": "什么时候开始选课，选课系统怎么进？",
+      "expected_titles": ["选课与校历安排", "校历关键时间节点", "教务系统与成绩查询"],
+      "key_points": ["选课时间与入口", "教务系统地址"]
+    },
+    {
+      "id": "Q15",
+      "category": "教务",
+      "question": "期末成绩在哪里查？",
+      "expected_titles": ["教务系统与成绩查询"],
+      "key_points": ["教务系统查询路径"]
+    },
+    {
+      "id": "Q16",
+      "category": "教务",
+      "question": "挂科了怎么补考，要重修吗？",
+      "expected_titles": ["补考重修与缓考办理"],
+      "key_points": ["补考/重修/缓考办理流程"]
+    },
+    {
+      "id": "Q17",
+      "category": "教务",
+      "question": "大四什么时候能申请毕业和学位？",
+      "expected_titles": ["毕业与学位申请"],
+      "key_points": ["毕业与学位申请条件与时间"]
+    },
+    {
+      "id": "Q18",
+      "category": "教务",
+      "question": "四六级什么时候报名，去哪儿报？",
+      "expected_titles": ["四六级报名与考试"],
+      "key_points": ["报名时间与报名入口"]
+    },
+    {
+      "id": "Q19",
+      "category": "奖励资助",
+      "question": "国家奖学金和励志奖学金怎么评，需要什么条件？",
+      "expected_titles": ["奖学金评定办法"],
+      "key_points": ["评定条件与流程"]
+    },
+    {
+      "id": "Q20",
+      "category": "奖励资助",
+      "question": "家里困难，助学贷款怎么申请？",
+      "expected_titles": ["国家助学贷款与助学金"],
+      "key_points": ["申请材料与流程"]
+    },
+    {
+      "id": "Q21",
+      "category": "信息化",
+      "question": "校园网怎么连？在校外怎么用学校 VPN？",
+      "expected_titles": ["校园网络与VPN使用"],
+      "key_points": ["校园网认证方式", "VPN 客户端与配置"]
+    },
+    {
+      "id": "Q22",
+      "category": "就业",
+      "question": "学校有招聘会吗，简历怎么投？",
+      "expected_titles": ["就业指导与校园招聘"],
+      "key_points": ["招聘会信息渠道与投递方式"]
+    },
+    {
+      "id": "Q23",
+      "category": "生活",
+      "question": "东西丢了去哪里找？",
+      "expected_titles": ["失物招领"],
+      "key_points": ["失物招领渠道"]
+    },
+    {
+      "id": "Q24",
+      "category": "生活",
+      "question": "体育馆怎么预约，羽毛球场地多少钱？",
+      "expected_titles": ["体育场馆开放与预约"],
+      "key_points": ["场馆预约方式与开放时间"]
+    },
+    {
+      "id": "Q25",
+      "category": "二手",
+      "question": "在校园里买二手怎么防止被骗？",
+      "expected_titles": ["校园二手交易安全提示"],
+      "key_points": ["交易安全注意事项"]
+    },
+    {
+      "id": "N01",
+      "category": "负样本",
+      "question": "今年寒假从哪一天开始放假？",
+      "expected_titles": [],
+      "key_points": ["知识库未收录具体放假日期（校历仅有关键时间节点），应返回空或低分"]
+    },
+    {
+      "id": "N02",
+      "category": "负样本",
+      "question": "计算机学院院长的办公室电话是多少？",
+      "expected_titles": [],
+      "key_points": ["知识库未收录院系联系方式，应返回空或低分（防编造）"]
+    }
+  ]
+}
