@@ -1,0 +1,547 @@
+{
+  "meta": {
+    "dataset": "ai/eval/rag_questions.json",
+    "_note_paths": "历史冻结产物：所有路径均相对于仓库根记录（原记录为作者机器绝对路径，已规范化）",
+    "top_k": 3,
+    "generated_at": "2026-09-12 19:09:38"
+  },
+  "summary": {
+    "n_total": 27,
+    "n_positive": 25,
+    "n_negative": 2,
+    "k": 3,
+    "hit@1": 0.92,
+    "hit@3": 1.0,
+    "hit@5": 1.0,
+    "mrr": 0.9533,
+    "empty_rate": 0.0,
+    "false_hit_rate": 1.0,
+    "latency_avg_ms": 692.1,
+    "latency_p50_ms": 43.5,
+    "vector_hit_rows": 27,
+    "retrieval_mode": "vector+fallback"
+  },
+  "by_category": [
+    {
+      "category": "二手",
+      "n": 1,
+      "hit@3": 1.0
+    },
+    {
+      "category": "信息化",
+      "n": 1,
+      "hit@3": 1.0
+    },
+    {
+      "category": "图书馆",
+      "n": 5,
+      "hit@3": 1.0
+    },
+    {
+      "category": "奖励资助",
+      "n": 2,
+      "hit@3": 1.0
+    },
+    {
+      "category": "就业",
+      "n": 1,
+      "hit@3": 1.0
+    },
+    {
+      "category": "教务",
+      "n": 5,
+      "hit@3": 1.0
+    },
+    {
+      "category": "生活",
+      "n": 10,
+      "hit@3": 1.0
+    }
+  ],
+  "rows": [
+    {
+      "id": "Q01",
+      "category": "图书馆",
+      "question": "图书馆几点关门？",
+      "expected_titles": [
+        "图书馆开放时间"
+      ],
+      "got_titles": [
+        "图书馆开放时间",
+        "图书馆借阅规则",
+        "图书馆研讨间与自助设备"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 5824.8,
+      "error": ""
+    },
+    {
+      "id": "Q02",
+      "category": "图书馆",
+      "question": "本科生一次最多能借几本书？",
+      "expected_titles": [
+        "图书馆借阅规则"
+      ],
+      "got_titles": [
+        "图书馆借阅规则",
+        "图书馆研讨间与自助设备",
+        "图书馆电子资源与校外访问"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 64.5,
+      "error": ""
+    },
+    {
+      "id": "Q03",
+      "category": "图书馆",
+      "question": "书还晚了要交滞纳金吗，多少钱？",
+      "expected_titles": [
+        "图书馆借阅规则"
+      ],
+      "got_titles": [
+        "图书馆借阅规则",
+        "补考重修与缓考办理",
+        "国家助学贷款与助学金"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 1470.7,
+      "error": ""
+    },
+    {
+      "id": "Q04",
+      "category": "图书馆",
+      "question": "想找个安静的地方小组讨论，哪里能约研讨间？",
+      "expected_titles": [
+        "图书馆研讨间与自助设备"
+      ],
+      "got_titles": [
+        "图书馆研讨间与自助设备",
+        "心理咨询预约",
+        "图书馆开放时间"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 3467.3,
+      "error": ""
+    },
+    {
+      "id": "Q05",
+      "category": "图书馆",
+      "question": "放假回家了还能查知网论文吗？",
+      "expected_titles": [
+        "图书馆电子资源与校外访问"
+      ],
+      "got_titles": [
+        "图书馆电子资源与校外访问",
+        "图书馆研讨间与自助设备",
+        "教务系统与成绩查询"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 1437.1,
+      "error": ""
+    },
+    {
+      "id": "Q06",
+      "category": "生活",
+      "question": "感冒发烧了去哪个医院看？",
+      "expected_titles": [
+        "校医院就医指南"
+      ],
+      "got_titles": [
+        "校医院就医指南",
+        "实验室安全与设备借用",
+        "图书馆电子资源与校外访问"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 42.4,
+      "error": ""
+    },
+    {
+      "id": "Q07",
+      "category": "生活",
+      "question": "在校医院看病能报销吗？要准备什么材料？",
+      "expected_titles": [
+        "校医院就医指南"
+      ],
+      "got_titles": [
+        "校医院就医指南",
+        "国家助学贷款与助学金",
+        "奖学金评定办法"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 46.8,
+      "error": ""
+    },
+    {
+      "id": "Q08",
+      "category": "生活",
+      "question": "饭卡丢了怎么挂失补办？",
+      "expected_titles": [
+        "校园卡使用指南"
+      ],
+      "got_titles": [
+        "失物招领",
+        "校园卡使用指南",
+        "食堂就餐与消费"
+      ],
+      "n_hits": 3,
+      "rank": 2,
+      "vector_used": true,
+      "latency_ms": 41.8,
+      "error": ""
+    },
+    {
+      "id": "Q09",
+      "category": "生活",
+      "question": "校车几分钟一趟，在哪儿坐？",
+      "expected_titles": [
+        "校车时刻查询"
+      ],
+      "got_titles": [
+        "校车时刻查询",
+        "校医院就医指南",
+        "食堂就餐与消费"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 55.2,
+      "error": ""
+    },
+    {
+      "id": "Q10",
+      "category": "生活",
+      "question": "宿舍里能用热得快、电磁炉吗？",
+      "expected_titles": [
+        "宿舍生活指南"
+      ],
+      "got_titles": [
+        "宿舍报修与后勤服务",
+        "图书馆研讨间与自助设备",
+        "宿舍生活指南"
+      ],
+      "n_hits": 3,
+      "rank": 3,
+      "vector_used": true,
+      "latency_ms": 53.6,
+      "error": ""
+    },
+    {
+      "id": "Q11",
+      "category": "生活",
+      "question": "我的快递到了去哪里取？",
+      "expected_titles": [
+        "快递收发服务"
+      ],
+      "got_titles": [
+        "快递收发服务",
+        "失物招领",
+        "食堂就餐与消费"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 1391.5,
+      "error": ""
+    },
+    {
+      "id": "Q12",
+      "category": "生活",
+      "question": "心理压力大，学校有免费的心理咨询吗？",
+      "expected_titles": [
+        "心理咨询预约"
+      ],
+      "got_titles": [
+        "心理咨询预约",
+        "就业指导与校园招聘",
+        "奖学金评定办法"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 1444.0,
+      "error": ""
+    },
+    {
+      "id": "Q13",
+      "category": "生活",
+      "question": "宿舍水管漏了找谁修，怎么报修？",
+      "expected_titles": [
+        "宿舍报修与后勤服务"
+      ],
+      "got_titles": [
+        "宿舍报修与后勤服务",
+        "校园网络与VPN使用",
+        "宿舍生活指南"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 43.5,
+      "error": ""
+    },
+    {
+      "id": "Q14",
+      "category": "教务",
+      "question": "什么时候开始选课，选课系统怎么进？",
+      "expected_titles": [
+        "选课与校历安排",
+        "校历关键时间节点",
+        "教务系统与成绩查询"
+      ],
+      "got_titles": [
+        "选课与校历安排",
+        "教务系统与成绩查询",
+        "校历关键时间节点"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 43.3,
+      "error": ""
+    },
+    {
+      "id": "Q15",
+      "category": "教务",
+      "question": "期末成绩在哪里查？",
+      "expected_titles": [
+        "教务系统与成绩查询"
+      ],
+      "got_titles": [
+        "教务系统与成绩查询",
+        "四六级报名与考试",
+        "奖学金评定办法"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 39.1,
+      "error": ""
+    },
+    {
+      "id": "Q16",
+      "category": "教务",
+      "question": "挂科了怎么补考，要重修吗？",
+      "expected_titles": [
+        "补考重修与缓考办理"
+      ],
+      "got_titles": [
+        "补考重修与缓考办理",
+        "选课与校历安排",
+        "教务系统与成绩查询"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 1450.7,
+      "error": ""
+    },
+    {
+      "id": "Q17",
+      "category": "教务",
+      "question": "大四什么时候能申请毕业和学位？",
+      "expected_titles": [
+        "毕业与学位申请"
+      ],
+      "got_titles": [
+        "毕业与学位申请",
+        "四六级报名与考试",
+        "校历关键时间节点"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 1356.6,
+      "error": ""
+    },
+    {
+      "id": "Q18",
+      "category": "教务",
+      "question": "四六级什么时候报名，去哪儿报？",
+      "expected_titles": [
+        "四六级报名与考试"
+      ],
+      "got_titles": [
+        "四六级报名与考试",
+        "就业指导与校园招聘",
+        "补考重修与缓考办理"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 42.4,
+      "error": ""
+    },
+    {
+      "id": "Q19",
+      "category": "奖励资助",
+      "question": "国家奖学金和励志奖学金怎么评，需要什么条件？",
+      "expected_titles": [
+        "奖学金评定办法"
+      ],
+      "got_titles": [
+        "奖学金评定办法",
+        "国家助学贷款与助学金",
+        "就业指导与校园招聘"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 41.1,
+      "error": ""
+    },
+    {
+      "id": "Q20",
+      "category": "奖励资助",
+      "question": "家里困难，助学贷款怎么申请？",
+      "expected_titles": [
+        "国家助学贷款与助学金"
+      ],
+      "got_titles": [
+        "国家助学贷款与助学金",
+        "奖学金评定办法",
+        "失物招领"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 41.6,
+      "error": ""
+    },
+    {
+      "id": "Q21",
+      "category": "信息化",
+      "question": "校园网怎么连？在校外怎么用学校 VPN？",
+      "expected_titles": [
+        "校园网络与VPN使用"
+      ],
+      "got_titles": [
+        "校园网络与VPN使用",
+        "图书馆电子资源与校外访问",
+        "体育场馆开放与预约"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 44.7,
+      "error": ""
+    },
+    {
+      "id": "Q22",
+      "category": "就业",
+      "question": "学校有招聘会吗，简历怎么投？",
+      "expected_titles": [
+        "就业指导与校园招聘"
+      ],
+      "got_titles": [
+        "就业指导与校园招聘",
+        "学生社团与校园活动",
+        "奖学金评定办法"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 42.6,
+      "error": ""
+    },
+    {
+      "id": "Q23",
+      "category": "生活",
+      "question": "东西丢了去哪里找？",
+      "expected_titles": [
+        "失物招领"
+      ],
+      "got_titles": [
+        "失物招领",
+        "宿舍报修与后勤服务",
+        "校园卡使用指南"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 39.2,
+      "error": ""
+    },
+    {
+      "id": "Q24",
+      "category": "生活",
+      "question": "体育馆怎么预约，羽毛球场地多少钱？",
+      "expected_titles": [
+        "体育场馆开放与预约"
+      ],
+      "got_titles": [
+        "体育场馆开放与预约",
+        "校园二手交易安全提示",
+        "校医院就医指南"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 40.3,
+      "error": ""
+    },
+    {
+      "id": "Q25",
+      "category": "二手",
+      "question": "在校园里买二手怎么防止被骗？",
+      "expected_titles": [
+        "校园二手交易安全提示"
+      ],
+      "got_titles": [
+        "校园二手交易安全提示",
+        "失物招领",
+        "校园网络与VPN使用"
+      ],
+      "n_hits": 3,
+      "rank": 1,
+      "vector_used": true,
+      "latency_ms": 37.5,
+      "error": ""
+    },
+    {
+      "id": "N01",
+      "category": "负样本",
+      "question": "今年寒假从哪一天开始放假？",
+      "expected_titles": [],
+      "got_titles": [
+        "校历关键时间节点",
+        "选课与校历安排",
+        "图书馆开放时间"
+      ],
+      "n_hits": 3,
+      "rank": null,
+      "vector_used": true,
+      "latency_ms": 41.7,
+      "error": ""
+    },
+    {
+      "id": "N02",
+      "category": "负样本",
+      "question": "计算机学院院长的办公室电话是多少？",
+      "expected_titles": [],
+      "got_titles": [
+        "图书馆研讨间与自助设备",
+        "教务系统与成绩查询",
+        "图书馆开放时间"
+      ],
+      "n_hits": 3,
+      "rank": null,
+      "vector_used": true,
+      "latency_ms": 41.5,
+      "error": ""
+    }
+  ]
+}
