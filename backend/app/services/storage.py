@@ -84,3 +84,24 @@ def get_storage() -> StorageBackend:
         backend = (settings.storage_backend or "local").strip().lower()
         _storage = LocalStorage() if backend == "local" else ObjectStoragePlaceholder(backend)
     return _storage
+
+
+def resign(url: str, ttl_seconds: int | None = None) -> str:
+    """把入库的裸路径重新签名为当前有效的访问 URL（B14 P1 修复）。
+
+    背景：入库一律保存**不带签名**的稳定路径（避免过期签名入库），
+    因此所有对外返回图片/头像字段的地方都必须动态重新签名，
+    否则开启签名校验后前端拿到裸路径会 403（"只写不读"缺陷）。
+
+    规则：
+    - 空值 / 非 ``/static/uploads/`` 前缀（外链、第三方 URL）→ 原样返回；
+    - 关闭签名校验（``XJT_UPLOAD_SIGNED_URL_ENABLED=false``）→ 原样返回；
+    - 先剥离旧 query 再对**完整路径**签名（不可复用 url_for，
+      否则会把完整路径再拼一次前缀，得到 /static/uploads//static/uploads/xxx.jpg）。
+    """
+    if not url or not settings.upload_signed_url_enabled:
+        return url
+    path = str(url).split("?")[0]
+    if not path.startswith(f"{_URL_PREFIX}/"):
+        return url
+    return signed_url(path, ttl_seconds)

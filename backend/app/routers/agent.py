@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.core.deps import get_current_user
-from app.core.response import BizError, err_param, ok, paged
+from app.core.response import BizError, err_param, err_server, ok, paged
 from app.db import cpp_bridge
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -47,8 +47,17 @@ def create_task(body: TaskIn, user: dict = Depends(get_current_user)):
     )
     task_id = rows[1]
 
-    # 2) 投递 Celery 任务（B15）：eager 模式同步返回结果；异步模式由前端轮询
-    task = run_agent_task.delay(uid, task_id, instruction)
+    # 2) 投递 Celery 任务（B15）：eager 模式同步返回结果；异步模式由前端轮询。
+    # 投递/执行异常（worker 侧连接池初始化失败等）统一转契约错误，
+    # 避免 task_eager_propagates 把 HTTP 500 直接抛给客户端（B15 评审 P2）。
+    try:
+        task = run_agent_task.delay(uid, task_id, instruction)
+    except Exception as exc:  # noqa: BLE001
+        cpp_bridge.execute(
+            "UPDATE agent_task SET status = 3, error_msg = ? WHERE id = ?",
+            [f"任务投递失败：{exc}"[:255], task_id],
+        )
+        raise err_server(f"任务投递失败：{exc}") from exc
     if settings.celery_enabled:
         return ok(
             {

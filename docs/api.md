@@ -533,6 +533,7 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 1. **SSE 解析**：前端用 `wx.request` 无法流式，改用 `wx.request` 长连接 + 后端 `StreamingResponse`，或小程序 `EventSource` 适配（微信需 `enableChunked`）。
 2. **token 失效**：接口返回 `2001/2002` 时前端统一跳登录。
 3. **图片上传（B14）**：`POST /upload/image`（multipart；魔数白名单 + 5MB 上限）→ 返回**带签名的访问 URL**（`?e=过期时间戳&s=HMAC 签名`，有效期默认 7 天）。`/static/uploads/*` 无签名或签名过期返回 **403**（可用 `XJT_UPLOAD_SIGNED_URL_ENABLED=false` 关闭校验）。存储经 `services/storage.py` 抽象，`XJT_STORAGE_BACKEND=local|s3|oss`（对象存储接口已预留）。
+   > **签名闭环（v1.14 修复）**：入库一律保存**不带签名**的稳定路径；服务端在返回图片/头像字段（商品图、收藏图、用户头像、菜品图）时经 `storage.resign()` **动态重新签名**，前端直接使用返回值即可，不会因签名过期失效。
 4. **日期时区**：后端统一用服务器本地时间（`Asia/Shanghai`）。
 5. **接口与 DAO 对应**：每个接口标了对应 C++ DAO，实现时直接调 `jt_db.XXXDAO()`。
 6. **健康探针（v1.6）**：`GET /health`（基础，前端存活探测）；`GET /health/detail`（可观测：Ollama 可达性/模型清单/向量库/知识库规模/检索模式与降级原因）；`GET /health/selfcheck`（一键自检 embed + 检索 + 生成）。
@@ -606,4 +607,5 @@ Invoke-RestMethod -Method Post -Uri "$base/agent/tasks" -Headers $H -ContentType
 | v1.11 | 2026-09-12 | B13 路网导航：`POST /map/navigate` 由两点直线升级为网格 A* 路网寻路（`services/route.py`，30m 网格 + 建筑 45m 缓冲障碍 + 共线压缩）；响应新增 `straight_distance`（绕行对比）/`algorithm`/`start_source`（起点来源），起点缺省改为距目标最近的 POI |
 | v1.12 | 2026-09-12 | B14 上传加固与存储抽象：新增 `core/url_sign.py`（HMAC 签名 + 过期）与 `services/storage.py`（本地 / S3 / OSS 可切换）；`POST /upload/image` 返回签名访问 URL，`/static/uploads/*` 校验签名（无签名/过期返回 403）；配合既有魔数白名单与安全响应头构成完整上传安全基线 |
 | v1.13 | 2026-09-12 | B15 异步化：接入 Celery + Redis（`core/celery_app.py` + `app/tasks.py`），Agent 任务与知识库索引构建改经队列投递；未启用时 eager 就地同步执行（行为与旧版一致）；新增 `GET /admin/knowledge/index-status/{task_id}`；`GET /health/detail` 新增 `celery` 运行模式字段 |
+| v1.14 | 2026-09-12 | 评审修复（P1+P2）：`storage.resign()` 补全上传签名闭环（商品图/收藏图/头像/菜品图返回前动态签名，修复"只写不读"导致开启校验后前端 403）；Celery 投递异常统一转契约错误（不再 HTTP 500）；`/agent/tasks` 限流收紧至 10/min；索引状态接口补充 eager 模式说明 |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |

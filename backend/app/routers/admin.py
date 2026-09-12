@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.deps import get_current_admin
-from app.core.response import err_param, ok, paged
+from app.core.response import err_param, err_server, ok, paged
 from app.db import cpp_bridge
 from app.services import rag
 
@@ -63,7 +63,10 @@ def knowledge_index(force: bool = False, _admin: dict = Depends(get_current_admi
     from app.core.config import settings
     from app.tasks import build_knowledge_index
 
-    task = build_knowledge_index.delay(force)
+    try:
+        task = build_knowledge_index.delay(force)
+    except Exception as exc:  # noqa: BLE001 - 投递失败转契约错误
+        raise err_server(f"索引构建任务投递失败：{exc}") from exc
     if settings.celery_enabled:
         return ok(
             {
@@ -77,7 +80,11 @@ def knowledge_index(force: bool = False, _admin: dict = Depends(get_current_admi
 
 @router.get("/knowledge/index-status/{task_id}")
 def knowledge_index_status(task_id: str, _admin: dict = Depends(get_current_admin)):
-    """查询异步索引构建状态（B15）。"""
+    """查询异步索引构建状态（B15）。
+
+    注意：XJT_CELERY_ENABLED=false（eager 模式）时结果不写入 backend，
+    任意 task_id 均返回 state=PENDING，此时该接口无实际意义。
+    """
     from app.tasks import task_state
 
     return ok(task_state(task_id))

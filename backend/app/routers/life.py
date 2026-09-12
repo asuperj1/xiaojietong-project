@@ -16,6 +16,7 @@ from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
 from app.db import cpp_bridge
 from app.services import notice as notice_service
+from app.services.storage import resign
 
 router = APIRouter(prefix="/life", tags=["life"])
 
@@ -34,6 +35,8 @@ def merchants(
 @router.get("/merchants/{merchant_id}/menu")
 def menu(merchant_id: int, user: dict = Depends(get_current_user)):
     items = cpp_bridge.life_dao().menu_items(merchant_id)
+    for item in items:  # B14 P1 修复：菜品图入库为裸路径，返回前重新签名
+        item["image"] = resign(item.get("image", ""))
     return ok({"items": items})
 
 

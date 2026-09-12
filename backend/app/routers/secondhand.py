@@ -25,12 +25,14 @@ from app.core.response import (
 from app.db import cpp_bridge
 from app.services.audit import audit_content, status_of
 from app.services.secondhand_ai import describe_and_price, suggest_price
+from app.services.storage import resign
 
 router = APIRouter(prefix="/secondhand", tags=["secondhand"])
 
 
 def _item_view(i: dict) -> dict:
-    i["images"] = _parse_json(i.get("images_json", ""))
+    # B14 P1 修复：入库为裸路径，返回前统一重新签名（否则开启校验时前端拿到会 403）
+    i["images"] = [resign(u) for u in _parse_json(i.get("images_json", ""))]
     i.pop("images_json", None)
     i["price"] = float(i.get("price", 0))
     return i
