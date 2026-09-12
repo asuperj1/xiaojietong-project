@@ -13,11 +13,14 @@ PyJWT>=2.8
 # ---- 数据库 ----
 # C++ 数据层通过 pybind11 扩展接入，此处仅需要桥接层依赖
 # （jt_db 扩展需按 db/cpp_driver/README.md 编译）
-# SQLAlchemy 仅作为复杂查询/迁移(Alembic)的辅助，不承担主数据通道
+# 说明：SQLAlchemy / Alembic **当前未在运行时代码中使用**（主数据通道为 C++ jt_db），
+#       仅为后续复杂查询与迁移规划预留；如需精简依赖可移除此两行。
 SQLAlchemy>=2.0
 alembic>=1.13
 
 # ---- 缓存 / 异步任务 ----
+# 说明：**当前未使用**（Agent 任务、索引构建均为同步执行）；
+#       Celery + Redis 异步化见任务排期 B15，届时启用。
 redis>=5.0
 celery>=5.3
 
@@ -32,3 +35,7 @@ chromadb>=1.5
 
 # ---- 工具 ----
 python-multipart>=0.0.9
+
+# ---- 测试（B12 工程化基线）----
+pytest>=8.0
+pytest-asyncio>=0.23
