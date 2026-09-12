@@ -64,7 +64,7 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 | AI 助手 | chat/send(SSE) / chat/quick / conversations / messages / feedback |
 | Agent | tasks(创建/列表/详情/取消) / reminders(列表/创建/完成) |
 | 图书馆 | free-rooms / rooms/{id}/seats / reservations(创建/我的/取消) / occupancy |
-| 二手 | items(列表/发布/我的发布/改状态/ai-describe) / wishes(创建/匹配) / orders(创建) |
+| 二手 | items(列表/发布/我的发布/详情/改状态/ai-describe/ai-price) / wishes(创建/匹配) / orders(创建) |
 | 兼职 | jobs(列表/详情/投递/可信度) / applications/me |
 | 论坛 | topics(列表/创建/我的/详情/点赞/举报/hot/feed) / comments |
 | 地图 | pois / nearby / navigate / building/{id} |
@@ -147,19 +147,24 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### POST /agent/tasks — 创建任务（自然语言）
 请求：
 ```json
-{ "instruction": "明天下午3点帮我预约图书馆二楼靠窗的座位，同时提醒我下午4点的选修课" }
+{ "instruction": "提醒我明天下午4点交作业" }
 ```
-响应 `data`：
+响应 `data`（status=2 表示执行完成，`plan[].result` 为真实落库结果）：
 ```json
 {
-  "task_id": 7, "status": 0,
+  "task_id": 7, "status": 2,
   "plan": [
-    {"tool":"reserve_seat","desc":"预约座位"},
-    {"tool":"add_reminder","desc":"设置课程提醒"}
-  ]
+    {"tool":"add_reminder","desc":"添加提醒",
+     "result":{"reminder_id":3,"content":"交作业","remind_at":"2026-09-12 16:00:00"}}
+  ],
+  "result": {"source":"model","results":[{"tool":"add_reminder","ok":true,"result":{...}}]}
 }
 ```
-> 后端：意图解析→Agent 编排→入 `agent_task`，异步执行（Celery）。
+> **编排三级链路（v1.7）**：
+> ① 模型 Function Call 主路径（`result.source=model`）；
+> ② 模型不可用/未返回工具时，**规则执行器兜底**（`services/rule_executor.py`，`source=rule`，同样真实写库）；
+> ③ 两者都未识别 → `status=3` + `error_msg`（**不再出现"未执行工具却报成功"的假成功**）。
+> 规则兜底支持的指令示例：「10 分钟后提醒我交作业」「帮我预约 1 号座位明天上午 9 点到 11 点」「查一下空教室」「出一本高数教材，25 元」。
 
 ### GET /agent/tasks — 任务列表
 查询参数 `?status=&page=&size=`；`data.items[]`：
@@ -240,6 +245,10 @@ event: error    data: {"code":5002,"message":"模型不可用"}
   "seller_name":"测试用户A", "created_at":"2026-08-24 10:00" }
 ```
 
+### GET /secondhand/items/{id} — 物品详情（v1.8 新增）
+响应 `data`：物品完整信息（含 `images` 图片列表、`seller_name`、`status`、`audit_status`、`view_count`）；浏览量 +1。
+> B9 修复：发布时 `images` / `condition_level` 此前未落库，现已补写，详情可正常返回图片。
+
 ### POST /secondhand/items — 发布闲置
 请求：
 ```json
@@ -247,11 +256,36 @@ event: error    data: {"code":5002,"message":"模型不可用"}
   "price":25.00, "condition_level":9, "images":["https://..."] }
 ```
 响应：`{ "item_id": 3, "audit_status": 1, "source": "model" }`
+> v1.8：`images` 与 `condition_level` 已随发布落库（此前丢失，见上）；发布后可用 `GET /secondhand/items/{id}` 查看图片。
 > v1.5 起发布同样过内容审核：敏感词 → 3003 且 `audit_status=2`；可疑 → 待审；正常 → 立即上架。
 
 ### POST /secondhand/items/ai-describe — AI 辅助发布（图像→描述/定价）
-请求 `{ "image_url":"https://...", "user_note":"旧教材" }`
-响应 `data`：`{ "category":"教材","title":"高数教材（微积分上册）","suggested_price":25.00,"description":"..." }`
+请求（B9 扩展，旧字段兼容）：
+```json
+{ "title":"高数教材", "category":"教材", "condition_level":9,
+  "user_note":"微积分上册，无笔记", "image_url":"" }
+```
+响应 `data`（定价带库内同类样本依据）：
+```json
+{ "title":"九成新高数教材", "description":"微积分上册，无笔记，成色好…",
+  "selling_points":["成色9/10，保存良好","教材分类，同类需求稳定"],
+  "suggested_price":22.5, "price_min":18.0, "price_max":27.0,
+  "reason":"库内同类 3 件均价 25.0 元，按成色 9/10 折算",
+  "category":"教材", "condition_level":9, "sample_count":3, "avg_price":25.0,
+  "source":"model" }
+```
+> `source`：`model`（模型生成）/ `stat`（库内同类统计兜底）/ `fallback`（无样本，分类通用区间）。
+> 模型不可用或输出异常时自动降级为模板文案 + 统计定价，不阻塞发布；
+> 模型建议价超出统计区间 [0.5×min, 1.5×max] 时回退统计值（价格护栏）。
+
+### POST /secondhand/items/ai-price — 纯定价建议（v1.8 新增）
+请求 `{ "category":"教材", "condition_level":9 }`
+响应 `data`：
+```json
+{ "suggested_price":22.5, "price_min":18.0, "price_max":27.0,
+  "sample_count":3, "avg_price":25.0, "source":"stat",
+  "reason":"库内同类 3 件均价 25.0 元，按成色 9/10 折算" }
+```
 
 ### PUT /secondhand/items/{id}/status — 改状态
 请求 `{ "status": "1" }`（0在售 1已售 2下架）
@@ -526,3 +560,5 @@ Invoke-RestMethod -Method Post -Uri "$base/agent/tasks" -Headers $H -ContentType
 | v1.4 | 2026-09-10 | **P0 安全加固（成员3）**：`POST /secondhand/orders` 请求体改为 `{item_id, remark}`，卖家/金额由服务端反查、响应新增 `amount`（SEC-05），下单原子抢占防超卖（TXN-02，冲突返回 `3001`）；聊天会话读写新增归属校验（SEC-03/04，越权返回 `1001`）；账号禁用即时生效（SEC-06，返回 `2003`）；生产环境强制校验 `XJT_JWT_SECRET` 与微信配置（SEC-01/02） |
 | v1.5 | 2026-09-10 | B6 内容审核闭环（成员2）：词库 `audit_word` + 审核留痕 `audit_log`（C7 表设计，`db/sql/11_audit.sql`）；`services/audit.py` 三级判定（pass/review/block，规则 + 模型二次判定）；发帖·评论·二手发布接入审核；拒绝错误码 **3003**；新增 `GET /topics/{id}/audit-status` 轮询与 `POST /admin/forum/audit/batch` 批量审核 |
 | v1.6 | 2026-09-10 | B8 可观测性：新增 `GET /health/detail`（Ollama·模型·向量库·知识库·检索模式与降级原因）与 `GET /health/selfcheck`（embed/检索/生成一键自检）；`/health` 保持兼容不变 |
+| v1.8 | 2026-09-11 | B9 二手 AI：新增 `GET /secondhand/items/{id}`（含 images）与 `POST /secondhand/items/ai-price` 纯定价接口；`ai-describe` 升级为「模型文案 + 库内同类均价定价」（响应含 sample_count/avg_price/reason，模型不可用时统计兜底 + 价格护栏）；修复发布丢失 `images`/`condition_level` 的落库缺陷 |
+| v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |

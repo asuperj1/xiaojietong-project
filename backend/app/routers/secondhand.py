@@ -2,6 +2,8 @@
 
 契约：docs/api.md §6
 审核（B6）：发布经 services/audit.py 判定（拒绝返回 3003；可疑转人工待审）。
+AI（B9）：ai-describe / ai-price 经 services/secondhand_ai.py
+          （库内同类均价定价 + 模型文案，模型不可用时统计兜底）。
 """
 
 from __future__ import annotations
@@ -12,9 +14,17 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.core.deps import get_current_user
-from app.core.response import BizError, err_audit, err_param, ok, paged
+from app.core.response import (
+    BizError,
+    err_audit,
+    err_param,
+    err_server,
+    ok,
+    paged,
+)
 from app.db import cpp_bridge
 from app.services.audit import audit_content, status_of
+from app.services.secondhand_ai import describe_and_price, suggest_price
 
 router = APIRouter(prefix="/secondhand", tags=["secondhand"])
 
@@ -75,6 +85,23 @@ def my_items(
     return ok(paged(items, int(total[0]["total"]) if total else 0, page, size))
 
 
+@router.get("/items/{item_id}")
+def item_detail(item_id: int, user: dict = Depends(get_current_user)):
+    """物品详情（B9 新增）：含图片列表（images）；浏览量 +1。"""
+    rows = cpp_bridge.query(
+        "SELECT i.*, u.nickname AS seller_name FROM secondhand_item i "
+        "JOIN user u ON i.user_id = u.id "
+        "WHERE i.id = ? AND i.is_deleted = 0",
+        [item_id],
+    )
+    if not rows:
+        raise BizError(1001, "物品不存在")
+    cpp_bridge.execute(
+        "UPDATE secondhand_item SET view_count = view_count + 1 WHERE id = ?", [item_id]
+    )
+    return ok(_item_view(rows[0]))
+
+
 class PublishIn(BaseModel):
     title: str
     description: str = ""
@@ -90,6 +117,12 @@ async def publish(body: PublishIn, user: dict = Depends(get_current_user)):
         raise err_param("标题不能为空")
     item_id = cpp_bridge.secondhand_dao().publish(
         int(user["id"]), body.title, body.description, body.category, body.price
+    )
+    # B9 修复：images / condition_level 此前未落库（DAO publish 不含这两列），
+    # 导致发布后图片丢失；此处补写后 GET /items/{id} 即可返回 images。
+    cpp_bridge.execute(
+        "UPDATE secondhand_item SET images_json = ?, condition_level = ? WHERE id = ?",
+        [json.dumps(body.images, ensure_ascii=False), body.condition_level, item_id],
     )
     # B6 内容审核（先入库拿到 item_id，审核留痕 audit_log 需要 target_id）
     verdict = await audit_content(
@@ -111,25 +144,41 @@ async def publish(body: PublishIn, user: dict = Depends(get_current_user)):
 
 
 class AiDescribeIn(BaseModel):
-    image_url: str = ""
+    """AI 辅助发布入参（B9 扩展：标题/分类/成色可选；兼容旧 user_note/image_url）。"""
+
+    title: str = ""
+    category: str = ""
+    condition_level: int = 8
     user_note: str = ""
+    image_url: str = ""
 
 
 @router.post("/items/ai-describe")
-def ai_describe(body: AiDescribeIn, user: dict = Depends(get_current_user)):
-    """AI 辅助发布（占位）：接入图像识别/大模型后替换。
-    当前按用户备注关键词给出简单分类与定价建议。"""
-    note = body.user_note or ""
-    category = "教材" if ("书" in note or "教材" in note) else "其他"
-    price = 30.0 if category == "教材" else 20.0
-    return ok(
-        {
-            "category": category,
-            "title": f"{note or '闲置物品'}（AI 建议标题）",
-            "suggested_price": price,
-            "description": f"九成新，价格可小刀。{note}",
-        }
+async def ai_describe(body: AiDescribeIn, user: dict = Depends(get_current_user)):
+    """AI 辅助发布（B9）：生成描述文案 + 卖点 + 建议价。
+
+    定价以**库内同类均价**为支撑（响应含 sample_count / avg_price / reason），
+    文案由模型（xjt-3b）生成；模型不可用时降级为模板文案 + 统计定价。
+    """
+    result = await describe_and_price(
+        body.title or body.user_note,
+        body.category,
+        body.condition_level,
+        body.user_note,
     )
+    return ok(result)
+
+
+class AiPriceIn(BaseModel):
+    category: str = ""
+    title: str = ""
+    condition_level: int = 8
+
+
+@router.post("/items/ai-price")
+def ai_price(body: AiPriceIn, user: dict = Depends(get_current_user)):
+    """纯定价建议（B9 新增）：库内同类均价 × 成色折算系数，附样本数依据。"""
+    return ok(suggest_price(body.category, body.condition_level))
 
 
 @router.put("/items/{item_id}/status")
