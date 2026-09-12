@@ -399,8 +399,15 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### GET /topics/hot — 热点
 响应 `data.items[]`：`{ "id":1,"title":"...","is_hot":1 }`（对应 `ForumDAO.hot_topics`）
 
-### GET /topics/feed — 个性化推荐（AI）
-查询参数：`?page=&size=`，按用户标签/浏览历史排序（后端实现推荐逻辑）。
+### GET /topics/feed — 个性化推荐（B11 落地）
+查询参数：`?page=&size=`
+响应 `data.items[]` 在帖子字段基础上新增推荐信息：
+```json
+{ "id":12, "title":"考研数学经验分享", "category":"学习",
+  "score":2.6, "reason":"因为你关注了考研", "matched_tags":"考研" }
+```
+> 打分 = 兴趣标签命中 +1.5/个（上限 3）｜行为偏好（点赞/收藏分类命中）+0.8｜热度（赞/评/阅归一化）上限 +2.0｜3 天内时效加成 0.8→0。
+> 冷启动（无标签、无行为）自动回落为热度排序；每条均带 `reason` 推荐理由。
 
 ---
 
@@ -414,9 +421,19 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 查询参数：`?lat=43.88&lng=125.32&radius=500`
 响应 `data.items[]`：POI + `distance`（米）。
 
-### POST /map/navigate — 路线规划
-请求 `{ "from": {"lat":..,"lng":..}, "to_poi_id": 1 }`
-响应 `data`：`{ "distance":800,"duration":10,"path":[{lat,lng}...] }`
+### POST /map/navigate — 步行路线规划（B13 路网升级）
+请求 `{ "to_poi_id": 1, "from_lat": 43.88, "from_lng": 125.32 }`
+（起点坐标可省略；省略时取**距目标最近的 POI** 作为校园地标锚点）
+响应 `data`：
+```json
+{ "distance": 760, "straight_distance": 610, "duration": 9,
+  "path": [{"lat":43.8801,"lng":125.3202}, {"lat":43.8805,"lng":125.3210}],
+  "algorithm": "astar-grid", "start_source": "user_location",
+  "target": {"id":1, "name":"中心图书馆"} }
+```
+> v1.11：由「两点直线」升级为**网格 A* 路网寻路**（30m 网格，建筑按 45m 缓冲作障碍，
+> 八方向搜索 + 共线压缩）；`straight_distance` 用于对比绕行增量，`algorithm` 标明
+> `astar-grid`（正常）或 `straight-fallback`（障碍封死时回退直线）。
 
 ### GET /map/building/{id} — 建筑详情
 响应 `data`：`{ "id":1,"name":"中心图书馆","floors":5,"hours":"08:00-22:00",
@@ -450,9 +467,27 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 响应 `data.items[]`：`{ "id":1,"title":"2026年秋季学期选课通知","source":"教务处","category":"选课","publish_time":"..." }`
 
 ### POST /life/notices/{id}/read — 标记已读（精准推送回执）
+> v1.9 起同步更新投递记录（notice_delivery）的已读状态。
 
-### GET /life/notice-feed — AI 精准通知推送
-查询参数：`?page=&size=`，按用户年级/标签过滤排序（后端实现）。
+### GET /life/notice-feed — AI 精准通知推送（v1.9 升级）
+查询参数：`?page=&size=`
+响应 `data.items[]` 在通知字段基础上新增推荐信息：
+```json
+{ "id":2, "title":"2026年秋季学期选课通知", "category":"选课",
+  "score":2.3, "reason":"你关注了选课", "matched_tags":"选课,教务", "is_read":0 }
+```
+> 打分维度（可解释）：兴趣标签命中 +1.5/个（上限 3）｜行为偏好（点赞/收藏分类命中）+0.6｜年级匹配 +0.8｜校区匹配 +0.5｜7 天内时效衰减 0.5→0。
+> 拉取时懒生成投递记录（notice_delivery）并回执曝光。
+
+### GET /life/notices/unread-count — 未读数（v1.9 新增）
+响应 `data`：`{ "count": 3 }`（与未读列表口径一致，批量已读后归零）
+
+### GET /life/notices/unread — 未读列表（v1.9 新增）
+查询参数：`?page=&size=`；`data.items[]` 同 notice-feed，仅含 `is_read=0`，按得分倒序。
+
+### POST /life/notices/read-batch — 批量已读（v1.9 新增）
+请求 `{ "notice_ids": [1,2,3] }` → 响应 `{ "updated": 3 }`
+> 更新投递表并同步旧回执表（notice_read），保证未读口径一致。
 
 ---
 
@@ -492,7 +527,7 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 
 1. **SSE 解析**：前端用 `wx.request` 无法流式，改用 `wx.request` 长连接 + 后端 `StreamingResponse`，或小程序 `EventSource` 适配（微信需 `enableChunked`）。
 2. **token 失效**：接口返回 `2001/2002` 时前端统一跳登录。
-3. **图片上传**：预留 `POST /upload/image`（multipart）→ `image_asset` 表。
+3. **图片上传（B14）**：`POST /upload/image`（multipart；魔数白名单 + 5MB 上限）→ 返回**带签名的访问 URL**（`?e=过期时间戳&s=HMAC 签名`，有效期默认 7 天）。`/static/uploads/*` 无签名或签名过期返回 **403**（可用 `XJT_UPLOAD_SIGNED_URL_ENABLED=false` 关闭校验）。存储经 `services/storage.py` 抽象，`XJT_STORAGE_BACKEND=local|s3|oss`（对象存储接口已预留）。
 4. **日期时区**：后端统一用服务器本地时间（`Asia/Shanghai`）。
 5. **接口与 DAO 对应**：每个接口标了对应 C++ DAO，实现时直接调 `jt_db.XXXDAO()`。
 6. **健康探针（v1.6）**：`GET /health`（基础，前端存活探测）；`GET /health/detail`（可观测：Ollama 可达性/模型清单/向量库/知识库规模/检索模式与降级原因）；`GET /health/selfcheck`（一键自检 embed + 检索 + 生成）。
@@ -561,4 +596,8 @@ Invoke-RestMethod -Method Post -Uri "$base/agent/tasks" -Headers $H -ContentType
 | v1.5 | 2026-09-10 | B6 内容审核闭环（成员2）：词库 `audit_word` + 审核留痕 `audit_log`（C7 表设计，`db/sql/11_audit.sql`）；`services/audit.py` 三级判定（pass/review/block，规则 + 模型二次判定）；发帖·评论·二手发布接入审核；拒绝错误码 **3003**；新增 `GET /topics/{id}/audit-status` 轮询与 `POST /admin/forum/audit/batch` 批量审核 |
 | v1.6 | 2026-09-10 | B8 可观测性：新增 `GET /health/detail`（Ollama·模型·向量库·知识库·检索模式与降级原因）与 `GET /health/selfcheck`（embed/检索/生成一键自检）；`/health` 保持兼容不变 |
 | v1.8 | 2026-09-11 | B9 二手 AI：新增 `GET /secondhand/items/{id}`（含 images）与 `POST /secondhand/items/ai-price` 纯定价接口；`ai-describe` 升级为「模型文案 + 库内同类均价定价」（响应含 sample_count/avg_price/reason，模型不可用时统计兜底 + 价格护栏）；修复发布丢失 `images`/`condition_level` 的落库缺陷 |
+| v1.9 | 2026-09-12 | B10 通知精准推荐与未读：`notice-feed` 升级为兴趣标签 + 行为偏好 + 年级/校区 + 时效衰减打分（逐条带 `score/reason/matched_tags`）；新增 `GET /life/notices/unread-count`、`GET /life/notices/unread`、`POST /life/notices/read-batch`；投递记录 `notice_delivery` 懒生成 + 曝光回执 |
+| v1.10 | 2026-09-12 | B11 推荐数据消费：`GET /topics/feed` 由纯时间序升级为混合打分（兴趣标签 + 行为偏好 + 热度 + 时效），逐条返回 `score/reason/matched_tags`；冷启动回落热度榜（`services/recommend.py`） |
+| v1.11 | 2026-09-12 | B13 路网导航：`POST /map/navigate` 由两点直线升级为网格 A* 路网寻路（`services/route.py`，30m 网格 + 建筑 45m 缓冲障碍 + 共线压缩）；响应新增 `straight_distance`（绕行对比）/`algorithm`/`start_source`（起点来源），起点缺省改为距目标最近的 POI |
+| v1.12 | 2026-09-12 | B14 上传加固与存储抽象：新增 `core/url_sign.py`（HMAC 签名 + 过期）与 `services/storage.py`（本地 / S3 / OSS 可切换）；`POST /upload/image` 返回签名访问 URL，`/static/uploads/*` 校验签名（无签名/过期返回 403）；配合既有魔数白名单与安全响应头构成完整上传安全基线 |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
