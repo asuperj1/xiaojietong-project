@@ -7,7 +7,8 @@
 namespace jt_db {
 
 QueryResult SecondhandDAO::page_items(int page, int size, const std::string& category,
-                                      const std::string& keyword, bool on_sale_only) {
+                                      const std::string& keyword, bool on_sale_only,
+                                      bool audited_only) {
     if (page < 1) page = 1;
     if (size < 1 || size > 100) size = 20;
     const long long limit = static_cast<long long>(size);
@@ -22,6 +23,8 @@ QueryResult SecondhandDAO::page_items(int page, int size, const std::string& cat
         "  AND (? = '' OR i.category = ?) "
         "  AND (? = '' OR i.title LIKE CONCAT('%', ?, '%')) ";
     if (on_sale_only) sql += " AND i.status = 0 ";
+    // 审计 DATA-01：待审/被拒内容不得对他人可见（与 ForumDAO::page_topics 同范式）
+    if (audited_only) sql += " AND i.audit_status = 1 ";
     sql += "ORDER BY i.created_at DESC LIMIT ? OFFSET ?";
 
     return DbSession::current()->query(
@@ -58,6 +61,8 @@ QueryResult SecondhandDAO::match_items_for_wish(long long wish_id, int limit) {
         "JOIN secondhand_wish w ON w.id = ? "
         "WHERE i.category = w.category AND i.price <= w.budget "
         "  AND i.status = 0 AND i.is_deleted = 0 "
+        // 审计 DATA-01：AI 供需匹配同样不得返回待审物品
+        "  AND i.audit_status = 1 "
         "ORDER BY i.price ASC LIMIT ?",
         {wish_id, static_cast<long long>(limit)});
 }

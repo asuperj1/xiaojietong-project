@@ -89,12 +89,18 @@ def my_items(
 
 @router.get("/items/{item_id}")
 def item_detail(item_id: int, user: dict = Depends(get_current_user)):
-    """物品详情（B9 新增）：含图片列表（images）；浏览量 +1。"""
+    """物品详情（B9 新增）：含图片列表（images）；浏览量 +1。
+
+    审计 DATA-01：待审/被拒物品**不得对他人可见**；发布者本人仍可查看自己的
+    物品（与 `forum.topic_detail`、“我的发布”保持一致），否则审核进度页无法点入。
+    """
+    uid = int(user["id"])
     rows = cpp_bridge.query(
         "SELECT i.*, u.nickname AS seller_name FROM secondhand_item i "
         "JOIN user u ON i.user_id = u.id "
-        "WHERE i.id = ? AND i.is_deleted = 0",
-        [item_id],
+        "WHERE i.id = ? AND i.is_deleted = 0 "
+        "  AND (i.audit_status = 1 OR i.user_id = ?)",
+        [item_id, uid],
     )
     if not rows:
         raise BizError(1001, "物品不存在")
