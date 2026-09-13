@@ -1,10 +1,14 @@
 # 前端上线：域名与 HTTPS 落地方案
 
-> **背景**：`miniprogram/services/request.js` 的 `BASE_URL` 硬编码为 `http://127.0.0.1:8000/api/v1`，
+> **背景（原文）**：`miniprogram/services/request.js` 的 `BASE_URL` 当时硬编码为 `http://127.0.0.1:8000/api/v1`，
 > 只能在小程序**开发者工具**里跑（需勾选"不校验合法域名"），**真机与发布均不可用**。
 >
+> **现状（FRONT-01 已落地）**：地址已抽到 `miniprogram/config/env.js`，由 `getBaseUrl()` 统一动态解析
+> （`request()` / `sseRequest()` 共用同一套规则）；**仅 develop 可用 storage 临时覆盖**，
+> trial / release 固定读配置项且必须是合法 https 地址。
+>
 > 本文给出从「今天就能演示」到「正式上线」的完整路径。
-> ｜ 日期：2026-09-11 ｜ 适用：微信小程序
+> ｜ 日期：2026-09-11 ｜ §4 按 FRONT-01 现状更新：2026-09-13 ｜ 适用：微信小程序
 
 ---
 
@@ -71,61 +75,46 @@ flowchart LR
 
 ## 四、代码改造（今天就能做完，约 10 分钟）
 
-### 4.1 新建 `miniprogram/config.js`
+### 4.1 `miniprogram/config/env.js`（API 地址统一解析，已落地）
 
-把硬编码的 `BASE_URL` 抽出来，按**小程序运行环境自动切换**：
+> 注意：实现文件是 **`miniprogram/config/env.js`**（不是旧稿里的 `miniprogram/config.js`）。
 
 ```js
-// 环境配置：按小程序运行环境自动选择后端地址
-// envVersion 由微信注入，取值：develop（开发版）/ trial（体验版）/ release（正式版）
-const ENV_CONFIG = {
-  // 开发版：开发者工具 + 真机开调试模式时使用（需勾选「不校验合法域名」）
-  develop: 'http://127.0.0.1:8000/api/v1',
+// 三个配置位（按环境取值）
+const DEFAULT_BASE_URL  = 'http://127.0.0.1:8000/api/v1' // develop 默认：本机后端
+const TRIAL_BASE_URL    = ''                             // 体验版：须填合法 https（测试服/临时域名）
+const RELEASE_BASE_URL  = ''                             // 正式版：须填合法 https（备案域名）
 
-  // 体验版：内网穿透的临时域名，或测试服务器（必须是 https 且已配置到小程序后台）
-  trial: 'https://your-test-domain.example.com/api/v1',
-
-  // 正式版：备案域名（必须是 https）
-  release: 'https://your-domain.example.com/api/v1',
-}
-
-/**
- * 解析当前环境对应的 BASE_URL。
- * 使用官方 API wx.getAccountInfoSync（基础库 2.18.0+），
- * 低版本或调用失败时兜底为 develop，保证开发者工具始终可用。
- */
-function resolveBaseUrl() {
-  try {
-    const info = wx.getAccountInfoSync()
-    const envVersion = info && info.miniProgram && info.miniProgram.envVersion
-    if (envVersion && ENV_CONFIG[envVersion]) {
-      return ENV_CONFIG[envVersion]
-    }
-  } catch (e) {
-    // 静默兜底：不影响开发
-  }
-  return ENV_CONFIG.develop
-}
-
-module.exports = {
-  BASE_URL: resolveBaseUrl(),
-  ENV_CONFIG,
-}
+// getBaseUrl() 解析规则：
+// - develop（开发者工具 / 预览 / 真机调试）：storage['xjt_api_base_url'] 覆盖 → DEFAULT_BASE_URL
+//   （storage 读取异常自动降级为默认地址，不影响开发）
+// - trial（体验版）  ：不允许 storage 覆盖；仅读 TRIAL_BASE_URL，非法 https 直接抛错
+// - release（正式版）：不允许 storage 覆盖；仅读 RELEASE_BASE_URL，非法 https 直接抛错
+//   （''、'https://'、'http://'、'api.x.edu.cn/api/v1'、'http://api.x.edu.cn/api/v1' 等一律拒绝）
 ```
 
 > **为什么用 `wx.getAccountInfoSync()` 而不是 `__wxConfig`**：
 > `__wxConfig` 是**非官方内部变量**（虽然网上常见），随基础库版本可能失效；
 > `wx.getAccountInfoSync()` 是**官方 API**，更稳。
 
-### 4.2 修改 `miniprogram/services/request.js`
+### 4.2 `miniprogram/services/request.js`（已落地）
 
 ```js
 // 原：const BASE_URL = 'http://127.0.0.1:8000/api/v1'
-// 改为：
-const { BASE_URL } = require('../config.js')
+// 现：每次请求动态解析（普通请求与 SSE 使用同一套规则）
+const { getBaseUrl } = require('../config/env')
+
+// request() / sseRequest() 内均：
+const url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
 ```
 
-其余代码**无需改动**（所有请求都通过 `BASE_URL` 拼接）。
+- 已**不再**导出静态 `BASE_URL`；当前导出为 `module.exports = { request, sseRequest, getBaseUrl }`。
+- 配置错误（release/trial 缺失或非法）**不会同步抛异常逃逸**：
+  - `request()` → `wx.showToast('接口地址未配置，请联系管理员')` + `Promise.reject(error)`，调用方现有 `.catch()` 接住；
+  - `sseRequest()` → 回调 `onError(error)`，并返回带空 `abort()` 的最低兼容形状 task；
+  - `app.onLaunch` → 启动时校验一次，缺失/非法时 `wx.showModal`（`showCancel:false`）提示
+    「当前运行环境 API 地址未正确配置，请联系管理员」，且不让 `onLaunch` 继续抛异常。
+- 其余请求逻辑（鉴权、错误码、SSE 解码）无需改动。
 
 ### 4.3 顺手修掉「问题 1」（`2003` 未跳登录页）
 
@@ -271,10 +260,15 @@ sudo certbot --nginx -d your-domain.com
 ```
 内网穿透工具 → 映射本地 8000 端口 → 获得 https 临时域名
               ↓
-把该域名临时填入 config.js 的 trial 字段
+开发版（develop）真机调试：远程调试控制台临时覆盖
+  wx.setStorageSync('xjt_api_base_url', 'https://<临时域名>/api/v1')
+（验完删掉：wx.removeStorageSync('xjt_api_base_url')）
               ↓
 真机打开开发版小程序 + 开启「调试」模式 → 验证
 ```
+
+> 需要出**体验版**时：把该 https 域名填入 `miniprogram/config/env.js` 的 `TRIAL_BASE_URL`
+> （trial 环境不允许 storage 覆盖，只能走配置项）。
 
 > **注意**：免费版临时域名**通常无法配置到微信后台**（未备案），
 > 但**真机开发版开调试模式**可以绕过校验，足够联调。
@@ -287,7 +281,7 @@ sudo certbot --nginx -d your-domain.com
 
 | 时间 | 动作 | 负责人 |
 |---|---|---|
-| **今天** | 改 `config.js` + `request.js`（§4，10 分钟）；开发者工具勾选"不校验域名"，保证演示不受影响 | 成员1 |
+| **今天** | 改 `config/env.js` + `request.js`（§4；FRONT-01 已落地）；开发者工具勾选"不校验域名"，保证演示不受影响 | 成员1 |
 | **今天** | 买域名 + 学生云服务器，**提交备案**（越早越好） | 负责人 |
 | **本周** | （可选）内网穿透做真机验证 | 成员1 |
 | **备案通过后** | 部署后端 + Nginx + 证书 + 配置小程序后台域名 | 成员3 + 成员2 |

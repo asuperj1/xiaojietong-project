@@ -32,11 +32,11 @@ API Base URL 由 `config/env.js` 的 `getBaseUrl()` 统一解析，`services/req
 
 | 运行环境 | 取值 |
 |---|---|
-| 开发者工具（`envVersion=develop`） | 默认 `http://127.0.0.1:8000/api/v1`；可用 storage 覆盖 |
-| 体验版（`trial`） | 同上：默认本机地址，可用 storage 覆盖 |
-| 正式版（`release`） | 固定读 `config/env.js` 的 `RELEASE_BASE_URL`；**上线前必须配置**为已备案的 https 域名（未配置时 `getBaseUrl()` 直接抛出配置错误，fail fast，**不会回退到 127.0.0.1**） |
+| 开发者工具 / 预览 / 真机调试（`envVersion=develop`） | 默认 `http://127.0.0.1:8000/api/v1`；**仅此环境**可用 storage 覆盖 |
+| 体验版（`trial`） | **不允许 storage 覆盖**；读 `config/env.js` 的 `TRIAL_BASE_URL`（须为合法 https，未配置即报错） |
+| 正式版（`release`） | **不允许 storage 覆盖**；读 `config/env.js` 的 `RELEASE_BASE_URL`，必须是合法 https 地址（缺失/非法直接抛错，**不会回退到 127.0.0.1**） |
 
-覆盖读取顺序：`storage[xjt_api_base_url]` → 环境默认值。地址会做最小规范化（去首尾空白、去掉末尾多余的 `/`）。
+覆盖读取顺序：`storage[xjt_api_base_url]` → 环境默认值（**仅 develop 生效**；storage 读取异常会自动降级为默认地址，不影响开发）。地址会做最小规范化（去首尾空白、去掉末尾多余的 `/`）。
 
 ### 开发者工具（默认）
 
@@ -64,11 +64,18 @@ cd backend && python -m uvicorn app.main:app --reload --port 8000
 
 > ⚠️ 不要把个人局域网 IP 提交进仓库（storage 只存在手机上，代码里保持占位符 `<电脑局域网IP>`）。
 
+> 说明：真机调试属 **develop** 环境，因此允许 storage 覆盖；**体验版（trial）不允许覆盖**，
+> 需在 `config/env.js` 的 `TRIAL_BASE_URL` 配置合法 https 地址。
+
 ### release（正式版）
 
 - 微信小程序只接受 **https**，且域名须已备案并在小程序后台配置 `request` 合法域名。
 - 在上线前填写 `miniprogram/config/env.js` 的 `RELEASE_BASE_URL`（例如 `https://api.xxx.edu.cn/api/v1`）；格式校验/域名落地见 `docs/前端上线-域名与HTTPS方案.md`。
 - release 不允许被 storage 覆盖，避免测试地址误带到线上。
-- **未配置时 fail fast**：`release` 下调用 `getBaseUrl()` 会直接 `throw`（错误信息指向 `RELEASE_BASE_URL`），不会回退到 `DEFAULT_BASE_URL`/`127.0.0.1`——宁可发布前暴露，也不让正式包静默连本机地址。
+- **地址格式校验**：`RELEASE_BASE_URL` 必须是合法 https 地址（非空、以 `https://` 开头、主机名为域名）；`''`、`https://`、`http://`、`api.x.edu.cn/api/v1`、`http://api.x.edu.cn/api/v1` 等非法值一律抛错，不会静默通过。
+- **缺失/非法时**：
+  - 启动即在 `app.onLaunch` 弹出提示「当前运行环境 API 地址未正确配置，请联系管理员」（仅提示，不阻断启动）；
+  - 请求链正常报错：`request()` 会 `reject`（并 toast「接口地址未配置，请联系管理员」）交由调用方 `.catch()`，`sseRequest()` 会回调 `onError`——不会同步抛异常逃逸。
+- 不会回退到 `DEFAULT_BASE_URL`/`127.0.0.1`——宁可发布前暴露，也不让正式包静默连本机地址。
 
 > 本目录当前仅规划骨架，页面开发由前端成员在微信开发者工具中创建。

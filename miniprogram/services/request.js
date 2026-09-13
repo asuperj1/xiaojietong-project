@@ -55,7 +55,15 @@ function handleAuthFailure(code, message) {
  */
 function request(path, { method = 'GET', data = {} } = {}) {
   // 路径兼容：确保以 "/" 开头（每次请求解析，真机调试改 storage 后可立即生效）
-  const url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
+  // 配置错误（如 release 未配置合法 https 地址）不能同步逃逸，转为 reject，
+  // 让调用方现有的 .catch() 正常接住
+  let url
+  try {
+    url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
+  } catch (error) {
+    wx.showToast({ title: '接口地址未配置，请联系管理员', icon: 'none' })
+    return Promise.reject(error)
+  }
 
   // 自动读取本地 token（无 token 则不注入 Authorization）
   const token = wx.getStorageSync(TOKEN_KEY) || ''
@@ -164,7 +172,14 @@ function decodeUtf8Partial(bytes) {
  */
 function sseRequest(path, data = {}, { onSources, onChunk, onDone, onError } = {}) {
   // 与 request() 使用同一套环境解析规则（getBaseUrl）
-  const url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
+  // 配置错误不允许同步 throw 逃出：转交 onError，并返回最低兼容形状的 task（abort 空实现）
+  let url
+  try {
+    url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
+  } catch (error) {
+    if (typeof onError === 'function') onError(error)
+    return { abort() {} }
+  }
   const token = wx.getStorageSync(TOKEN_KEY) || ''
 
   let textBuffer = ''                 // 已解码、待按事件边界切分的文本

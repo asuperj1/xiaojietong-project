@@ -1,5 +1,7 @@
 // 校捷通小程序全局入口（F1A 最小骨架）
 // 规格：miniprogram/前端页面规格.md §0 —— app.js 在 onLaunch 检查 token
+const { getBaseUrl } = require('./config/env')
+
 App({
   globalData: {
     token: '',      // 登录后由登录页写入
@@ -10,6 +12,19 @@ App({
   },
 
   onLaunch() {
+    // 启动时校验 API 地址配置（FRONT-01）：
+    // release/trial 未配置或配置非法时明确暴露问题；此处吞掉异常，不影响后续启动流程
+    try {
+      getBaseUrl()
+    } catch (e) {
+      console.error('[app] API 地址配置校验失败：', e)
+      wx.showModal({
+        title: '配置错误',
+        content: '当前运行环境 API 地址未正确配置，请联系管理员',
+        showCancel: false,
+      })
+    }
+
     // 启动时恢复本地登录态（token + user）
     this.globalData.token = wx.getStorageSync('token') || ''
     this.globalData.userInfo = wx.getStorageSync('user') || null
