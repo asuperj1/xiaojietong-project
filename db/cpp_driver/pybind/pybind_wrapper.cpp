@@ -280,7 +280,8 @@ PYBIND11_MODULE(jt_db, m) {
         .def(py::init<>())
         .def("page_items", &SecondhandDAO::page_items, py::arg("page"), py::arg("size"),
              py::arg("category") = "", py::arg("keyword") = "",
-             py::arg("on_sale_only") = true, "闲置物品分页/搜索")
+             py::arg("on_sale_only") = true, py::arg("audited_only") = true,
+             "闲置物品分页/搜索（audited_only=false 仅供管理端；审计 DATA-01）")
         .def("publish", &SecondhandDAO::publish, py::arg("user_id"), py::arg("title"),
              py::arg("description"), py::arg("category"), py::arg("price"),
              "发布闲置，返回物品 id（失败 -1）")
