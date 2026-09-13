@@ -14,8 +14,11 @@ namespace jt_db {
 class SecondhandDAO {
 public:
     // 闲置物品分页/搜索（category / keyword）
+    // audited_only=true（默认）时只返回审核通过（audit_status=1）的物品。
+    // 审计 DATA-01：不加过滤会导致「待审/被拒」内容对所有人可见 —— 与 ForumDAO::page_topics 同范式。
     QueryResult page_items(int page, int size, const std::string& category = "",
-                           const std::string& keyword = "", bool on_sale_only = true);
+                           const std::string& keyword = "", bool on_sale_only = true,
+                           bool audited_only = true);
 
     // 发布闲置（返回物品 id，失败 -1）
     long long publish(long long user_id, const std::string& title,
