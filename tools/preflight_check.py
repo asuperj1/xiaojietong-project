@@ -11,7 +11,7 @@ E1 后端健康          GET /api/v1/health
 E2 组件状态          GET /api/v1/health/detail（db / cpp_ext / ollama / 知识库 / celery 模式）
 E3 Ollama 模型清单    必需 qwen2.5:3b、xjt-3b、bge-m3
 E4 登录可用          mock 登录取 token
-E5 种子数据齐备       8 个列表接口是否有数据
+E5 种子数据齐备       7 个列表接口是否有数据
 E6 签名闭环（P1）     业务接口返回的图片 / 头像 URL 是否带签名
 E7 前端 BASE_URL      是否仍写死 127.0.0.1（真机封测阻塞项）
 E8 关键接口冒烟       12 个模块各取 1 个接口

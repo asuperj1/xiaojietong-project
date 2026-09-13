@@ -99,6 +99,8 @@ def main() -> int:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000/api/v1")
+    ap.add_argument("--best-effort", action="store_true",
+                    help="即使部分条目失败也返回 0（默认失败即返回非 0，避免 CI 假绿）")
     args = ap.parse_args()
 
     print("=" * 78)
@@ -214,8 +216,12 @@ def main() -> int:
                 print(f"  {FAIL} [{kind}] {name} — {note}")
         print("\n提示：若失败原因是 HTTP 422（缺字段），请按其返回的字段名修正本脚本的 body；")
         print("     若是 404（路径不符），请核对 docs/api.md 最新契约。")
-    print("\n下一步：跑 tools/preflight_check.py 复核 E5（列表是否有数据）")
-    return 0 if n_fail == 0 else 0  # 不因业务失败中断封测准备
+    if n_fail:
+        print(f"\n⚠️  {n_fail} 项失败。默认返回非 0（避免 CI/批处理假绿）；"
+              f"如属预期（例如部分账号已存在），可加 --best-effort")
+        return 0 if args.best_effort else 1
+    print("\n✅ 全部种子数据创建成功")
+    return 0
 
 
 if __name__ == "__main__":

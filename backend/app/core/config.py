@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     jwt_expire_seconds: int = 7200          # 2h
     jwt_refresh_expire_seconds: int = 604800  # 7d
 
+    # 内部联调访问闸门（见 app/core/access_gate.py）。
+    # 留空 = 关闭（本机开发默认，行为与之前一致）；
+    # 公网 IP 暴露期间**必须设为随机长串**，否则任何人可访问测试接口。
+    # 团队调用方式：请求头 X-Access-Token: <token>（或 ?access_token=<token>）
+    access_token: str = ""
+    # 豁免路径（逗号分隔）—— 只放行**基础存活探针**供部署脚本/监控使用。
+    # ⚠️ 刻意**不**豁免 /api/v1/health/detail 与 /health/selfcheck：
+    #    它们会回显数据库/连接池/Ollama 状态，属信息泄露，陌生人不应看到。
+    # 注意：健康检查挂在 api_prefix 下，完整路径为 /api/v1/health。
+    access_gate_exempt: str = "/api/v1/health"
+
     # 微信登录（真实接入需填 appid/secret；留空则仅开发态可用模拟 openid）
     wx_appid: str = ""
     wx_secret: str = ""
