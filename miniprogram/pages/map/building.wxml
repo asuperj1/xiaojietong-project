@@ -1,0 +1,29 @@
+<!-- 建筑详情（F9-C） -->
+<view class="xj-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card">
+      <view class="name">{{building.name}}</view>
+      <view class="info" wx:if="{{building.campus}}">校区：{{building.campus}}</view>
+      <view class="info" wx:if="{{building.address}}">地址：{{building.address}}</view>
+      <view class="info" wx:if="{{building.floor_count}}">共 {{building.floor_count}} 层</view>
+    </view>
+
+    <view class="xj-card">
+      <view class="sec-title">楼层平面（{{rooms.length}}）</view>
+      <view wx:if="{{rooms.length === 0}}" class="empty-rooms">暂无房间数据</view>
+      <view class="room-item" wx:for="{{rooms}}" wx:key="id">
+        <view class="room-name">{{item.name}}</view>
+        <view class="room-sub">{{item.floor}} 楼 · 可容纳 {{item.capacity}} 人<text wx:if="{{item.has_power}}"> · 有插座</text></view>
+      </view>
+    </view>
+  </block>
+</view>

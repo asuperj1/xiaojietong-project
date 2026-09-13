@@ -1,0 +1,45 @@
+<!-- 商家菜单（F9-D） -->
+<view class="xj-page menu-page">
+  <view class="head">
+    <view class="head-name">{{merchantName}}</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{items}}" wx:key="id">
+      <view class="menu-top">
+        <text class="menu-name">{{item.name}}</text>
+        <text class="menu-price">¥{{item.price}}</text>
+      </view>
+      <view class="menu-desc" wx:if="{{item.description}}">{{item.description}}</view>
+      <view class="menu-actions">
+        <view class="counter">
+          <view class="counter-btn" data-id="{{item.id}}" bindtap="onMinus">－</view>
+          <text class="counter-num">{{item.num}}</text>
+          <view class="counter-btn counter-plus" data-id="{{item.id}}" bindtap="onPlus">＋</view>
+        </view>
+      </view>
+    </view>
+  </block>
+
+  <view class="checkout" wx:if="{{!loading && !error}}">
+    <view class="ck-fields">
+      <input class="ck-input" placeholder="配送地址" value="{{address}}" bindinput="onAddress" />
+      <input class="ck-input" placeholder="联系人" value="{{contact}}" bindinput="onContact" />
+      <input class="ck-input" type="number" placeholder="联系电话" value="{{contactPhone}}" bindinput="onPhone" />
+      <input class="ck-input" placeholder="备注（可选）" value="{{remark}}" bindinput="onRemark" />
+    </view>
+    <view class="ck-bar">
+      <view class="ck-total">共 {{totalCount}} 件 · ¥{{totalPrice}}</view>
+      <button class="xj-btn-primary ck-btn" disabled="{{submitting || totalCount === 0}}" bindtap="onSubmit">提交订单</button>
+    </view>
+  </view>
+</view>

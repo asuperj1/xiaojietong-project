@@ -12,7 +12,7 @@
 | Host | `127.0.0.1` |
 | Port | **`3307`**（不是默认 3306！） |
 | User | `root` |
-| Password | `jhq000000` |
+| Password | `<见 backend/.env 的 XJT_DB_PASSWORD，勿写入文档>` |
 | Database | `xiaojietong` |
 | 驱动 | 首次连接会提示下载 MySQL Driver，点 Download 自动安装 |
 

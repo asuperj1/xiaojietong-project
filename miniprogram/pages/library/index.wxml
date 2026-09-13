@@ -1,0 +1,36 @@
+<!-- 图书馆座位预约（F6）入口 -->
+<view class="xj-page">
+  <view class="head">
+    <view class="head-title">{{building.name || '图书馆'}}</view>
+    <view class="head-sub" wx:if="{{building.address}}">{{building.address}}</view>
+    <view class="head-actions">
+      <button class="xj-btn-plain head-btn" bindtap="onMyReserve">我的预约</button>
+    </view>
+  </view>
+
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{rooms.length === 0}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">📚</text>暂无阅览室
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{rooms}}" wx:key="id" data-id="{{item.id}}" data-name="{{item.name}}" bindtap="onRoomTap">
+      <view class="room-name">{{item.name}}</view>
+      <view class="room-sub">{{item.floor}} 楼 · 可容纳 {{item.capacity}} 人</view>
+      <view class="room-tags">
+        <text class="xj-tag tag-blue">{{item.has_power ? '有插座' : '无插座'}}</text>
+        <text class="xj-tag tag-gray">点击选座</text>
+      </view>
+    </view>
+  </block>
+</view>

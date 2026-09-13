@@ -25,7 +25,7 @@ pip install -r requirements.txt pyjwt python-multipart
 # 1) 编译 C++ 扩展 → backend/app/db/native/jt_db.pyd（见 db/cpp_driver/README.md）
 # 2) 配置环境变量（本机 MySQL 在 3307）
 set XJT_DB_PORT=3307
-set XJT_DB_PASSWORD=jhq000000
+set XJT_DB_PASSWORD=<你的数据库密码>
 set XJT_DB_NAME=xiaojietong
 # 3) 启动
 uvicorn app.main:app --reload --port 8000

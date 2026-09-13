@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"/>
+<title>校捷通 · 前端页面原型总览（18 页）</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0f172a; color: #e2e8f0;
+         font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header { padding: 28px 32px 12px; }
+  h1 { margin: 0 0 6px; font-size: 26px; }
+  .sub { color: #94a3b8; font-size: 13px; line-height: 1.7; }
+  .sub code { background: #1e293b; padding: 1px 6px; border-radius: 4px; color: #7dd3fc; }
+  .grid { display: grid; gap: 22px; padding: 20px 32px 48px;
+           grid-template-columns: repeat(auto-fill, minmax(158px, 1fr)); }
+  .card { background: #1e293b; border-radius: 14px; overflow: hidden; cursor: pointer;
+           border: 1px solid #334155; transition: .18s; }
+  .card:hover { transform: translateY(-4px); border-color: #38bdf8;
+                 box-shadow: 0 10px 30px rgba(56,189,248,.25); }
+  .frame { width: 100%; height: 268px; overflow: hidden; background: #fff; position: relative; }
+  .frame iframe { width: 375px; height: 812px; border: 0;
+                   transform: scale(.4); transform-origin: 0 0; }
+  .meta { padding: 9px 11px; display: flex; flex-direction: column; gap: 2px; }
+  .name { font-size: 13px; font-weight: 600; color: #f1f5f9; }
+  .file { font-size: 11px; color: #64748b; font-family: ui-monospace, monospace; }
+</style></head>
+<body>
+<header>
+  <h1>校捷通 · 前端页面原型总览</h1>
+  <div class="sub">
+    共 <b>18</b> 个手机尺寸原型（375×812）｜ 点击卡片在新标签打开完整页面<br/>
+    访问：<code>http://127.0.0.1:5500/xiaojietong-project/ui/prototype/_all.html</code>
+    （需先用 Live Server 启动，根目录为工作区根）
+  </div>
+</header>
+<div class="grid">
+    <div class="card" onclick="window.open('ai.html','_blank')">
+      <div class="frame"><iframe src="ai.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - AI助手</span><span class="file">ai.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('community.html','_blank')">
+      <div class="frame"><iframe src="community.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 社区中心</span><span class="file">community.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('empty.html','_blank')">
+      <div class="frame"><iframe src="empty.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 空结果</span><span class="file">empty.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('error.html','_blank')">
+      <div class="frame"><iframe src="error.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 错误状态</span><span class="file">error.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('forum_hot.html','_blank')">
+      <div class="frame"><iframe src="forum_hot.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 论坛热榜</span><span class="file">forum_hot.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('forum_new.html','_blank')">
+      <div class="frame"><iframe src="forum_new.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 校园论坛</span><span class="file">forum_new.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('home.html','_blank')">
+      <div class="frame"><iframe src="home.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 首页</span><span class="file">home.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('loading.html','_blank')">
+      <div class="frame"><iframe src="loading.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 加载状态</span><span class="file">loading.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('map.html','_blank')">
+      <div class="frame"><iframe src="map.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 校园地图</span><span class="file">map.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('messages.html','_blank')">
+      <div class="frame"><iframe src="messages.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 消息</span><span class="file">messages.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('notifications.html','_blank')">
+      <div class="frame"><iframe src="notifications.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 通知中心</span><span class="file">notifications.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('profile.html','_blank')">
+      <div class="frame"><iframe src="profile.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 我的</span><span class="file">profile.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('publish_entry.html','_blank')">
+      <div class="frame"><iframe src="publish_entry.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 发布</span><span class="file">publish_entry.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('recommend_explain.html','_blank')">
+      <div class="frame"><iframe src="recommend_explain.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 推荐说明</span><span class="file">recommend_explain.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('secondhand_detail.html','_blank')">
+      <div class="frame"><iframe src="secondhand_detail.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 商品详情</span><span class="file">secondhand_detail.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('secondhand_list.html','_blank')">
+      <div class="frame"><iframe src="secondhand_list.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 二手交易</span><span class="file">secondhand_list.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('secondhand_publish.html','_blank')">
+      <div class="frame"><iframe src="secondhand_publish.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 发布二手</span><span class="file">secondhand_publish.html</span></div>
+    </div>
+    <div class="card" onclick="window.open('services.html','_blank')">
+      <div class="frame"><iframe src="services.html" loading="lazy" scrolling="no"></iframe></div>
+      <div class="meta"><span class="name">校捷通 - 服务中心</span><span class="file">services.html</span></div>
+    </div>
+</div>
+</body></html>

@@ -95,6 +95,13 @@ app.add_middleware(
     enabled=settings.rate_limit_enabled,
 )
 
+# 内部联调访问闸门（备案未完成期间以公网 IP:8080 直接暴露，需挡外网陌生人）：
+# 必须**最后注册**，使其位于最外层最先执行 —— 陌生请求在进入限流与业务逻辑前
+# 即被拒绝，不消耗限流配额。XJT_ACCESS_TOKEN 为空时完全透明（本机开发零影响）。
+from app.core.access_gate import install as _install_access_gate  # noqa: E402
+
+_install_access_gate(app, settings.access_token, settings.access_gate_exempt)
+
 
 @app.exception_handler(BizError)
 async def biz_error_handler(request: Request, exc: BizError):

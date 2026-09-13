@@ -1,0 +1,23 @@
+/* 历史会话列表（F4） */
+.conv-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.conv-title {
+  flex: 1;
+  font-size: 30rpx;
+  color: #333333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: 16rpx;
+}
+.conv-time {
+  font-size: 24rpx;
+  color: #999999;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

@@ -1,0 +1,46 @@
+/* 我的发布（F9-A） */
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.title {
+  flex: 1;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.status-tag {
+  background: #eef5fc;
+  color: #4A90D9;
+}
+.meta {
+  margin-top: 12rpx;
+  display: flex;
+  align-items: center;
+  font-size: 24rpx;
+  color: #999999;
+}
+.audit {
+  color: #e6a23c;
+  margin-right: 20rpx;
+}
+.price {
+  color: #e5484d;
+  font-weight: 600;
+  margin-right: 20rpx;
+}
+.time {
+  margin-left: auto;
+}
+.actions {
+  margin-top: 20rpx;
+}
+.act-btn {
+  width: 160rpx;
+  margin-right: 16rpx;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

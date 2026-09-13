@@ -1,0 +1,16 @@
+<!-- 服务页（业务大宫格） -->
+<view class="xj-page">
+  <view class="grid-card">
+    <view
+      class="grid-item"
+      wx:for="{{gridItems}}"
+      wx:key="id"
+      data-url="{{item.url}}"
+      data-tab="{{item.tab}}"
+      bindtap="onGridTap"
+    >
+      <image class="grid-icon" src="{{item.icon}}" mode="aspectFit"></image>
+      <view class="grid-name">{{item.name}}</view>
+    </view>
+  </view>
+</view>

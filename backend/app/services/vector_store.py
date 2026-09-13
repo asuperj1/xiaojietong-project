@@ -19,6 +19,7 @@ from typing import Any, Optional
 import numpy as np
 
 from app.core.config import settings
+from app.services.rwlock import RWLock
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,15 @@ class VectorStore:
         """删除某文档的全部向量（重建/停用用）。"""
         raise NotImplementedError  # pragma: no cover - 接口
 
+    def list_doc_ids(self) -> Optional[set[int]]:
+        """列出向量库中现有向量所属的全部 doc_id。
+
+        供全量重建后清理**孤儿向量**使用（审计 CAC-07）：改为覆盖式重建后，
+        不再先 `clear()` 清空，因此需要事后对比 DB 找出已被删除文档的残留向量。
+        后端不支持时返回 None，调用方跳过清理即可。
+        """
+        return None
+
     def clear(self) -> None:
         raise NotImplementedError  # pragma: no cover - 接口
 
@@ -67,18 +77,20 @@ class ChromaVectorStore(VectorStore):
             _COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},
         )
-        self._lock = threading.Lock()
+        # 审计 CAC-06：检索（读）远多于入库（写），用读写锁让查询可并发，
+        # 避免建索引期间所有 /chat 检索请求排队等锁。
+        self._rw = RWLock()
 
     def available(self) -> bool:
         return True
 
     def count(self) -> int:
-        with self._lock:
+        with self._rw.read():
             return self._collection.count()
 
     def add(self, ids: list[str], embeddings: list[list[float]],
             metadatas: list[dict], documents: list[str]) -> None:
-        with self._lock:
+        with self._rw.write():
             self._collection.add(
                 ids=ids,
                 embeddings=embeddings,
@@ -88,7 +100,7 @@ class ChromaVectorStore(VectorStore):
 
     def search(self, query_emb: list[float], top_k: int,
                score_threshold: float) -> list[dict]:
-        with self._lock:
+        with self._rw.read():
             res = self._collection.query(
                 query_embeddings=[query_emb],
                 n_results=top_k,
@@ -121,23 +133,36 @@ class ChromaVectorStore(VectorStore):
         return items
 
     def delete_by_doc_id(self, doc_id: int) -> None:
-        with self._lock:
+        with self._rw.write():
             try:
                 self._collection.delete(where={"doc_id": doc_id})
             except Exception as exc:  # noqa: BLE001 - 无匹配也正常
                 logger.warning("Chroma 删除 doc_id=%s 失败：%s", doc_id, exc)
 
     def clear(self) -> None:
-        with self._lock:
+        with self._rw.write():
             self._client.delete_collection(_COLLECTION_NAME)
             self._collection = self._client.get_or_create_collection(
                 _COLLECTION_NAME,
                 metadata={"hnsw:space": "cosine"},
             )
 
+    def list_doc_ids(self) -> Optional[set[int]]:
+        """列举向量库中现有 doc_id（用于重建后清理孤儿向量）。"""
+        with self._rw.read():
+            if self._collection is None:
+                return None
+            try:
+                got = self._collection.get(include=["metadatas"])
+            except Exception as exc:  # noqa: BLE001 - 列举失败不应中断重建
+                logger.warning("Chroma 列举 doc_id 失败：%s", exc)
+                return None
+            metas = (got or {}).get("metadatas") or []
+            return {int(m.get("doc_id", 0)) for m in metas if m}
+
     def close(self) -> None:
         """释放 Chroma 客户端句柄（Windows 下释放文件锁）。"""
-        with self._lock:
+        with self._rw.write():
             self._collection = None  # type: ignore[assignment]
             self._client = None  # type: ignore[assignment]
 
@@ -148,7 +173,7 @@ class NumpyVectorStore(VectorStore):
     def __init__(self, persist_dir: Path, dimension: int) -> None:
         self.persist_dir = persist_dir
         self.dimension = dimension
-        self._lock = threading.Lock()
+        self._rw = RWLock()
         self._matrix: Optional[np.ndarray] = None  # (N, dim) 单位向量
         self._meta: list[dict] = []                # 与行一一对应
         self._load()
@@ -183,7 +208,7 @@ class NumpyVectorStore(VectorStore):
         return True
 
     def count(self) -> int:
-        with self._lock:
+        with self._rw.read():
             return 0 if self._matrix is None else len(self._meta)
 
     def add(self, ids: list[str], embeddings: list[list[float]],
@@ -197,7 +222,7 @@ class NumpyVectorStore(VectorStore):
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         arr = arr / norms
-        with self._lock:
+        with self._rw.write():
             if self._matrix is None:
                 self._matrix = arr
             else:
@@ -217,32 +242,34 @@ class NumpyVectorStore(VectorStore):
         if nq == 0:
             return []
         q = q / nq
-        with self._lock:
+        items: list[dict] = []
+        with self._rw.read():
             if self._matrix is None or len(self._meta) == 0:
                 return []
             sims = (self._matrix @ q.T).ravel()  # (N,)
             idx = np.argsort(-sims)[:top_k]
-        items: list[dict] = []
-        for i in idx:
-            score = float(sims[i])
-            if score < score_threshold:
-                continue
-            m = self._meta[int(i)]
-            items.append(
-                {
-                    "id": m.get("_id", ""),
-                    "doc_id": int(m.get("doc_id", 0)),
-                    "seq": int(m.get("seq", 0)),
-                    "title": m.get("title", ""),
-                    "category": m.get("category", ""),
-                    "content": m.get("content", ""),
-                    "score": round(score, 4),
-                }
-            )
+            # 元数据必须在读锁内取：若在锁外读 _meta，并发的 add 会扩展列表，
+            # 使下标与 sims 错位（返回错配的标题/正文）
+            for i in idx:
+                score = float(sims[int(i)])
+                if score < score_threshold:
+                    continue
+                m = self._meta[int(i)]
+                items.append(
+                    {
+                        "id": m.get("_id", ""),
+                        "doc_id": int(m.get("doc_id", 0)),
+                        "seq": int(m.get("seq", 0)),
+                        "title": m.get("title", ""),
+                        "category": m.get("category", ""),
+                        "content": m.get("content", ""),
+                        "score": round(score, 4),
+                    }
+                )
         return items
 
     def delete_by_doc_id(self, doc_id: int) -> None:
-        with self._lock:
+        with self._rw.write():
             keep_meta: list[dict] = []
             keep_rows: list[int] = []
             for i, m in enumerate(self._meta):
@@ -255,12 +282,17 @@ class NumpyVectorStore(VectorStore):
                 self._save()
 
     def clear(self) -> None:
-        with self._lock:
+        with self._rw.write():
             self._matrix = None
             self._meta = []
             f = self._data_file()
             if f.exists():
                 f.unlink()
+
+    def list_doc_ids(self) -> Optional[set[int]]:
+        """列举向量库中现有 doc_id（用于重建后清理孤儿向量）。"""
+        with self._rw.read():
+            return {int(m.get("doc_id", 0)) for m in self._meta}
 
 
 # ---- 工厂（自动降级） ----

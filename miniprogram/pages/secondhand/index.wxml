@@ -1,0 +1,58 @@
+<!-- 二手集市（F9-A） -->
+<view class="xj-page">
+  <view class="topbar">
+    <view class="search">
+      <input class="search-input" placeholder="搜索闲置物品" value="{{q}}" bindinput="onSearchInput" confirm-type="search" bindconfirm="onSearch" />
+    </view>
+    <view class="top-actions">
+      <text class="top-link" bindtap="onMine">我的发布</text>
+      <text class="top-link" bindtap="onOpenWish">求购</text>
+    </view>
+  </view>
+
+  <view class="tabs">
+    <view class="tab {{catIndex === index ? 'tab-active' : ''}}" wx:for="{{cats}}" wx:key="*this" data-index="{{index}}" bindtap="onCatChange">{{item}}</view>
+  </view>
+
+  <view wx:if="{{loading && items.length === 0}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error && items.length === 0}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="refresh">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{items.length === 0}}">
+    <view class="xj-empty"><text class="xj-empty-icon">🛍️</text>暂无闲置物品</view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{items}}" wx:key="id" data-id="{{item.id}}" bindtap="onItemTap">
+      <view class="item-top">
+        <text class="item-title">{{item.title}}</text>
+        <text class="item-price">¥{{item.price}}</text>
+      </view>
+      <view class="item-desc">{{item.description}}</view>
+      <view class="item-meta">
+        <text wx:if="{{item.category}}" class="xj-tag tag-cat">{{item.category}}</text>
+        <text>{{item.seller_name}}</text>
+        <text class="meta-right">{{item.time}}</text>
+      </view>
+    </view>
+    <view wx:if="{{loading}}" class="xj-loading">加载更多…</view>
+    <view wx:elif="{{finished}}" class="list-end">— 没有更多了 —</view>
+  </block>
+
+  <view class="fab" bindtap="onPublish">＋ 发布</view>
+
+  <!-- 求购弹层 -->
+  <view wx:if="{{showWish}}" class="mask" bindtap="onCloseWish"></view>
+  <view wx:if="{{showWish}}" class="wish-panel">
+    <view class="wish-title">发布求购</view>
+    <input class="wish-input" placeholder="想要什么（如 高数教材）" value="{{wishContent}}" bindinput="onWishContent" />
+    <input class="wish-input" placeholder="分类（如 教材，可空）" value="{{wishCategory}}" bindinput="onWishCategory" />
+    <input class="wish-input" type="digit" placeholder="预算（元，可空）" value="{{wishBudget}}" bindinput="onWishBudget" />
+    <button class="xj-btn-primary wish-btn" bindtap="onSubmitWish">发布并匹配</button>
+  </view>
+</view>

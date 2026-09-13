@@ -1,0 +1,26 @@
+<!-- 我的兼职申请（F9-B） -->
+<view class="xj-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{items.length === 0}}">
+    <view class="xj-empty"><text class="xj-empty-icon">📄</text>还没有投递记录</view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{items}}" wx:key="id">
+      <view class="top">
+        <text class="title">{{item.job_title}}</text>
+        <text class="xj-tag status-tag">{{item.statusText}}</text>
+      </view>
+      <view class="meta">{{item.company_name}} · {{item.salary}}{{item.pay_unit}}</view>
+      <view class="time">{{item.time}}</view>
+    </view>
+  </block>
+</view>

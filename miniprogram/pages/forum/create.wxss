@@ -1,0 +1,36 @@
+/* 发帖（F7） */
+.title-input {
+  height: 80rpx;
+  font-size: 32rpx;
+  border-bottom: 1rpx solid #f0f0f0;
+}
+.content-input {
+  margin-top: 16rpx;
+  width: 100%;
+  height: 360rpx;
+  font-size: 28rpx;
+  line-height: 1.6;
+  box-sizing: border-box;
+}
+.cat-row {
+  margin-top: 20rpx;
+  display: flex;
+  align-items: center;
+}
+.cat-label {
+  width: 100rpx;
+  color: #666666;
+  font-size: 28rpx;
+}
+.cat-value {
+  background: #f5f5f5;
+  border-radius: 12rpx;
+  padding: 12rpx 28rpx;
+  font-size: 28rpx;
+}
+.foot {
+  padding: 0 24rpx;
+}
+.submit-btn {
+  width: 100%;
+}

@@ -1,0 +1,33 @@
+/* 我的帖子（F7） */
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.title {
+  flex: 1;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.tag-ok {
+  background: #eafaf1;
+  color: #2eb872;
+}
+.tag-bad {
+  background: #fdeaea;
+  color: #e5484d;
+}
+.tag-wait {
+  background: #fff6e5;
+  color: #e6a23c;
+}
+.meta {
+  margin-top: 12rpx;
+  font-size: 24rpx;
+  color: #999999;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

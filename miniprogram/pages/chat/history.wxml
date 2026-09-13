@@ -1,0 +1,28 @@
+<!-- 历史会话列表（F4） -->
+<view class="xj-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{items.length === 0}}">
+    <view class="xj-empty"><text class="xj-empty-icon">💬</text>暂无历史会话</view>
+  </block>
+
+  <block wx:else>
+    <view
+      class="xj-card conv-item"
+      wx:for="{{items}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      bindtap="onTapConversation"
+    >
+      <view class="conv-title">{{item.title}}</view>
+      <view class="conv-time">{{item.time}}</view>
+    </view>
+  </block>
+</view>

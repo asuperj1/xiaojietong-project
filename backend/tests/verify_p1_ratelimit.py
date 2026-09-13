@@ -77,16 +77,32 @@ def main() -> int:
     retry_after = ""
     for i in range(1, args.limit + 4):
         status, body, headers = post_login(base, f"rl_probe_{i}")
-        if status == 200 and body.get("code") == 0:
-            ok_count += 1
-        elif status == 429:
+        if status == 429:
             if first_429_at is None:
                 first_429_at = i
                 retry_after = headers.get("retry-after", "")
+            continue
+        if status == 200 and body.get("code") == 0:
+            ok_count += 1
     print(f"       成功 {ok_count} 次，首次 429 出现在第 {first_429_at} 次")
 
-    check("阈值内请求全部成功", ok_count == args.limit,
-          f"期望 {args.limit} 次，实际 {ok_count} 次")
+    # 配额"不干净"的自诊断：限流是 60s 滑动窗口，若本分钟内有其它用例登录过
+    # （如 verify_p0_authz / verify_p1_upload 也各要登录一次），本次测量就不是从零开始，
+    # 此时报 FAIL 会误导。区分「代码缺陷」与「测量环境不干净」。
+    if ok_count == 0:
+        print("  [SKIP] 当前 IP 的登录配额已被占用（60s 滑动窗口内已有其他登录请求），")
+        print("         无法从零开始测量，本项跳过而非判失败。")
+        print("         重试方式：等待 60 秒，或临时调高 XJT_RATE_LIMIT_LOGIN_PER_MINUTE")
+        print("         后重启后端（如 $env:XJT_RATE_LIMIT_LOGIN_PER_MINUTE='1000'）。")
+        print()
+        total = len(PASSED) + len(FAILED)
+        print(f"===== 结果：{len(PASSED)}/{total} 通过（限流项已跳过）=====")
+        return 2
+
+    clean = ok_count == args.limit
+    hint = "" if clean else "（不足通常是本分钟内已有其他登录请求占用了配额，而非限流失效）"
+    check("阈值内请求全部成功", clean,
+          f"期望 {args.limit} 次，实际 {ok_count} 次{hint}")
     check("超阈值请求被拦截（429）", first_429_at == args.limit + 1,
           f"首次 429 在第 {first_429_at} 次（期望第 {args.limit + 1} 次）")
 

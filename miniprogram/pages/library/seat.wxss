@@ -1,0 +1,106 @@
+/* 图书馆座位选择（F6） */
+.room-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 16rpx;
+}
+.pick-row {
+  display: flex;
+  align-items: center;
+  height: 72rpx;
+  margin-bottom: 12rpx;
+}
+.pick-label {
+  width: 120rpx;
+  color: #666666;
+  font-size: 28rpx;
+}
+.pick-value {
+  background: #f5f5f5;
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  height: 64rpx;
+  line-height: 64rpx;
+  font-size: 28rpx;
+}
+.pick-sep {
+  margin: 0 16rpx;
+  color: #999999;
+}
+.legend {
+  display: flex;
+  margin-top: 8rpx;
+}
+.lg-item {
+  display: flex;
+  align-items: center;
+  margin-right: 28rpx;
+  font-size: 24rpx;
+  color: #666666;
+}
+.dot {
+  width: 20rpx;
+  height: 20rpx;
+  border-radius: 50%;
+  margin-right: 8rpx;
+  display: inline-block;
+}
+.dot-free {
+  background: #eef5fc;
+  border: 2rpx solid #4A90D9;
+}
+.dot-used {
+  background: #e5e5e5;
+}
+.dot-sel {
+  background: #4A90D9;
+}
+
+.seat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 0 16rpx;
+}
+.seat {
+  width: 150rpx;
+  height: 150rpx;
+  margin: 12rpx;
+  background: #eef5fc;
+  border: 2rpx solid #4A90D9;
+  border-radius: 16rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+.seat-used {
+  background: #eeeeee;
+  border-color: #eeeeee;
+  color: #bbbbbb;
+}
+.seat-selected {
+  background: #4A90D9;
+  border-color: #4A90D9;
+  color: #ffffff;
+}
+.seat-no {
+  font-size: 30rpx;
+  font-weight: 600;
+}
+.seat-tag {
+  margin-top: 6rpx;
+  font-size: 20rpx;
+  opacity: 0.85;
+}
+.foot {
+  padding: 24rpx;
+}
+.reserve-btn {
+  width: 100%;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

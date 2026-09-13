@@ -1,0 +1,39 @@
+/* 通知公告（F9-D） */
+.seg {
+  display: flex;
+  margin: 0 24rpx 20rpx;
+  background: #ffffff;
+  border-radius: 20rpx;
+  overflow: hidden;
+}
+.seg-item {
+  flex: 1;
+  text-align: center;
+  height: 80rpx;
+  line-height: 80rpx;
+  font-size: 28rpx;
+  color: #666666;
+}
+.seg-active {
+  background: #4A90D9;
+  color: #ffffff;
+}
+.n-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.n-meta {
+  margin-top: 10rpx;
+  display: flex;
+  align-items: center;
+  font-size: 24rpx;
+  color: #999999;
+}
+.n-time {
+  margin-left: auto;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

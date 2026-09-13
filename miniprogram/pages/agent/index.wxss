@@ -1,0 +1,80 @@
+/* 任务中心（F9-E） */
+.seg {
+  display: flex;
+  margin: 0 24rpx 20rpx;
+  background: #ffffff;
+  border-radius: 20rpx;
+  overflow: hidden;
+}
+.seg-item {
+  flex: 1;
+  text-align: center;
+  height: 80rpx;
+  line-height: 80rpx;
+  font-size: 28rpx;
+  color: #666666;
+}
+.seg-active {
+  background: #4A90D9;
+  color: #ffffff;
+}
+.task-input {
+  height: 76rpx;
+  background: #f5f5f5;
+  border-radius: 12rpx;
+  padding: 0 24rpx;
+  font-size: 28rpx;
+  margin-bottom: 16rpx;
+  box-sizing: border-box;
+}
+.task-btn {
+  width: 100%;
+}
+.t-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.t-title {
+  flex: 1;
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+}
+.t-status {
+  background: #eef5fc;
+  color: #4A90D9;
+}
+.t-done {
+  background: #eafaf1;
+  color: #2eb872;
+}
+.t-time {
+  margin-top: 10rpx;
+  font-size: 24rpx;
+  color: #999999;
+}
+.t-cancel {
+  margin-top: 16rpx;
+  width: 160rpx;
+}
+.r-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.r-content {
+  flex: 1;
+  font-size: 30rpx;
+  font-weight: 500;
+  color: #333333;
+}
+.r-time {
+  margin-top: 8rpx;
+  font-size: 24rpx;
+  color: #999999;
+}
+.retry {
+  margin: 24rpx auto 0;
+  width: 240rpx;
+}

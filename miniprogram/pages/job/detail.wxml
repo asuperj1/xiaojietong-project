@@ -1,0 +1,38 @@
+<!-- 岗位详情（F9-B） -->
+<view class="xj-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card">
+      <view class="top">
+        <text class="title">{{job.title}}</text>
+        <text class="salary">{{job.salary}}{{job.pay_unit}}</text>
+      </view>
+      <view class="company">{{job.company_name}}</view>
+      <view class="info-row" wx:if="{{job.job_type}}">类型：{{job.job_type}}</view>
+      <view class="info-row" wx:if="{{job.location}}">地点：{{job.location}}</view>
+      <view class="info-row" wx:if="{{job.work_time}}">时间：{{job.work_time}}</view>
+      <view class="desc" wx:if="{{job.description}}">{{job.description}}</view>
+    </view>
+
+    <view class="xj-card" wx:if="{{trust}}">
+      <view class="trust-title">可信度信息</view>
+      <view class="trust-row">风险等级：<text class="risk">{{trust.riskText}}</text></view>
+      <view class="trust-row">可信度评分：{{trust.trust_score}}</view>
+      <view class="trust-row">企业信用分：{{trust.company_credit}}</view>
+    </view>
+
+    <view class="xj-card">
+      <view class="resume-label">自我介绍 / 简历（可选）</view>
+      <textarea class="resume-input" placeholder="简要介绍你的专业、经历等" value="{{resume}}" bindinput="onResume" maxlength="1000"></textarea>
+      <button class="xj-btn-primary apply-btn" disabled="{{applying}}" bindtap="onApply">投递简历</button>
+    </view>
+  </block>
+</view>

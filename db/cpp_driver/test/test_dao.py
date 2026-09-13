@@ -8,7 +8,7 @@
   - 事务内使用 DAO（验证 DbSession 事务连接绑定对 DAO 同样生效）
 
 用法：
-  XJT_DB_PASSWORD=jhq000000 python test_dao.py
+  XJT_DB_PASSWORD=${XJT_DB_PASSWORD} python test_dao.py
 """
 
 import os

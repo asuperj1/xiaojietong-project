@@ -1,0 +1,27 @@
+<!-- 我的座位预约（F6） -->
+<view class="xj-page">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:elif="{{items.length === 0}}">
+    <view class="xj-empty"><text class="xj-empty-icon">📅</text>暂无预约</view>
+  </block>
+
+  <block wx:else>
+    <view class="xj-card" wx:for="{{items}}" wx:key="id">
+      <view class="top">
+        <text class="seat-no">{{item.seat_no}}</text>
+        <text class="xj-tag status-tag">{{item.statusText}}</text>
+      </view>
+      <view class="room">{{item.building_name}} · {{item.room_name}}</view>
+      <view class="time">{{item.reserve_date}} {{item.beginTime}} - {{item.endTime}}</view>
+      <button wx:if="{{item.cancelable}}" class="xj-btn-plain cancel-btn" data-id="{{item.id}}" bindtap="onCancel">取消预约</button>
+    </view>
+  </block>
+</view>

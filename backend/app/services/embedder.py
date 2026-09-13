@@ -45,7 +45,7 @@ class OllamaEmbedder:
     async def _request(self, texts: list[str]) -> list[list[float]] | None:
         """请求 Ollama /api/embed。失败返回 None（不抛异常）。"""
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout), trust_env=False) as client:
                 resp = await client.post(
                     f"{self.base_url}/api/embed",
                     json={"model": self.model, "input": texts},
@@ -108,7 +108,7 @@ class OllamaEmbedder:
     async def available(self) -> bool:
         """探测 Ollama 是否可用且模型存在。"""
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0), trust_env=False) as client:
                 resp = await client.get(f"{self.base_url}/api/tags")
                 if resp.status_code != 200:
                     return False
