@@ -45,3 +45,6 @@ backend/uploads/
 
 # ---- 微信开发者工具个人配置（勿入库）----
 miniprogram/project.private.config.json
+
+# 临时文件（部署脚本生成的提交消息等）
+*.tmp
