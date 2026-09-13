@@ -80,6 +80,12 @@ class Settings(BaseSettings):
     rag_embed_batch: int = 16            # 批量向量化每批条数
     rag_top_k: int = 3                   # 默认检索条数
     rag_score_threshold: float = 0.35    # 相似度阈值（低于则视为未收录）
+    # C16 检索重排：none（默认，不改变现有顺序）/ lexical（IDF+标题加权的词法重排）
+    # 实现见 app/services/rerank.py；填了未注册的名字会回退 none 并打 WARNING
+    rag_rerank: str = "none"
+    # C16 重排前先「多召」多少条候选：候选越多，标题/词法证据越充分，
+    # 但也越贵。3 篇候选时 IDF 基本失效（见 rerank.py 的口径说明），故默认 20。
+    rag_rerank_candidates: int = 20
     rag_vector_dir: str = "data/rag"     # 向量库持久化目录（相对 backend/）
 
     # ---------- 文件存储与上传访问（B14）----------
