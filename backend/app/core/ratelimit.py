@@ -91,7 +91,9 @@ def default_rules(login_per_minute: int) -> list[Rule]:
         Rule("POST", "/api/v1/auth/refresh", login_per_minute * 3),
         Rule("POST", "/api/v1/upload", 30),
         Rule("POST", "/api/v1/chat/send", 30),
-        Rule("POST", "/api/v1/agent/tasks", 20),
+        # B15 评审：eager 模式下 Agent 任务同步占用线程池线程（单次可达数十秒），
+        # 从 20/min 收紧到 10/min，降低并发拖垮其它同步路由的风险。
+        Rule("POST", "/api/v1/agent/tasks", 10),
     ]
 
 

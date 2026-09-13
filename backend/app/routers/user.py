@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from app.core.deps import get_current_user
 from app.core.response import err_param, ok
 from app.db import cpp_bridge
+from app.services.storage import resign
 
 router = APIRouter(prefix="/user", tags=["user"])
 
@@ -22,7 +23,8 @@ def _view(u: dict) -> dict:
         "id": int(u.get("id", 0)),
         "openid": u.get("openid", ""),
         "nickname": u.get("nickname", ""),
-        "avatar": u.get("avatar", ""),
+        # B14 P1 修复：头像入库为裸路径，返回前重新签名
+        "avatar": resign(u.get("avatar", "")),
         "role": int(u.get("role", 0)),
         "student_no": u.get("student_no", ""),
         "major": u.get("major", ""),

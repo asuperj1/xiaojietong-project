@@ -1,6 +1,8 @@
 """生活服务：商家 / 菜单 / 外卖 / 通知。
 
 契约：docs/api.md §10
+通知（B10）：个性化排序 + 未读汇总 + 批量已读经 services/notice.py
+（兴趣标签 + 行为偏好 + 年级/校区 + 时效衰减打分，投递记录懒生成）。
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ from pydantic import BaseModel
 from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
 from app.db import cpp_bridge
+from app.services import notice as notice_service
+from app.services.storage import resign
 
 router = APIRouter(prefix="/life", tags=["life"])
 
@@ -31,6 +35,8 @@ def merchants(
 @router.get("/merchants/{merchant_id}/menu")
 def menu(merchant_id: int, user: dict = Depends(get_current_user)):
     items = cpp_bridge.life_dao().menu_items(merchant_id)
+    for item in items:  # B14 P1 修复：菜品图入库为裸路径，返回前重新签名
+        item["image"] = resign(item.get("image", ""))
     return ok({"items": items})
 
 
@@ -108,13 +114,46 @@ def notice_feed(
     size: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user),
 ):
-    """AI 精准通知推送（占位）：按用户年级过滤；后续接标签+模型排序。"""
-    grade = user.get("grade", "")
-    rows = cpp_bridge.life_dao().page_notices(page, size, "", grade)
-    return ok(paged(rows, len(rows), page, size))
+    """AI 精准通知推送（B10）：按推荐得分排序，逐条附推荐理由。
+
+    打分 = 兴趣标签命中 + 行为偏好（点赞/收藏分类）+ 年级/校区匹配 + 时效衰减；
+    拉取时懒生成投递记录（notice_delivery），并回执曝光。
+    """
+    rows, total = notice_service.build_feed(user, page, size)
+    return ok(paged(rows, total, page, size))
+
+
+@router.get("/notices/unread-count")
+def notices_unread_count(user: dict = Depends(get_current_user)):
+    """未读通知数（B10）：与未读列表口径一致，批量已读后归零。"""
+    return ok({"count": notice_service.unread_count(user)})
+
+
+@router.get("/notices/unread")
+def notices_unread(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+):
+    """未读通知列表（B10，按推荐得分倒序）。"""
+    rows, total = notice_service.unread_list(user, page, size)
+    return ok(paged(rows, total, page, size))
+
+
+class ReadBatchIn(BaseModel):
+    notice_ids: list[int]
+
+
+@router.post("/notices/read-batch")
+def notices_read_batch(body: ReadBatchIn, user: dict = Depends(get_current_user)):
+    """批量标记已读（B10）：投递表置已读并同步旧回执表。"""
+    updated = notice_service.mark_read_batch(user, body.notice_ids)
+    return ok({"updated": updated})
 
 
 @router.post("/notices/{notice_id}/read")
 def mark_read(notice_id: int, user: dict = Depends(get_current_user)):
+    """单条已读：保留旧口径回执，同时同步投递记录（B10）。"""
     ok_flag = cpp_bridge.life_dao().mark_notice_read(int(user["id"]), notice_id)
+    notice_service.mark_read_batch(user, [notice_id])
     return ok({"notice_id": notice_id, "read": ok_flag})

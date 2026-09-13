@@ -1,6 +1,7 @@
 """校园地图：POI / 周边 / 导航 / 建筑详情。
 
 契约：docs/api.md §9
+导航（B13）：网格 A* 路网寻路，见 services/route.py（不再用两点直线占位）。
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 from app.core.deps import get_current_user
 from app.core.response import BizError, ok
 from app.db import cpp_bridge
+from app.services.route import plan_route
 
 router = APIRouter(prefix="/map", tags=["map"])
 
@@ -63,26 +65,57 @@ class NavigateIn(BaseModel):
 
 @router.post("/navigate")
 def navigate(body: NavigateIn, user: dict = Depends(get_current_user)):
+    """步行导航（B13）：网格 A* 路网寻路，绕开建筑，返回折线路径与距离/时长。
+
+    起点优先取传入坐标（用户定位）；缺省时取**距目标最近的 POI** 作为校园地标锚点
+    （响应 `start_source` 标明来源）。旧实现「起点取第一个 POI + 两点直线」已移除。
+    """
     rows = cpp_bridge.query("SELECT * FROM poi WHERE id = ?", [body.to_poi_id])
     if not rows:
         raise BizError(1001, "目标点位不存在")
     target = rows[0]
-    # 占位：起点缺省取第一个 POI；真实路径规划接入地图 SDK/路网
-    start = cpp_bridge.query("SELECT * FROM poi ORDER BY id LIMIT 1")[0]
-    distance = _haversine(
-        float(start["latitude"]), float(start["longitude"]),
-        float(target["latitude"]), float(target["longitude"]),
-    )
-    path = [
-        {"lat": float(start["latitude"]), "lng": float(start["longitude"])},
-        {"lat": float(target["latitude"]), "lng": float(target["longitude"])},
-    ]
+    to_lat, to_lng = float(target["latitude"]), float(target["longitude"])
+
+    if body.from_lat is not None and body.from_lng is not None:
+        from_lat, from_lng = float(body.from_lat), float(body.from_lng)
+        start_source = "user_location"
+        start_poi_id = 0  # navigation_log.from_poi_id 为 NOT NULL，0 表示定位起点
+    else:
+        pois = cpp_bridge.query("SELECT id, name, latitude, longitude FROM poi")
+        if not pois:
+            raise BizError(1001, "校园 POI 数据为空，无法规划路线")
+        nearest = min(
+            pois,
+            key=lambda p: _haversine(
+                to_lat, to_lng, float(p["latitude"]), float(p["longitude"])
+            ),
+        )
+        from_lat, from_lng = float(nearest["latitude"]), float(nearest["longitude"])
+        start_source = "nearest_poi"
+        start_poi_id = int(nearest["id"])
+
+    route = plan_route(from_lat, from_lng, to_lat, to_lng)
     cpp_bridge.execute(
         "INSERT INTO navigation_log (user_id, from_poi_id, to_poi_id, path_json) "
         "VALUES (?, ?, ?, ?)",
-        [int(user["id"]), int(start["id"]), body.to_poi_id, json.dumps(path)],
+        [
+            int(user["id"]),
+            start_poi_id,
+            body.to_poi_id,
+            json.dumps(route["path"], ensure_ascii=False),
+        ],
     )
-    return ok({"distance": round(distance), "duration": round(distance / 1.4 / 60), "path": path})
+    return ok(
+        {
+            "distance": route["distance"],
+            "duration": route["duration"],
+            "path": route["path"],
+            "straight_distance": route["straight_distance"],
+            "algorithm": route["algorithm"],
+            "start_source": start_source,
+            "target": {"id": int(target["id"]), "name": target["name"]},
+        }
+    )
 
 
 @router.get("/building/{building_id}")

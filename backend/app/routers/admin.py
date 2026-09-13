@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.deps import get_current_admin
-from app.core.response import err_param, ok, paged
+from app.core.response import err_param, err_server, ok, paged
 from app.db import cpp_bridge
 from app.services import rag
 
@@ -53,13 +53,41 @@ async def ingest(body: KnowledgeIn, _admin: dict = Depends(get_current_admin)):
 
 
 @router.post("/knowledge/index")
-async def knowledge_index(
-    force: bool = False,
-    _admin: dict = Depends(get_current_admin),
-):
-    """重建知识库索引（force=True 全量重建；默认只处理待向量化文档）。"""
-    result = await rag.build_index(force=force)
-    return ok(result)
+def knowledge_index(force: bool = False, _admin: dict = Depends(get_current_admin)):
+    """重建知识库索引（B15：Celery 异步执行）。
+
+    - Celery 启用：立即返回 `{async, celery_task_id}`，用
+      `GET /admin/knowledge/index-status/{task_id}` 查询进度；
+    - 未启用（无 Redis）：eager 同步执行并直接返回构建结果（与旧版一致）。
+    """
+    from app.core.config import settings
+    from app.tasks import build_knowledge_index
+
+    try:
+        task = build_knowledge_index.delay(force)
+    except Exception as exc:  # noqa: BLE001 - 投递失败转契约错误
+        raise err_server(f"索引构建任务投递失败：{exc}") from exc
+    if settings.celery_enabled:
+        return ok(
+            {
+                "async": True,
+                "celery_task_id": task.id,
+                "note": "索引构建已投递，可用 /admin/knowledge/index-status/{task_id} 查询",
+            }
+        )
+    return ok(task.result)
+
+
+@router.get("/knowledge/index-status/{task_id}")
+def knowledge_index_status(task_id: str, _admin: dict = Depends(get_current_admin)):
+    """查询异步索引构建状态（B15）。
+
+    注意：XJT_CELERY_ENABLED=false（eager 模式）时结果不写入 backend，
+    任意 task_id 均返回 state=PENDING，此时该接口无实际意义。
+    """
+    from app.tasks import task_state
+
+    return ok(task_state(task_id))
 
 
 @router.get("/forum/audit")

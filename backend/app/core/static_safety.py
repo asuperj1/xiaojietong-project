@@ -1,29 +1,31 @@
-"""上传目录静态服务：附加安全响应头。
+"""上传目录静态服务：签名校验 + 安全响应头。
 
-对应审计 **SEC-11**。`/static/uploads` 直接对外提供用户上传的文件，
-即使上传侧已做魔数白名单（见 `app/routers/upload.py`），仍建议加一层响应头
-纵深防御，防止以下场景：
-
-- **内容嗅探**：浏览器忽略声明的 `Content-Type`，把 `image/png` 当 HTML 解析
-  → 加 `X-Content-Type-Options: nosniff`；
-- **伪装类型执行脚本**：若某个文件被解析为 HTML/SVG，其中内联脚本可窃取
-  站点凭据或跳转 → 加 `Content-Security-Policy: sandbox` 将其降级为不可执行、
-  无同源权限的沙箱文档；
-- **Referer 外泄**：图片被第三方站点引用时泄漏内网路径 → 加 `Referrer-Policy`。
-
-注意：`sandbox` 指令会让 SVG 无法加载外部资源，若将来要支持 SVG 上传，
-需重新评估该策略。
+- **B14 签名访问**：`XJT_UPLOAD_SIGNED_URL_ENABLED=true`（默认）时，
+  `/static/uploads/*` 必须携带 `?e=<过期时间戳>&s=<HMAC 签名>`，
+  否则返回 403 —— 防止静态目录被任意枚举/盗链（签名由上传接口自动附带）。
+- **SEC-11 响应头**（纵深防御，即使文件被预览也降级为不可执行）：
+  - `X-Content-Type-Options: nosniff` 防内容嗅探；
+  - `Content-Security-Policy: sandbox` 使伪装类型不可执行、无同源权限；
+  - `Referrer-Policy: no-referrer` 防内网路径外泄；
+  - `Cross-Origin-Resource-Policy: same-site`。
 """
+
 from __future__ import annotations
 
+from urllib.parse import parse_qs
+
+from starlette.responses import JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
-from starlette.responses import Response
+from app.core.config import settings
+from app.core.url_sign import verify
+
+_URL_PREFIX = "/static/uploads"
 
 
 class SafeStaticFiles(StaticFiles):
-    """在 StaticFiles 基础上补充安全响应头（不覆盖已有的同名头）。"""
+    """在 StaticFiles 基础上补充签名校验与安全响应头（不覆盖已有同名头）。"""
 
     SECURITY_HEADERS: dict[str, str] = {
         "X-Content-Type-Options": "nosniff",
@@ -33,6 +35,18 @@ class SafeStaticFiles(StaticFiles):
     }
 
     async def get_response(self, path: str, scope: Scope) -> Response:
+        # B14：签名访问校验（默认开启）
+        if settings.upload_signed_url_enabled:
+            query = parse_qs(scope.get("query_string", b"").decode("utf-8"))
+            expire = (query.get("e") or [None])[0]
+            signature = (query.get("s") or [None])[0]
+            full_path = f"{_URL_PREFIX}/{path}"
+            if not verify(full_path, expire, signature):
+                return JSONResponse(
+                    status_code=403,
+                    content={"code": 2003, "message": "资源链接无效或已过期", "data": {}},
+                )
+
         response = await super().get_response(path, scope)
         for key, value in self.SECURITY_HEADERS.items():
             response.headers.setdefault(key, value)

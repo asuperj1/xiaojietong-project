@@ -64,7 +64,7 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 | AI 助手 | chat/send(SSE) / chat/quick / conversations / messages / feedback |
 | Agent | tasks(创建/列表/详情/取消) / reminders(列表/创建/完成) |
 | 图书馆 | free-rooms / rooms/{id}/seats / reservations(创建/我的/取消) / occupancy |
-| 二手 | items(列表/发布/我的发布/改状态/ai-describe) / wishes(创建/匹配) / orders(创建) |
+| 二手 | items(列表/发布/我的发布/详情/改状态/ai-describe/ai-price) / wishes(创建/匹配) / orders(创建) |
 | 兼职 | jobs(列表/详情/投递/可信度) / applications/me |
 | 论坛 | topics(列表/创建/我的/详情/点赞/举报/hot/feed) / comments |
 | 地图 | pois / nearby / navigate / building/{id} |
@@ -147,19 +147,25 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### POST /agent/tasks — 创建任务（自然语言）
 请求：
 ```json
-{ "instruction": "明天下午3点帮我预约图书馆二楼靠窗的座位，同时提醒我下午4点的选修课" }
+{ "instruction": "提醒我明天下午4点交作业" }
 ```
-响应 `data`：
+响应 `data`（status=2 表示执行完成，`plan[].result` 为真实落库结果）：
 ```json
 {
-  "task_id": 7, "status": 0,
+  "task_id": 7, "status": 2,
   "plan": [
-    {"tool":"reserve_seat","desc":"预约座位"},
-    {"tool":"add_reminder","desc":"设置课程提醒"}
-  ]
+    {"tool":"add_reminder","desc":"添加提醒",
+     "result":{"reminder_id":3,"content":"交作业","remind_at":"2026-09-12 16:00:00"}}
+  ],
+  "result": {"source":"model","results":[{"tool":"add_reminder","ok":true,"result":{...}}]}
 }
 ```
-> 后端：意图解析→Agent 编排→入 `agent_task`，异步执行（Celery）。
+> **编排三级链路（v1.7）**：
+> ① 模型 Function Call 主路径（`result.source=model`）；
+> ② 模型不可用/未返回工具时，**规则执行器兜底**（`services/rule_executor.py`，`source=rule`，同样真实写库）；
+> ③ 两者都未识别 → `status=3` + `error_msg`（**不再出现"未执行工具却报成功"的假成功**）。
+> 规则兜底支持的指令示例：「10 分钟后提醒我交作业」「帮我预约 1 号座位明天上午 9 点到 11 点」「查一下空教室」「出一本高数教材，25 元」。
+> **v1.13 异步执行（B15）**：任务经 Celery 投递 —— 启用（`XJT_CELERY_ENABLED=true` + Redis + worker）时立即返回 `status=0`（`result.async=true`、`result.celery_task_id`），前端轮询 `GET /agent/tasks/{id}` 获取终态；未启用时 eager 就地同步执行，响应与旧版一致（直接含 `status=2/3` 与执行结果）。
 
 ### GET /agent/tasks — 任务列表
 查询参数 `?status=&page=&size=`；`data.items[]`：
@@ -240,6 +246,10 @@ event: error    data: {"code":5002,"message":"模型不可用"}
   "seller_name":"测试用户A", "created_at":"2026-08-24 10:00" }
 ```
 
+### GET /secondhand/items/{id} — 物品详情（v1.8 新增）
+响应 `data`：物品完整信息（含 `images` 图片列表、`seller_name`、`status`、`audit_status`、`view_count`）；浏览量 +1。
+> B9 修复：发布时 `images` / `condition_level` 此前未落库，现已补写，详情可正常返回图片。
+
 ### POST /secondhand/items — 发布闲置
 请求：
 ```json
@@ -247,11 +257,36 @@ event: error    data: {"code":5002,"message":"模型不可用"}
   "price":25.00, "condition_level":9, "images":["https://..."] }
 ```
 响应：`{ "item_id": 3, "audit_status": 1, "source": "model" }`
+> v1.8：`images` 与 `condition_level` 已随发布落库（此前丢失，见上）；发布后可用 `GET /secondhand/items/{id}` 查看图片。
 > v1.5 起发布同样过内容审核：敏感词 → 3003 且 `audit_status=2`；可疑 → 待审；正常 → 立即上架。
 
 ### POST /secondhand/items/ai-describe — AI 辅助发布（图像→描述/定价）
-请求 `{ "image_url":"https://...", "user_note":"旧教材" }`
-响应 `data`：`{ "category":"教材","title":"高数教材（微积分上册）","suggested_price":25.00,"description":"..." }`
+请求（B9 扩展，旧字段兼容）：
+```json
+{ "title":"高数教材", "category":"教材", "condition_level":9,
+  "user_note":"微积分上册，无笔记", "image_url":"" }
+```
+响应 `data`（定价带库内同类样本依据）：
+```json
+{ "title":"九成新高数教材", "description":"微积分上册，无笔记，成色好…",
+  "selling_points":["成色9/10，保存良好","教材分类，同类需求稳定"],
+  "suggested_price":22.5, "price_min":18.0, "price_max":27.0,
+  "reason":"库内同类 3 件均价 25.0 元，按成色 9/10 折算",
+  "category":"教材", "condition_level":9, "sample_count":3, "avg_price":25.0,
+  "source":"model" }
+```
+> `source`：`model`（模型生成）/ `stat`（库内同类统计兜底）/ `fallback`（无样本，分类通用区间）。
+> 模型不可用或输出异常时自动降级为模板文案 + 统计定价，不阻塞发布；
+> 模型建议价超出统计区间 [0.5×min, 1.5×max] 时回退统计值（价格护栏）。
+
+### POST /secondhand/items/ai-price — 纯定价建议（v1.8 新增）
+请求 `{ "category":"教材", "condition_level":9 }`
+响应 `data`：
+```json
+{ "suggested_price":22.5, "price_min":18.0, "price_max":27.0,
+  "sample_count":3, "avg_price":25.0, "source":"stat",
+  "reason":"库内同类 3 件均价 25.0 元，按成色 9/10 折算" }
+```
 
 ### PUT /secondhand/items/{id}/status — 改状态
 请求 `{ "status": "1" }`（0在售 1已售 2下架）
@@ -365,8 +400,15 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### GET /topics/hot — 热点
 响应 `data.items[]`：`{ "id":1,"title":"...","is_hot":1 }`（对应 `ForumDAO.hot_topics`）
 
-### GET /topics/feed — 个性化推荐（AI）
-查询参数：`?page=&size=`，按用户标签/浏览历史排序（后端实现推荐逻辑）。
+### GET /topics/feed — 个性化推荐（B11 落地）
+查询参数：`?page=&size=`
+响应 `data.items[]` 在帖子字段基础上新增推荐信息：
+```json
+{ "id":12, "title":"考研数学经验分享", "category":"学习",
+  "score":2.6, "reason":"因为你关注了考研", "matched_tags":"考研" }
+```
+> 打分 = 兴趣标签命中 +1.5/个（上限 3）｜行为偏好（点赞/收藏分类命中）+0.8｜热度（赞/评/阅归一化）上限 +2.0｜3 天内时效加成 0.8→0。
+> 冷启动（无标签、无行为）自动回落为热度排序；每条均带 `reason` 推荐理由。
 
 ---
 
@@ -380,9 +422,19 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 查询参数：`?lat=43.88&lng=125.32&radius=500`
 响应 `data.items[]`：POI + `distance`（米）。
 
-### POST /map/navigate — 路线规划
-请求 `{ "from": {"lat":..,"lng":..}, "to_poi_id": 1 }`
-响应 `data`：`{ "distance":800,"duration":10,"path":[{lat,lng}...] }`
+### POST /map/navigate — 步行路线规划（B13 路网升级）
+请求 `{ "to_poi_id": 1, "from_lat": 43.88, "from_lng": 125.32 }`
+（起点坐标可省略；省略时取**距目标最近的 POI** 作为校园地标锚点）
+响应 `data`：
+```json
+{ "distance": 760, "straight_distance": 610, "duration": 9,
+  "path": [{"lat":43.8801,"lng":125.3202}, {"lat":43.8805,"lng":125.3210}],
+  "algorithm": "astar-grid", "start_source": "user_location",
+  "target": {"id":1, "name":"中心图书馆"} }
+```
+> v1.11：由「两点直线」升级为**网格 A* 路网寻路**（30m 网格，建筑按 45m 缓冲作障碍，
+> 八方向搜索 + 共线压缩）；`straight_distance` 用于对比绕行增量，`algorithm` 标明
+> `astar-grid`（正常）或 `straight-fallback`（障碍封死时回退直线）。
 
 ### GET /map/building/{id} — 建筑详情
 响应 `data`：`{ "id":1,"name":"中心图书馆","floors":5,"hours":"08:00-22:00",
@@ -416,9 +468,27 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 响应 `data.items[]`：`{ "id":1,"title":"2026年秋季学期选课通知","source":"教务处","category":"选课","publish_time":"..." }`
 
 ### POST /life/notices/{id}/read — 标记已读（精准推送回执）
+> v1.9 起同步更新投递记录（notice_delivery）的已读状态。
 
-### GET /life/notice-feed — AI 精准通知推送
-查询参数：`?page=&size=`，按用户年级/标签过滤排序（后端实现）。
+### GET /life/notice-feed — AI 精准通知推送（v1.9 升级）
+查询参数：`?page=&size=`
+响应 `data.items[]` 在通知字段基础上新增推荐信息：
+```json
+{ "id":2, "title":"2026年秋季学期选课通知", "category":"选课",
+  "score":2.3, "reason":"你关注了选课", "matched_tags":"选课,教务", "is_read":0 }
+```
+> 打分维度（可解释）：兴趣标签命中 +1.5/个（上限 3）｜行为偏好（点赞/收藏分类命中）+0.6｜年级匹配 +0.8｜校区匹配 +0.5｜7 天内时效衰减 0.5→0。
+> 拉取时懒生成投递记录（notice_delivery）并回执曝光。
+
+### GET /life/notices/unread-count — 未读数（v1.9 新增）
+响应 `data`：`{ "count": 3 }`（与未读列表口径一致，批量已读后归零）
+
+### GET /life/notices/unread — 未读列表（v1.9 新增）
+查询参数：`?page=&size=`；`data.items[]` 同 notice-feed，仅含 `is_read=0`，按得分倒序。
+
+### POST /life/notices/read-batch — 批量已读（v1.9 新增）
+请求 `{ "notice_ids": [1,2,3] }` → 响应 `{ "updated": 3 }`
+> 更新投递表并同步旧回执表（notice_read），保证未读口径一致。
 
 ---
 
@@ -434,9 +504,13 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 请求 `{ "title":"图书馆借阅规则","category":"图书馆","content":"...","source_url":"..." }`
 响应：`{ "doc_id":1, "chunks":12, "status":"ok" }`（写库后自动分块+向量化；embedding 未就绪时 `status="embed_failed"`，Ollama 就绪后重跑建索引）
 
-### POST /admin/knowledge/index — 重建知识库索引
+### POST /admin/knowledge/index — 重建知识库索引（B15 异步化）
 查询参数：`?force=true`（全量重建，默认 false 只处理待向量化文档）
-响应：`{ "total":12, "ok":12, "failed":0, "details":[{"doc_id":1,"chunks":12,"status":"ok"}] }`
+- Celery 启用：响应 `{ "async": true, "celery_task_id": "..." }`，用下方状态接口查询进度；
+- 未启用（无 Redis）：eager 同步执行，响应 `{ "total":12, "ok":12, "failed":0, "details":[...] }`（与旧版一致）。
+
+### GET /admin/knowledge/index-status/{task_id} — 索引构建状态（v1.13 新增）
+响应 `data`：`{ "task_id":"...", "state":"SUCCESS", "result": { "total":27, "ok":27, "failed":0 } }`
 
 ### GET /admin/forum/audit — 待审核帖子
 `data.items[]`：`{ "id":5,"title":"...","content":"...","author_id":1 }`（对应 `ForumDAO.pending_audit`）
@@ -458,7 +532,8 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 
 1. **SSE 解析**：前端用 `wx.request` 无法流式，改用 `wx.request` 长连接 + 后端 `StreamingResponse`，或小程序 `EventSource` 适配（微信需 `enableChunked`）。
 2. **token 失效**：接口返回 `2001/2002` 时前端统一跳登录。
-3. **图片上传**：预留 `POST /upload/image`（multipart）→ `image_asset` 表。
+3. **图片上传（B14）**：`POST /upload/image`（multipart；魔数白名单 + 5MB 上限）→ 返回**带签名的访问 URL**（`?e=过期时间戳&s=HMAC 签名`，有效期默认 7 天）。`/static/uploads/*` 无签名或签名过期返回 **403**（可用 `XJT_UPLOAD_SIGNED_URL_ENABLED=false` 关闭校验）。存储经 `services/storage.py` 抽象，`XJT_STORAGE_BACKEND=local|s3|oss`（对象存储接口已预留）。
+   > **签名闭环（v1.14 修复）**：入库一律保存**不带签名**的稳定路径；服务端在返回图片/头像字段（商品图、收藏图、用户头像、菜品图）时经 `storage.resign()` **动态重新签名**，前端直接使用返回值即可，不会因签名过期失效。
 4. **日期时区**：后端统一用服务器本地时间（`Asia/Shanghai`）。
 5. **接口与 DAO 对应**：每个接口标了对应 C++ DAO，实现时直接调 `jt_db.XXXDAO()`。
 6. **健康探针（v1.6）**：`GET /health`（基础，前端存活探测）；`GET /health/detail`（可观测：Ollama 可达性/模型清单/向量库/知识库规模/检索模式与降级原因）；`GET /health/selfcheck`（一键自检 embed + 检索 + 生成）。
@@ -526,3 +601,11 @@ Invoke-RestMethod -Method Post -Uri "$base/agent/tasks" -Headers $H -ContentType
 | v1.4 | 2026-09-10 | **P0 安全加固（成员3）**：`POST /secondhand/orders` 请求体改为 `{item_id, remark}`，卖家/金额由服务端反查、响应新增 `amount`（SEC-05），下单原子抢占防超卖（TXN-02，冲突返回 `3001`）；聊天会话读写新增归属校验（SEC-03/04，越权返回 `1001`）；账号禁用即时生效（SEC-06，返回 `2003`）；生产环境强制校验 `XJT_JWT_SECRET` 与微信配置（SEC-01/02） |
 | v1.5 | 2026-09-10 | B6 内容审核闭环（成员2）：词库 `audit_word` + 审核留痕 `audit_log`（C7 表设计，`db/sql/11_audit.sql`）；`services/audit.py` 三级判定（pass/review/block，规则 + 模型二次判定）；发帖·评论·二手发布接入审核；拒绝错误码 **3003**；新增 `GET /topics/{id}/audit-status` 轮询与 `POST /admin/forum/audit/batch` 批量审核 |
 | v1.6 | 2026-09-10 | B8 可观测性：新增 `GET /health/detail`（Ollama·模型·向量库·知识库·检索模式与降级原因）与 `GET /health/selfcheck`（embed/检索/生成一键自检）；`/health` 保持兼容不变 |
+| v1.8 | 2026-09-11 | B9 二手 AI：新增 `GET /secondhand/items/{id}`（含 images）与 `POST /secondhand/items/ai-price` 纯定价接口；`ai-describe` 升级为「模型文案 + 库内同类均价定价」（响应含 sample_count/avg_price/reason，模型不可用时统计兜底 + 价格护栏）；修复发布丢失 `images`/`condition_level` 的落库缺陷 |
+| v1.9 | 2026-09-12 | B10 通知精准推荐与未读：`notice-feed` 升级为兴趣标签 + 行为偏好 + 年级/校区 + 时效衰减打分（逐条带 `score/reason/matched_tags`）；新增 `GET /life/notices/unread-count`、`GET /life/notices/unread`、`POST /life/notices/read-batch`；投递记录 `notice_delivery` 懒生成 + 曝光回执 |
+| v1.10 | 2026-09-12 | B11 推荐数据消费：`GET /topics/feed` 由纯时间序升级为混合打分（兴趣标签 + 行为偏好 + 热度 + 时效），逐条返回 `score/reason/matched_tags`；冷启动回落热度榜（`services/recommend.py`） |
+| v1.11 | 2026-09-12 | B13 路网导航：`POST /map/navigate` 由两点直线升级为网格 A* 路网寻路（`services/route.py`，30m 网格 + 建筑 45m 缓冲障碍 + 共线压缩）；响应新增 `straight_distance`（绕行对比）/`algorithm`/`start_source`（起点来源），起点缺省改为距目标最近的 POI |
+| v1.12 | 2026-09-12 | B14 上传加固与存储抽象：新增 `core/url_sign.py`（HMAC 签名 + 过期）与 `services/storage.py`（本地 / S3 / OSS 可切换）；`POST /upload/image` 返回签名访问 URL，`/static/uploads/*` 校验签名（无签名/过期返回 403）；配合既有魔数白名单与安全响应头构成完整上传安全基线 |
+| v1.13 | 2026-09-12 | B15 异步化：接入 Celery + Redis（`core/celery_app.py` + `app/tasks.py`），Agent 任务与知识库索引构建改经队列投递；未启用时 eager 就地同步执行（行为与旧版一致）；新增 `GET /admin/knowledge/index-status/{task_id}`；`GET /health/detail` 新增 `celery` 运行模式字段 |
+| v1.14 | 2026-09-12 | 评审修复（P1+P2）：`storage.resign()` 补全上传签名闭环（商品图/收藏图/头像/菜品图返回前动态签名，修复"只写不读"导致开启校验后前端 403）；Celery 投递异常统一转契约错误（不再 HTTP 500）；`/agent/tasks` 限流收紧至 10/min；索引状态接口补充 eager 模式说明 |
+| v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |

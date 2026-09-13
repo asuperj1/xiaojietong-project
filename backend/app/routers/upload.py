@@ -1,23 +1,25 @@
-"""文件上传：图片（占位保存到本地 uploads/，生产接对象存储）。
+"""文件上传：图片（B14 存储抽象 + 签名访问）。
 
 契约：docs/api.md §12
+安全基线：
+- **魔数白名单**判定真实类型，客户端 `Content-Type` 仅作一致性校验（不符直接拒绝）——SEC-11；
+- **分块读取** + 5MB 上限，防超大文件撑爆内存 ——SEC-11；
+- 文件名哈希化（`md5 前 8 位 + 时间戳`），不可枚举；
+- 存储经 `services/storage.py` 抽象（本地 / 对象存储可切换）——B14；
+- 返回的访问 URL 带 **HMAC 签名 + 有效期**（`/static/uploads` 需签名访问）——B14。
 """
 
 from __future__ import annotations
-
-import hashlib
-import time
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, UploadFile
 
 from app.core.deps import get_current_user
 from app.core.response import err_param, ok
 from app.db import cpp_bridge
+from app.services.storage import get_storage
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
-UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
 ALLOWED = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 MAX_SIZE = 5 * 1024 * 1024  # 5MB
 _CHUNK = 64 * 1024
@@ -76,15 +78,13 @@ async def upload_image(file: UploadFile, user: dict = Depends(get_current_user))
         raise err_param("文件类型与内容不符")
     ext = real_ext
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    md5 = hashlib.md5(data).hexdigest()
-    fname = f"{md5[:8]}_{int(time.time())}{ext}"
-    path = UPLOAD_DIR / fname
-    path.write_bytes(data)
-
-    url = f"/static/uploads/{fname}"
+    # B14：经存储抽象保存（本地 / 对象存储可切换），返回带签名的访问 URL
+    storage = get_storage()
+    saved = storage.save(data, ext)
+    access_url = storage.url_for(saved["key"])
     cpp_bridge.execute(
         "INSERT INTO image_asset (user_id, url, mime, size_bytes, md5) VALUES (?, ?, ?, ?, ?)",
-        [int(user["id"]), url, _EXT_MIME[ext], len(data), md5],
+        # 入库保存不带签名的稳定路径（签名由访问时校验，避免过期签名入库）
+        [int(user["id"]), access_url.split("?")[0], _EXT_MIME[ext], len(data), saved["md5"]],
     )
-    return ok({"url": url, "size": len(data)})
+    return ok({"url": access_url, "size": len(data)})
