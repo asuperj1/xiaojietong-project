@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     rag_embed_dim: int = 1024            # bge-m3 输出维度（用于向量库一致性校验）
     rag_chunk_size: int = 600            # 分块目标字符数（README 规划 500~800）
     rag_chunk_overlap: int = 100         # 分块重叠字符数
+    # C15 切片策略：fixed（默认，与 C15 之前行为一致）/ semantic（优先按段落、不切断段落）
+    # 实现见 app/services/chunker.py；填了未注册的名字会回退 fixed 并打 WARNING
+    rag_chunk_strategy: str = "fixed"
     rag_embed_batch: int = 16            # 批量向量化每批条数
     rag_top_k: int = 3                   # 默认检索条数
     rag_score_threshold: float = 0.35    # 相似度阈值（低于则视为未收录）
