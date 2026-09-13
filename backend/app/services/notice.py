@@ -17,9 +17,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.db import cpp_bridge
+from app.services.notice_scheduler import PRIVATE_TARGET_PREFIX
 
 _MAX_TAG_HITS = 3
 _MAX_NOTICES = 200
+# 私密推送行（B18）的 target_grade 形如 ``__push:reminder:12:D7``，
+# 是"仅投递对象可见"的推送通知，绝不能进入他人的可见口径。
+_PRIVATE_LIKE = f"{PRIVATE_TARGET_PREFIX}%"
 
 
 def _user_tags(user_id: int) -> list[str]:
@@ -44,9 +48,10 @@ def _visible_notices(user: dict) -> list[dict]:
     grade = str(user.get("grade") or "")
     return cpp_bridge.query(
         "SELECT id, title, content, source, category, target_grade, publish_time "
-        "FROM campus_notice WHERE target_grade = '' OR target_grade = ? "
+        "FROM campus_notice WHERE (target_grade = '' OR target_grade = ?) "
+        "AND target_grade NOT LIKE ? "
         "ORDER BY publish_time DESC LIMIT ?",
-        [grade, _MAX_NOTICES],
+        [grade, _PRIVATE_LIKE, _MAX_NOTICES],
     )
 
 

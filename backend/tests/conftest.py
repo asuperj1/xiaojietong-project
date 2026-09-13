@@ -30,17 +30,24 @@ os.environ.setdefault("XJT_DB_NAME", "xiaojietong")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.core.config import settings  # noqa: E402
 from app.db import cpp_bridge  # noqa: E402
 from app.main import app  # noqa: E402
 
 
 @pytest.fixture(scope="session")
 def client() -> TestClient:
-    """TestClient；数据库/扩展/凭据不可用时整体 skip（而非 fail）。"""
+    """TestClient；数据库/扩展/凭据不可用时整体 skip（而非 fail）。
+
+    数据库口令来源（任一即可，优先级从高到低）：
+    1. 环境变量 ``XJT_DB_PASSWORD``；
+    2. ``backend/.env``（settings 自动加载，2026-09-13 起按绝对路径解析）——
+       因此本机配好 .env 后直接 `pytest tests -q` 即可跑集成用例，无需手设环境变量。
+    """
     if not cpp_bridge.available():
         pytest.skip("jt_db C++ 扩展不可用：请先按 db/cpp_driver/README.md 构建")
-    if not os.environ.get("XJT_DB_PASSWORD"):
-        pytest.skip("未设置 XJT_DB_PASSWORD 环境变量，跳过集成用例")
+    if not os.environ.get("XJT_DB_PASSWORD") and not settings.db_password:
+        pytest.skip("未提供数据库口令（XJT_DB_PASSWORD 或 backend/.env），跳过集成用例")
     with TestClient(app) as c:
         data = c.get("/api/v1/health").json()
         if data.get("db") != "ok":

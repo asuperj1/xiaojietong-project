@@ -16,6 +16,7 @@ from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
 from app.db import cpp_bridge
 from app.services import notice as notice_service
+from app.services.notice_scheduler import is_private_audience
 from app.services.storage import resign
 
 router = APIRouter(prefix="/life", tags=["life"])
@@ -104,7 +105,15 @@ def notices(
     size: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user),
 ):
+    """通知列表（公共口径）。
+
+    B18 起过滤「私密推送行」：分层推送（D-7 / D-2）为**投递给具体用户**的通知，
+    标记写在 ``target_grade``（``__push:...``）。C++ DAO 的 ``(? = '' OR col = ?)``
+    写法在空参时不过滤（审计 C33 已记录），故在此显式剔除，避免个人待办泄漏给他人。
+    这些推送对**本人**仍可见——走 ``/notice-feed`` 与 ``/notices/unread``（按投递记录取）。
+    """
     rows = cpp_bridge.life_dao().page_notices(page, size, category, target_grade)
+    rows = [r for r in rows if not is_private_audience(r.get("target_grade"))]
     return ok(paged(rows, len(rows), page, size))
 
 
