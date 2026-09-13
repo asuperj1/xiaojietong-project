@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -14,12 +15,21 @@ from pydantic import BaseModel
 from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok
 from app.db import cpp_bridge
+from app.services.citation_check import check_citations, clean_answer, should_refuse
 from app.services.model_client import model_client
 from app.services.rag import build_system_prompt
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 MAX_HISTORY = 8  # 送入模型的最近消息轮数
+
+# `C20` 拒答文案：检索结果判定为「不足以回答」时直接用这句，不给模型编造的机会。
+REFUSE_TEXT = (
+    "抱歉，校园知识库里没有找到能支撑这个问题的资料，我不做猜测。"
+    "你可以换个说法再问一次，或者直接联系相关职能部门确认。"
+)
 
 
 class ChatIn(BaseModel):
@@ -69,16 +79,57 @@ async def chat_send(body: ChatIn, user: dict = Depends(get_current_user)):
 
     # 4) 流式返回（SSE）
     async def gen():
+        # `C20` 闸门一：检索结果明显支撑不了这个问题 → 直接拒答。
+        # 省一次生成，更不给模型“先看到无关资料再编”的机会。
+        # 注意：拒答时**不下发 sources**，否则前端会把无关文档当成“依据”展示。
+        refused, reason = should_refuse(user_text, sources)
+        if refused:
+            logger.info("C20 拒答 conv=%s reason=%s", conv_id, reason)
+            saved = cpp_bridge.execute(
+                "INSERT INTO ai_message (conversation_id, role, content) VALUES (?, 'assistant', ?)",
+                [conv_id, REFUSE_TEXT],
+            )
+            yield (
+                "event: refused\n"
+                f"data: {json.dumps({'delta': REFUSE_TEXT, 'reason': reason}, ensure_ascii=False)}\n\n"
+            )
+            yield (
+                "event: done\n"
+                f"data: {json.dumps({'conversation_id': conv_id, 'message_id': saved[1], 'refused': True}, ensure_ascii=False)}\n\n"
+            )
+            return
+
         yield f"event: sources\ndata: {json.dumps(sources, ensure_ascii=False)}\n\n"
+
         parts: list[str] = []
         async for chunk in model_client.stream_chat(messages):
             parts.append(chunk)
             yield f"event: chunk\ndata: {json.dumps({'delta': chunk}, ensure_ascii=False)}\n\n"
         assistant_text = "".join(parts)
+
+        # `C20` 闸门二：引用反向校验 —— 删掉模型编造的引用标记。
+        # 正文已经流给前端了，这里额外下发 `citations` 事件带上修正后的全文，
+        # 由前端擦除重写；校验本身出问题不能影响对话，所以整块包 try。
+        final_text = assistant_text
+        fabricated: list[str] = []
+        try:
+            report = check_citations(assistant_text, sources, question=user_text)
+            final_text = clean_answer(assistant_text, report)
+            fabricated = [c.value for c in report.fabricated]
+            if fabricated:
+                logger.warning("C20 剔除伪造引用 conv=%s %s", conv_id, fabricated)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("C20 引用校验异常（已忽略）conv=%s %s", conv_id, exc)
+
         saved = cpp_bridge.execute(
             "INSERT INTO ai_message (conversation_id, role, content) VALUES (?, 'assistant', ?)",
-            [conv_id, assistant_text],
+            [conv_id, final_text],
         )
+        if fabricated or final_text != assistant_text:
+            yield (
+                "event: citations\n"
+                f"data: {json.dumps({'fabricated': fabricated, 'final': final_text}, ensure_ascii=False)}\n\n"
+            )
         yield (
             "event: done\n"
             f"data: {json.dumps({'conversation_id': conv_id, 'message_id': saved[1]}, ensure_ascii=False)}\n\n"

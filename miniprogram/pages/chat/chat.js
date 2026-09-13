@@ -178,6 +178,23 @@ Page({
           this.updateMessage(aiLocalId, { content: next })
           this.setData({ scrollIntoView: 'msg-' + aiLocalId })
         },
+        // `C20` 拒答：检索结果不足以回答，后端没调模型，直接展示结论文案
+        onRefused: (data) => {
+          if (this._activeAiId !== aiLocalId) return
+          this.updateMessage(aiLocalId, { content: (data && data.delta) || '', refused: true })
+          this.setData({ scrollIntoView: 'msg-' + aiLocalId })
+        },
+        // `C20` 引用清洗：正文已流过，用清洗后的全文覆盖，并提示剔除了伪造引用
+        onCitations: (data) => {
+          if (this._activeAiId !== aiLocalId) return
+          if (data && typeof data.final === 'string' && data.final) {
+            this.updateMessage(aiLocalId, { content: data.final })
+          }
+          const n = (data && data.fabricated && data.fabricated.length) || 0
+          if (n > 0) {
+            wx.showToast({ title: '已剔除非知识库引用', icon: 'none' })
+          }
+        },
         // 完成：保存会话/消息 id
         onDone: (data) => {
           if (this._activeAiId !== aiLocalId) return

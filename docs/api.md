@@ -44,11 +44,20 @@ http://127.0.0.1:8000/api/v1           # 本地开发（uvicorn）
 ### 流式对话（SSE）
 - `POST /chat/send` 返回 `text/event-stream`，事件：
 ```
-event: chunk    data: {"delta":"你好"}
 event: sources  data: [{"title":"图书馆借阅规则","source_url":"..."}]
+event: chunk    data: {"delta":"你好"}
 event: done     data: {}
 event: error    data: {"code":5002,"message":"模型不可用"}
 ```
+- `C20` 引用校验新增两个事件（前端**可忽略**，忽略时退化为现状）：
+```
+event: refused    data: {"delta":"（拒答文案）","reason":"最高相似度 0.100 < 阈值 0.35"}
+event: citations  data: {"fabricated":["学生手册"],"final":"（剔除伪造引用后的全文）"}
+```
+  - `refused`：检索结果不足以回答，**后端未调用模型**；此路径下**不发 `sources`**
+    （避免把无关文档当依据展示），随后直接 `done` 且 `done.refused = true`。
+  - `citations`：正文已流式展示后发现模型编造了引用标记，用 `final` 覆盖气泡内容。
+  - ⚠️ 事件顺序：`sources → chunk… → citations? → done`；`refused → done`（无 `sources`）。
 
 ### 时间格式
 - 统一 `YYYY-MM-DD HH:mm:ss`（MySQL DATETIME）；日期 `YYYY-MM-DD`；时间 `HH:mm`。
