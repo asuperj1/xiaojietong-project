@@ -1,11 +1,11 @@
 // 统一 HTTP 请求封装（F1B：普通请求 + SSE 流式请求）
 // 依据：miniprogram/前端页面规格.md §0、docs/api.md §0、backend/app/routers/chat.py
-// - base URL: http://127.0.0.1:8000/api/v1
+// - base URL: 由 config/env.js 的 getBaseUrl() 统一解析（开发默认本机后端，见该文件说明）
 // - 统一响应 {code, message, data}；code=0 成功
 // - 登录后请求头携带 Authorization: Bearer <token>
 // - SSE：POST /chat/send，事件 sources / chunk / done（error 为文档预留）
 
-const BASE_URL = 'http://127.0.0.1:8000/api/v1'
+const { getBaseUrl } = require('../config/env')
 
 // token 在本地存储中的键名（与 app.js 及规格书 §0 登录页保持一致）
 const TOKEN_KEY = 'token'
@@ -54,8 +54,8 @@ function handleAuthFailure(code, message) {
  * @returns {Promise<any>} 成功 resolve 后端 data；失败 reject 携带 code 属性的 Error
  */
 function request(path, { method = 'GET', data = {} } = {}) {
-  // 路径兼容：确保以 "/" 开头
-  const url = BASE_URL + (path.startsWith('/') ? path : '/' + path)
+  // 路径兼容：确保以 "/" 开头（每次请求解析，真机调试改 storage 后可立即生效）
+  const url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
 
   // 自动读取本地 token（无 token 则不注入 Authorization）
   const token = wx.getStorageSync(TOKEN_KEY) || ''
@@ -163,7 +163,8 @@ function decodeUtf8Partial(bytes) {
  * @returns {RequestTask} 调用方可 task.abort() 主动终止
  */
 function sseRequest(path, data = {}, { onSources, onChunk, onDone, onError } = {}) {
-  const url = BASE_URL + (path.startsWith('/') ? path : '/' + path)
+  // 与 request() 使用同一套环境解析规则（getBaseUrl）
+  const url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
   const token = wx.getStorageSync(TOKEN_KEY) || ''
 
   let textBuffer = ''                 // 已解码、待按事件边界切分的文本
@@ -325,4 +326,6 @@ function sseRequest(path, data = {}, { onSources, onChunk, onDone, onError } = {
   return task
 }
 
-module.exports = { request, sseRequest, BASE_URL }
+// 后端地址改为动态解析：导出 getBaseUrl 供调试/自检使用
+// （原 BASE_URL 为静态字符串，仓内已无调用方，故不再导出，避免误用静态值）
+module.exports = { request, sseRequest, getBaseUrl }
