@@ -211,19 +211,23 @@ refactor(cpp_driver): 重构连接池获取逻辑
 
 ---
 
-## 六、分支保护配置要求（已按现状配置，2026-09-09 生效）
+## 六、分支保护配置要求（2026-09-09 生效；2026-09-13 实测修正）
 
-> GitHub 规则集 `team-branch-protect`（Active）已配置，**目标分支仅 `main`**。
+> GitHub 规则集 `team-branch-protect`（Active）已配置，**目标分支：`main` 与 `dev`**（后者于 2026-09-13 实测确认已纳入保护）。
 
-**`main` —— 唯一受保护分支，任何人（含仓库 Owner）一律禁止直接推送**
+**`main` —— 受保护分支，任何人（含仓库 Owner）一律禁止直接推送**
 - ✅ GitHub 已开启 **Require a pull request before merging**（必须 PR 才能合并）；
 - ✅ `main` 只接收来自 `dev` 的合并：所有改动经 `feature/* → dev` 集成后，再由 `dev → main` 的 PR 合入；
 - ✅ 直接 push 到 `main` 会被 GitHub 服务端强制拒绝（ruleset 已生效，无 bypass）；
 - 规则集位置：`Settings → Rulesets → team-branch-protect`（启用：Restrict deletions / Require a pull request before merging / Block force pushes）。
 
-**`dev` —— 不设 GitHub 保护（团队自主放宽，2026-09-09 决定）**
-- `dev` 允许直接推送/直接合并，作为集成分支提高迭代效率；
-- 仍建议用 PR 合并以便留痕与回溯，但不强制；
+**`dev` —— 现已纳入 GitHub 保护（**2026-09-13 实测修正**，原 2026-09-09 的“不设保护”已失效）**
+- ⚠️ **`dev` 现在同样要求“必须通过 PR 合并”**：`git push github dev` 会返回
+  `GH013: Changes must be made through a pull request`（无 bypass，含 Owner）；
+- ✅ 正确流程：从 `dev` 拉临时分支 → 推送到远程 → 开 **PR（base = `dev`）** → 合并；
+- ✅ 仍需在**本地先解完冲突并验证**再推，禁止把冲突丢给 PR（见 §五）。
+- ⚠️ **探测保护的错误做法**：`git push --dry-run` **不触发 ruleset 校验**，会显示“推送成功”；
+  本次据此误判为“dev 可直推”。要确认保护状态请真推一次，或查看 `Settings → Rulesets`。
 - 所有功能最终汇入 `dev`，稳定后再走 `dev → main` PR。
 
 > 若日后使用 gitee 镜像：对应设置位于 仓库 → 管理 → 分支管理 → 保护分支（仅需保护 `main`）。
