@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     # 运行环境：dev（默认，方便本地开发）/ prod（启用安全硬校验，见 _validate_security）
     env: str = "dev"
 
+    # C21 适配器配置：当前生效的学校配置名（backend/app/adapters/configs/<name>.yml）。
+    # 「一份配置描述一所学校」——换学校只改这一项（或直接给文件路径），不改代码。
+    # 常用：python -m app.adapters --check 校验 configs/ 下全部学校配置。
+    school_config: str = "xiaojietong"
+
     # C++ 数据访问层（jt_db 连接池）
     db_host: str = "127.0.0.1"
     db_port: int = 3307  # 本机 MySQL 实例运行在 3307（非默认 3306），按实际修改
