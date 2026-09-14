@@ -199,6 +199,70 @@ def test_zero_or_negative_chunk_size_raises(strategy: str) -> None:
             chunk_text("有内容。", bad, 0, strategy=strategy)
 
 
+# ================= 2b) C15 评审整改：参数契约 + 重叠语义差异 ——
+#
+# 评审 P3-1：`semantic` 在段落边界不重叠（`overlap` 只在段内退回 fixed 时生效），
+#           原 docstring 没写 → 现补文档 + 用**正反两条**用例锁定行为。
+# 评审 P3-2：`chunk_size<=0` 抛错、`overlap>=chunk_size` 静默修正 —— 同类参数两种处理
+#           → 现统一到 `_normalize_params()`，并新增**告警**（不再静默）。
+
+
+@pytest.mark.parametrize("strategy", ["fixed", "semantic"])
+def test_overlap_not_less_than_chunk_size_is_auto_corrected(strategy: str) -> None:
+    """`overlap >= chunk_size` 是**自动修正**为 `chunk_size // 5`：不抛错、也不原样使用。
+
+    两种策略必须给出**完全相同**的修正口径（评审 P3-2 的「统一」要求）。
+    """
+    text = "甲。乙。丙。丁。" * 20  # 180 字符 → 必然多于一块
+    auto = chunk_text(text, 100, 200, strategy=strategy)      # 200 >= 100 → 修正为 20
+    explicit = chunk_text(text, 100, 20, strategy=strategy)   # 100 // 5 == 20
+    assert auto == explicit
+    # 反向对照：换一个**合法**的 overlap，结果必须不同 ——
+    # 否则说明"相等"只是因为参数根本没生效（恒真空断言族）
+    assert explicit != chunk_text(text, 100, 60, strategy=strategy)
+
+
+@pytest.mark.parametrize("strategy", ["fixed", "semantic"])
+def test_overlap_auto_correction_logs_warning(strategy: str, caplog) -> None:
+    """修正**必须留日志**：否则就是「静默降级」（与「未知策略回退 + 告警」同一原则）。"""
+    with caplog.at_level(logging.WARNING, logger="app.services.chunker"):
+        chunk_text("甲。乙。丙。丁。" * 20, 100, 200, strategy=strategy)
+    assert any("自动修正" in r.message for r in caplog.records)
+
+
+def _two_paragraphs() -> tuple[str, str]:
+    p1 = "第一段开头。" + "甲" * 30 + "第一段结尾标记Z"
+    p2 = "第二段开头。" + "乙" * 30 + "第二段结尾标记W"
+    return p1, p2
+
+
+def test_semantic_does_not_overlap_across_paragraph_boundary() -> None:
+    """评审 P3-1：`semantic` 在**段落边界不重叠**（有意设计，非缺陷）。
+
+    段落已是完整语义单元；再叠上一段尾部只会让同一句话在两个块里各出现一次
+    → 向量空间浪费 + 检索结果重复。
+    """
+    p1, p2 = _two_paragraphs()
+    chunk_size = len(p1) + 5  # 容得下单段、容不下两段
+    chunks = chunk_text(f"{p1}\n\n{p2}", chunk_size=chunk_size, overlap=20,
+                        strategy="semantic")
+    assert chunks == [p1, p2]                       # 整段进出
+    assert not chunks[1].startswith(chunks[0][-20:])  # 块间零重叠
+
+
+def test_fixed_does_overlap_at_chunk_boundary() -> None:
+    """**反向对照**：同一输入、同一参数下 `fixed` **确实有**块间重叠。
+
+    没有这条对照，上面「semantic 不重叠」可能只是参数压根没触发重叠 —— 那种断言是空的。
+    """
+    p1, p2 = _two_paragraphs()
+    chunk_size = len(p1) + 5
+    chunks = chunk_text(f"{p1}\n\n{p2}", chunk_size=chunk_size, overlap=20,
+                        strategy="fixed")
+    assert len(chunks) >= 2
+    assert chunks[1].startswith(chunks[0][-20:])  # 上一块尾部 20 字符被带进下一块
+
+
 # ================================================== 3) split_paragraphs ——
 
 

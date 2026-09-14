@@ -3,14 +3,28 @@
 任务 C15：**切片策略可插拔**。
 
 - `ChunkStrategy`：抽象接口（只负责「文本 → 片段列表」，与向量化/入库解耦）。
-- 内置两种策略：
-  · `fixed`（**默认**）——句子聚合 + 超长句硬切 + 块间重叠。
-    即 C15 之前的原实现（`_split_fixed_length`），**逐行保留以保不回归**。
-  · `semantic` —— 优先按段落切，**不把段落从中间切开**（除非该段本身超长）。
+- 内置两种策略 —— ⚠️ **两者不只是「是否切段」的差别**，见下表。
 - 注册表：`register_strategy()` / `get_strategy()` / `available_strategies()`，
   后续阶段（三阶段 `C34` 动态切片）可直接插入新策略。
 - 默认策略名与 C15 前一致，因此**现有调用方无需改动、行为不变**；
   如需切换，`chunk_text(..., strategy="semantic")`，或配 `XJT_RAG_CHUNK_STRATEGY`。
+
+| 维度 | `fixed`（**默认**） | `semantic` |
+|---|---|---|
+| 切分依据 | 句子聚合 + 超长句按 `chunk_size` 硬切 | 优先按**段落**（空行；退化单换行）切 |
+| 会不会把段落切开 | **会**（段落边界不参与决策） | **不会**；仅当某段自身超 `chunk_size` 时，段内退回 `fixed` |
+| **块间是否重叠** | **每块都重叠** `overlap` 个字符 | **段落边界不重叠**；只有段内退回 `fixed` 时才有重叠 |
+| 取舍 | 块长更均匀，但可能「命中半句话」 | 检索噪声/向量冗余更少，但块数略多、块长更不均匀 |
+
+> ⚠️ `semantic` 在段落边界**有意不做重叠**：段落已是完整语义单元，再叠上一段尾部只会
+> 让同一句话在两个块里各出现一次（向量空间浪费 + 检索结果重复）。**若需要全块重叠请用 `fixed`。**
+
+⚠️ **参数契约（两种策略统一，由 `_normalize_params()` 执行）**：
+空文本恒返回 `[]`（**先于**参数校验）→ `chunk_size <= 0` **抛 `ValueError`** →
+`overlap >= chunk_size` **自动修正为 `chunk_size // 5` 并 `warning` 告警**。
+「一类抛错、一类修正」是**刻意设计**：`chunk_size<=0` 会让切分逻辑无法确定目标长度
+（原实现会死循环），必须硬失败；而 `overlap` 只是「锦上添花」，修正后仍可用，
+不该让整批离线索引失败 —— 但**必须留日志**，避免静默降级。
 
 不回归判据：`backend/tests/fixtures/chunker_golden.json` 由**旧实现**生成（40 组
 「文本×尺寸×重叠」），`backend/tests/test_chunker.py` 断言新实现逐字节一致。
@@ -77,6 +91,43 @@ def split_paragraphs(text: str) -> list[str]:
     return blocks
 
 
+def _normalize_params(chunk_size: int, overlap: int) -> int:
+    """切片参数的**统一**校验与归一（`fixed` / `semantic` 共用）。
+
+    这是 C15 评审 P3-2 的整改：此前两类非法参数由**两个策略各自**处理，
+    现集中到一处，保证「换策略不换参数语义」。
+
+    两类非法参数的处理**刻意不同**（详见模块 docstring）：
+    - `chunk_size <= 0` → **抛 `ValueError`**：无法确定目标块长度；
+      放行的话 `_split_fixed_length` 会在 `while len(sent) > chunk_size` 里**死循环**
+      （`sent[:0]` 恒空、`sent[0:]` 恒原串）。
+    - `overlap >= chunk_size` → **自动修正为 `chunk_size // 5` 并 `warning`**：
+      重叠只是增强项，修正后切片仍可用，不该让整批离线索引失败；
+      但必须告警，避免「静默降级」。
+
+    Args:
+        chunk_size: 目标块字符数。
+        overlap: 相邻块重叠字符数。
+
+    Returns:
+        归一后的 `overlap`（调用方须用它覆盖原值）。
+
+    Raises:
+        ValueError: `chunk_size <= 0`。
+    """
+    if chunk_size <= 0:
+        raise ValueError("chunk_size 必须为正整数")
+    if overlap >= chunk_size:
+        fixed = chunk_size // 5
+        logger.warning(
+            "overlap=%s 不小于 chunk_size=%s，自动修正为 %s"
+            "（如需精确控制重叠，请在调用处显式传小于 chunk_size 的值）",
+            overlap, chunk_size, fixed,
+        )
+        return fixed
+    return overlap
+
+
 def _split_fixed_length(
     text: str,
     chunk_size: int = 600,
@@ -100,13 +151,9 @@ def _split_fixed_length(
     """
     if not text or not text.strip():
         return []
-    # 加固（C15 附带）：原实现下 chunk_size<=0 会在下面的 while 里**死循环**
-    # （sent[:0] 恒为空串、sent[0:] 恒为原串）。放在空文本检查之后，
-    # 保证「空输入恒返回 []」这一既有语义不变。
-    if chunk_size <= 0:
-        raise ValueError("chunk_size 必须为正整数")
-    if overlap >= chunk_size:
-        overlap = chunk_size // 5
+    # 参数校验/归一统一走 _normalize_params（C15 评审 P3-2）。
+    # ⚠️ 空文本检查必须在它**之前**，以保证「空输入恒返回 []」的既有语义不变。
+    overlap = _normalize_params(chunk_size, overlap)
 
     sentences = split_sentences(text)
     chunks: list[str] = []
@@ -164,7 +211,16 @@ class ChunkStrategy(ABC):
 
     @abstractmethod
     def split(self, text: str, chunk_size: int, overlap: int) -> list[str]:
-        """返回片段列表（已去除首尾空白）。"""
+        """返回片段列表（已去除首尾空白）。
+
+        参数契约（两种内置策略**一致**，由 `_normalize_params()` 统一执行）：
+
+        - 空文本 → 恒返回 `[]`（**先于**参数校验，保证既有语义不变）；
+        - `chunk_size <= 0` → 抛 `ValueError`；
+        - `overlap >= chunk_size` → 自动修正为 `chunk_size // 5` 并 `warning` 告警；
+        - `overlap` 是否真的产生**块间重叠**由策略语义决定 ——
+          `fixed` 每块都重叠，`semantic` **段落边界不重叠**（见 `SemanticBoundaryStrategy`）。
+        """
         raise NotImplementedError
 
     def __repr__(self) -> str:  # pragma: no cover - 便于调试输出
@@ -192,6 +248,17 @@ class SemanticBoundaryStrategy(ChunkStrategy):
     - `semantic` 先按空行切段，**整段**放入块中；只有当某段本身超过 `chunk_size`
       时，才在**该段内部**退回固定长度切法。
     - 因此「检索命中半句话」的情况减少，代价是块数可能略多、块长更不均匀。
+
+    ⚠️ **`overlap` 在本策略里基本不生效 —— 这是有意的，不是缺陷**
+    （C15 评审 P3-1 要求写明，避免后来人以为两者「只差是否切段」）：
+
+    - `fixed`：**每块之间**都保留 `overlap` 个字符重叠（在 `_split_fixed_length` 内实现）；
+    - `semantic`：**段落边界不做重叠** —— 段落本身就是完整语义单元，再叠上一段尾部，
+      只会让同一句话在两个块里各出现一次，既浪费向量空间、又让检索结果重复。
+      **仅当某段自身超过 `chunk_size`**、段内退回 `_split_fixed_length` 时，
+      `overlap` 才在**该段内部**生效。
+
+    ⇒ 需要「全块重叠」的效果就用 `fixed`；不要指望换 `semantic` 还能保持重叠。
     """
 
     name = "semantic"
@@ -200,10 +267,8 @@ class SemanticBoundaryStrategy(ChunkStrategy):
     def split(self, text: str, chunk_size: int, overlap: int) -> list[str]:
         if not text or not text.strip():
             return []
-        if chunk_size <= 0:
-            raise ValueError("chunk_size 必须为正整数")
-        if overlap >= chunk_size:
-            overlap = chunk_size // 5
+        # 与 fixed 走**同一套**参数校验/归一（C15 评审 P3-2）
+        overlap = _normalize_params(chunk_size, overlap)
 
         chunks: list[str] = []
         current = ""
@@ -308,8 +373,10 @@ def chunk_text(
 
     Args:
         text: 原始文本。
-        chunk_size: 目标块字符数。
-        overlap: 相邻块重叠字符数（必须小于 chunk_size）。
+        chunk_size: 目标块字符数；`<= 0` 抛 `ValueError`。
+        overlap: 相邻块重叠字符数。`>= chunk_size` 时会被**自动修正**为
+            `chunk_size // 5` 并 `warning` 告警；且**是否真的产生块间重叠取决于策略**
+            （`semantic` 在段落边界不重叠，见 `SemanticBoundaryStrategy`）。
         strategy: 策略名或策略实例；None（默认）等价于 `fixed`。
 
     Returns:
