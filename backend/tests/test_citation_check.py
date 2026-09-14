@@ -67,6 +67,70 @@ def test_extract_citations_ignores_empty_brackets() -> None:
     assert extract_citations("空[]与空【】") == []
 
 
+# ---------- 评审 P2-1：不是“凡方括号即引用” ----------
+# 这四个都是**肯定不是引用**的结构；若被当成引用，`clean_answer` 会删掉它们
+# → 正文被改、Markdown 链接被破、代码片段被破。
+
+
+def test_markdown_link_is_not_a_citation() -> None:
+    """评审 P2-1 场景①：`[文字](url)` 是链接，不是引用。"""
+    assert extract_citations("详见[图书馆开放时间](https://lib.example.com)。") == []
+    # 反向对照：去掉 `(url)` 后**同一个方括号就是**引用 ——
+    # 证明上面的空结果来自“链接判定”，而不是正则整体失效
+    assert [c.value for c in extract_citations("详见[图书馆开放时间]。")] == ["图书馆开放时间"]
+
+
+def test_reference_style_link_is_a_known_residual_risk() -> None:
+    """⚠️ **已知残留风险（显式断言，不藏着）**：引用式链接 `[文字][ref]` **不过滤**。
+
+    只拦**行内**链接 `[文字](url)`（评审 P2-1 列举的场景①）。原因：`[a][b]` 到底是
+    “链接”还是“**连续引用**”在字面上不可区分，而 `[图书馆规则][学生手册]` 这种
+    连续标题引用是真实存在、**必须保留**的（`test_chat_c20_gate` 就依赖它）。
+
+    两害相权：宁可漏过滤一个小概率的链接形态，也不误伤真实的连续引用。
+    （之前曾加过“`[` 紧跟在 `]` 之后 → 拒”的规则，正是它误伤了连续引用，已回退。）
+    """
+    got = extract_citations("详见[图书馆开放时间][ref]。")
+    assert [c.value for c in got] == ["图书馆开放时间", "ref"]  # 均被提取（已知）
+    # 反向对照：**行内**链接形态确实被拦住了
+    assert extract_citations("详见[图书馆开放时间](https://x.example.com)。") == []
+
+
+def test_adjacent_title_citations_are_kept() -> None:
+    """**连续标题引用必须保留** —— 这是回退“紧随收尾方括号”规则的原因，锁死防再犯。"""
+    got = extract_citations("图书馆开放时间为每天 8:00-22:00。[图书馆规则][学生手册]")
+    assert [c.value for c in got] == ["图书馆规则", "学生手册"]
+    # 连续序号引用同理
+    assert [c.value for c in extract_citations("见[1][2]。")] == ["1", "2"]
+
+
+def test_code_subscript_is_not_a_citation() -> None:
+    """评审 P2-1 场景③：`arr[0]` / `x[1]` 是代码下标，不是引用。"""
+    assert extract_citations("取 arr[0] 与 x[1] 的值。") == []
+    # 反向对照：**CJK 前缀**后的方括号仍是引用，不能被误杀
+    # （这是本规则只判 ASCII 单词字符的原因）
+    assert [c.value for c in extract_citations("见[1]。")] == ["1"]
+    assert [c.value for c in extract_citations("参考（[2]）")] == ["2"]
+
+
+def test_number_list_is_not_a_citation() -> None:
+    """评审 P2-1 场景③：`[1,2]` 是列表/区间，不是引用。"""
+    assert extract_citations("见 [1,2] 两节。") == []
+    assert extract_citations("见 [1，2] 两节。") == []
+    # 反向对照：单个数字仍是引用
+    assert [c.value for c in extract_citations("见 [1] 节。")] == ["1"]
+
+
+def test_url_fragment_is_not_a_citation() -> None:
+    assert extract_citations("见 [https://lib.example.com] 。") == []
+
+
+def test_structural_filters_do_not_break_real_citations() -> None:
+    """**集中反向对照**：各类**真实**引用形式必须全部保留。"""
+    text = "见[1]，【2】与[图书馆开放时间]都提到了。"
+    assert [c.value for c in extract_citations(text)] == ["1", "2", "图书馆开放时间"]
+
+
 # ===================================================== ngram_coverage ----
 
 
@@ -321,6 +385,26 @@ def test_clean_answer_collapses_leftover_spaces() -> None:
     cleaned = clean_answer(answer, r)
     assert "假文档" not in cleaned
     assert "  " not in cleaned
+
+
+def test_clean_answer_preserves_markdown_link() -> None:
+    """评审 P2-1 **端到端**：含 Markdown 链接的答案经 check+clean 后**逐字节不变**。
+
+    光断言 `extract_citations` 为空不够 —— 要证明**最终落库/发给前端的文本**没被改动，
+    因为“误伤”的危害正体现在这一步。
+    """
+    answer = "开放时间详见[图书馆开放时间](https://lib.example.com)，或见[1]。"
+    r = check_citations(answer, [LIB])
+    assert r.fabricated == []
+    assert clean_answer(answer, r) == answer
+
+
+def test_clean_answer_preserves_code_snippet() -> None:
+    """评审 P2-1 端到端：代码下标不得被删（`arr[0]` 被删属“改用户看到的正文”）。"""
+    answer = "数组取值用 arr[0]，详见 [1] 节。"
+    r = check_citations(answer, [LIB])
+    assert r.fabricated == []
+    assert clean_answer(answer, r) == answer
 
 
 # ==================================================== 辅助与常量校验 ----

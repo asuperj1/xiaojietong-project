@@ -58,6 +58,23 @@ MIN_SENTENCE_LEN = 10
 
 # 引用标记：`[1]` / `[图书馆开放时间]` / `【图书馆开放时间】`
 _CITE_RE = re.compile(r"[\[【]\s*([^\[\]【】]{1,60}?)\s*[\]】]")
+
+# ⚠️ **不是“凡是方括号都算引用”** —— 下面几类可证实**肯定不是引用**，必须排除：
+#   ① Markdown **行内**链接 `[文字](url)`：紧随 `]` 的字符是 `(`；
+#   ② 代码下标 `arr[0]` / `x[1]`：`[` 紧跟在 **ASCII 单词字符**之后；
+#      ⚠️ 只判 ASCII：`见[1]` 的“见”是 CJK 字符，属**正常引用**，不能误杀；
+#   ③ 列表/区间 `[1,2]` / `[1,2,3]`：内容含逗号；
+#   ④ URL 片段：内容含 `://`。
+#
+# 为什么必须过滤：`clean_answer` 会**删除**判定为“伪造”的标记。链接 / 下标若被当成引用，
+# 一旦不匹配来源标题就会被删 → **正文被改、Markdown 链接被破**（评审 P2-1）。
+#
+# ⚠️ **已知残留风险（不处理，已写成测试）**：**引用式链接** `[文字][ref]` **不在过滤范围**。
+#    因为 `[a][b]` 到底是“链接”还是“**连续引用**”在字面上不可区分，而
+#    `[图书馆规则][学生手册]` 这种连续标题引用是真实存在、**必须保留**的
+#    （`tests/test_chat_c20_gate.py` 就依赖它）。两害相权：宁可漏过滤一个小概率的链接形态。
+_MD_LINK_FOLLOWERS = "("
+_WORD_CHAR_RE = re.compile(r"[A-Za-z0-9_]")
 # 归一化：去空白与常见标点，便于标题模糊比对
 _NORM_RE = re.compile(r"[\s\u3000,，.。;；:：、!！?？'\"“”‘’()（）\[\]【】<>《》/\\|_-]+")
 _SENT_SPLIT_RE = re.compile(r"(?<=[。！？；…\n])")
@@ -138,19 +155,55 @@ class Citation:
     end: int
 
 
+def _looks_like_citation(text: str, match: "re.Match[str]", value: str) -> bool:
+    """结构上排除“肯定不是引用”的方括号（判定规则见 `_CITE_RE` 上方注释）。
+
+    这里**只做结构判断，不猜语义** —— 宁可让少数可疑标记留在正文里（最坏是漏剔
+    一个伪造引用，只看日志），也不要错删模型正常输出的 Markdown 链接 / 代码下标
+    （那会**直接改掉用户看到的正文**）。符合本模块“宁可放过、不可错杀”的取舍。
+
+    ⚠️ **残留风险（已知、不做处理）**：模型模仿 prompt 格式输出 `[分类]`（如 `[图书馆]`）
+    时，它不匹配任何来源标题 → 仍会被归为伪造并剔除。这是**有意保留**的：`[分类]`
+    与真正的标题引用在字面上无法区分，宁严不宽；若要彻底消除，需让 prompt 不再
+    用方括号包裹分类（改 `build_system_prompt`），不属于本模块职责。
+    """
+    if match.end() < len(text) and text[match.end()] in _MD_LINK_FOLLOWERS:
+        return False  # ① 行内链接 `[x](`
+    if match.start() > 0 and _WORD_CHAR_RE.match(text[match.start() - 1]):
+        return False  # ② arr[0] / x[1]
+    if "," in value or "，" in value:
+        return False  # ③ [1,2]
+    if "://" in value:
+        return False  # ④ URL 片段
+    return True
+
+
 def extract_citations(answer: str) -> list[Citation]:
     """提取答案里的引用标记。
 
     - 纯数字（`[1]` / `【2】`）→ `kind="index"`（指向来源列表第 n 项，1-based）
     - 其它 → `kind="title"`（按标题引用）
 
+    ⚠️ **不是“凡方括号即引用”**：Markdown 链接 `[文字](url)`、代码下标 `arr[0]`、
+    列表 `[1,2]`、URL 片段会被**结构上**排除（见 `_looks_like_citation` 与
+    `_CITE_RE` 上方注释）。否则 `clean_answer` 会把它们当“伪造引用”**删掉** ——
+    后果是正文被改、链接被破（评审 P2-1 的回归测试已锁定：
+    `test_markdown_link_is_not_a_citation` / `test_code_subscript_is_not_a_citation`）。
+
     >>> [c.value for c in extract_citations("开放时间见[1]，另有[图书馆开放时间]。")]
     ['1', '图书馆开放时间']
+    >>> extract_citations("详见[图书馆开放时间](https://lib.example.com)")
+    []
+    >>> extract_citations("取 arr[0] 与 [1,2]")
+    []
     """
     out: list[Citation] = []
-    for m in _CITE_RE.finditer(answer or ""):
+    src = answer or ""
+    for m in _CITE_RE.finditer(src):
         value = m.group(1).strip()
         if not value:
+            continue
+        if not _looks_like_citation(src, m, value):
             continue
         kind = "index" if value.isdigit() else "title"
         out.append(Citation(m.group(0), kind, value, m.start(), m.end()))
@@ -325,9 +378,15 @@ def check_citations(
 
 
 def clean_answer(answer: str, report: CitationReport) -> str:
-    """剔除**伪造引用标记**（保留正文），并去掉因此产生的空括号与多余空格。
+    """剔除**伪造引用标记**（保留正文），并清理删除处残留的空格。
 
-    注意：只删"伪造"的那些；有效引用原样保留。
+    注意：
+    - 只删“伪造”的那几条；有效引用**原样保留**。
+    - 删除的是**整段标记（含方括号）**，因此不会留下空括号 —— 早期 docstring
+      写的“去掉因此产生的空括号”与实现不符（评审 P3-1），已改成与实现一致的措辞。
+    - 两个 `re.sub` 只处理**删除后的空格残留**：标点前空格、连续空格。
+    - 哪些方括号**根本不会被当成引用**（Markdown 链接 / 代码下标 / 列表 / URL），
+      见 `extract_citations` 及其上方注释。
     """
     if not report or not report.fabricated:
         return answer
