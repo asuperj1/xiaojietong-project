@@ -15,8 +15,9 @@
  */
 function detectGlass() {
   try {
+    // system 字段来自 getDeviceInfo / getSystemInfoSync；getAppBaseInfo 不提供 system
     const info =
-      typeof wx.getAppBaseInfo === 'function' ? wx.getAppBaseInfo() : wx.getSystemInfoSync()
+      typeof wx.getDeviceInfo === 'function' ? wx.getDeviceInfo() : wx.getSystemInfoSync()
     const system = (info && info.system) || ''
 
     if (/iOS|iPadOS/i.test(system)) return true
