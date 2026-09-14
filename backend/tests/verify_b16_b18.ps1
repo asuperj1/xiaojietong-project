@@ -165,6 +165,12 @@ if (-not (Test-Path $python)) {
 Write-Host ""
 Write-Host "== B18) 分层推送调度（D-7 / D-2） =="
 $remindAt = (Get-Date).AddDays(7).ToString("yyyy-MM-dd 18:00:00")
+
+# 反向对照基线：先记录**调度前**的公共通知 id 集合。
+# 私密推送若真被挡住，公共列表在调度前后应当**完全一致**（集合相同）；
+# 若列表恒为空，下面的"未泄漏"断言就会假通过，因此必须同时断言非空 + 集合稳定。
+$pubBefore = @((Invoke-Json "Get" "$base/life/notices?page=1&size=100").data.items | ForEach-Object { $_.id })
+
 $mk = Invoke-Json "Post" "$base/agent/reminders" @{ content = "考研报名截止（verify 脚本）"; remind_at = $remindAt }
 $rid = $mk.data.reminder_id
 Check "create reminder" ($rid -gt 0) ("reminder_id=" + $rid + " remind_at=" + $remindAt)
@@ -181,16 +187,20 @@ Check "dispatch pushes delivery" ($hit.Count -ge 1 -and $hit[0].delivery_id -gt 
     ("notice_id=" + $(if ($hit.Count) { $hit[0].notice_id } else { "-" }) + " delivery_id=" + $(if ($hit.Count) { $hit[0].delivery_id } else { "-" }))
 $pushNoticeId = if ($hit.Count) { $hit[0].notice_id } else { 0 }
 
-# 3) 未读数与未读列表体现
+# 3) 本人可见：未读列表含该通知 id（正向）
 $unread = Invoke-Json "Get" "$base/life/notices/unread?page=1&size=50"
 $uc = Invoke-Json "Get" "$base/life/notices/unread-count"
 $inUnread = @($unread.data.items | Where-Object { $_.id -eq $pushNoticeId })
 Check "appears in unread" ($inUnread.Count -ge 1) ("未读数=" + $uc.data.count)
 
-# 4) 私密行不进入公共通知列表
-$pub = Invoke-Json "Get" "$base/life/notices?page=1&size=100"
-$leak = @($pub.data.items | Where-Object { $_.target_grade -like "__push:*" })
-Check "no private leak in /life/notices" ($leak.Count -eq 0) ("public items=" + $pub.data.items.Count)
+# 4) 私密行不泄漏到公共列表（按 id 判定 + 双重反向对照）
+$pubAfter = @((Invoke-Json "Get" "$base/life/notices?page=1&size=100").data.items | ForEach-Object { $_.id })
+Check "no private leak in /life/notices" ($pushNoticeId -gt 0 -and ($pubAfter -notcontains $pushNoticeId)) `
+    ("私密 id=" + $pushNoticeId + " 在公共列表中=" + ($pubAfter -contains $pushNoticeId))
+Check "public list non-empty (反真空)" ($pubAfter.Count -ge 1) ("items=" + $pubAfter.Count)
+$diff = @(Compare-Object $pubBefore $pubAfter)
+Check "public list unchanged after push (反向对照)" ($diff.Count -eq 0) `
+    ("调度前 " + $pubBefore.Count + " 条 → 调度后 " + $pubAfter.Count + " 条，差异 " + $diff.Count + " 条")
 
 # 5) 幂等：重复调度不重复推送
 $again = Invoke-Json "Post" "$base/admin/notices/dispatch" @{ async = $false; user_id = $uid }

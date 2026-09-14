@@ -469,11 +469,32 @@ async def run_index_only(args: argparse.Namespace, report: dict) -> int:
 # ------------------------------------------------------------------ 清理 ----
 
 def run_purge(args: argparse.Namespace, report: dict) -> int:
-    """按 source_url 前缀清理（基准数据回滚）。"""
+    """按 source_url 前缀清理（基准数据回滚）。
+
+    前缀按**字面**匹配（``%``/``_`` 会被转义）；短于 3 字符直接拒绝；
+    ``--dry-run`` 可先预览将要删除的清单（不实际删除）。
+    """
     from app.services import knowledge
 
-    result = knowledge.purge_by_source_prefix(args.purge_source_prefix)
+    try:
+        result = knowledge.purge_by_source_prefix(
+            args.purge_source_prefix, dry_run=bool(args.dry_run)
+        )
+    except ValueError as exc:                       # 护栏：前缀过短
+        print(f"[错误] {exc}")
+        report["error"] = str(exc)
+        return 2
+
     report.update({"mode": "purge", "prefix": args.purge_source_prefix, **result})
+    if args.dry_run:
+        print(
+            f"[预演] 匹配 {result['matched']} 篇（pattern={result['pattern']}），"
+            f"未删除任何文档"
+        )
+        for doc_id in result["doc_ids"][:10]:
+            print(f"  doc={doc_id}")
+        return 0
+
     print(f"清理完成：匹配 {result['matched']} 篇，已删除 {result['deleted']} 篇")
 
     # 同步清掉状态文件里同前缀的记录，避免下次误判为"已导入"

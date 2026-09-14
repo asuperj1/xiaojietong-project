@@ -91,6 +91,57 @@ def test_cli_state_file_written(tmp_path):
     assert len(entry["sha256"]) == 64 and entry["fmt"] in {"markdown", "html", "text"}
 
 
+def test_like_prefix_escapes_wildcards():
+    """prefix 必须按**字面**匹配：% / _ / \\ 全部转义（PR #60 审查 P1 护栏）。"""
+    from app.services.knowledge import MIN_PURGE_PREFIX_CHARS, like_prefix_pattern
+
+    assert like_prefix_pattern("bench/") == "bench/%"
+    assert like_prefix_pattern("a_b/") == "a\\_b/%"       # 下划线不当通配符
+    assert like_prefix_pattern("100%") == "100\\%%"       # 百分号不当通配符
+    assert like_prefix_pattern("a\\b") == "a\\\\b%"
+    assert MIN_PURGE_PREFIX_CHARS >= 3
+
+
+def test_purge_prefix_guard_rejects_short_prefix():
+    """过短前缀（如 % / / / a）会被拒绝，防止误删全库（护栏在查询前生效）。"""
+    import pytest as _pytest
+
+    from app.services import knowledge
+
+    for bad in ("", "/", "%", "a", "ab"):
+        with _pytest.raises(ValueError):
+            knowledge.purge_by_source_prefix(bad)
+
+
+def test_purge_matches_literally_not_as_wildcard(client):
+    """``_`` 前缀不得误伤同名不同字符的文档（转义护栏的 DB 级验证）。"""
+    from uuid import uuid4
+
+    from app.services import knowledge
+
+    tag = uuid4().hex[:6]
+    kill = f"pytest/{tag}_/规则.md"          # 前缀含下划线
+    keep = f"pytest/{tag}X/规则.md"          # 仅差一个字符（未被转义时会被误删）
+    doc = parse_bytes("规则.md", "# 前缀通配测试\n内容。\n".encode("utf-8"))
+    killed = asyncio.run(
+        knowledge.ingest_document(doc, category="pytest", source_url=kill, index=False, dedup=True)
+    )
+    kept = asyncio.run(
+        knowledge.ingest_document(doc, category="pytest", source_url=keep, index=False, dedup=True)
+    )
+    try:
+        preview = knowledge.purge_by_source_prefix(f"pytest/{tag}_", dry_run=True)
+        assert preview["dry_run"] is True and preview["deleted"] == 0
+        assert preview["doc_ids"] == [killed["doc_id"]], "前缀被当成通配符，匹配到了无关文档"
+        assert knowledge.find_by_source(keep) is not None, "无关文档被误删"
+        assert knowledge.find_by_source(kill) is not None, "预演不应删除任何文档"
+    finally:
+        purged = knowledge.purge_by_source_prefix(f"pytest/{tag}")
+        assert purged["deleted"] == 2
+        assert knowledge.find_by_source(keep) is None
+        assert kept["doc_id"] != killed["doc_id"]
+
+
 def test_ingest_dedup_conflict_and_purge(client):
     """入库 / 去重 / 冲突 / 覆盖 / 回滚的集成用例。
 

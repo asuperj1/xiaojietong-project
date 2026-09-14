@@ -202,20 +202,30 @@ def knowledge_delete(doc_id: int, _admin: dict = Depends(get_current_admin)):
 
 
 class KnowledgePurgeIn(BaseModel):
-    """按来源前缀批量清理（B17 测试数据回滚用）。"""
+    """按来源前缀批量清理（B17 测试数据回滚用）。
+
+    ``dry_run=true`` 只返回将要删除的清单（含 ``pattern``），不实际删除——
+    破坏性操作先预览（PR #60 审查 P1 护栏之一）。
+    """
 
     source_prefix: str
     purge_vectors: bool = True
+    dry_run: bool = False
 
 
 @router.post("/knowledge/purge")
 def knowledge_purge(body: KnowledgePurgeIn, _admin: dict = Depends(get_current_admin)):
-    """按 ``source_url`` 前缀批量删除知识文档（误导入回滚 / 基准数据清理）。"""
-    if not body.source_prefix.strip():
-        raise err_param("source_prefix 不能为空")
-    result = knowledge.purge_by_source_prefix(
-        body.source_prefix, purge_vectors=body.purge_vectors
-    )
+    """按 ``source_url`` 前缀批量删除知识文档（误导入回滚 / 基准数据清理）。
+
+    前缀按**字面**匹配（``%``/``_`` 会被转义，不当通配符）；短于 3 字符直接拒绝，
+    防止 ``%`` 这类输入误删全库。
+    """
+    try:
+        result = knowledge.purge_by_source_prefix(
+            body.source_prefix, purge_vectors=body.purge_vectors, dry_run=body.dry_run
+        )
+    except ValueError as exc:
+        raise err_param(str(exc)) from exc
     return ok(result)
 
 

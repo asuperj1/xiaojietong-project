@@ -16,7 +16,7 @@ from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
 from app.db import cpp_bridge
 from app.services import notice as notice_service
-from app.services.notice_scheduler import is_private_audience
+from app.services import notice_scheduler
 from app.services.storage import resign
 
 router = APIRouter(prefix="/life", tags=["life"])
@@ -107,14 +107,28 @@ def notices(
 ):
     """通知列表（公共口径）。
 
-    B18 起过滤「私密推送行」：分层推送（D-7 / D-2）为**投递给具体用户**的通知，
-    标记写在 ``target_grade``（``__push:...``）。C++ DAO 的 ``(? = '' OR col = ?)``
-    写法在空参时不过滤（审计 C33 已记录），故在此显式剔除，避免个人待办泄漏给他人。
+    **B18 私密行过滤（PR #60 审查 P0 修复）**：分层推送（D-7 / D-2）是**投递给具体用户**
+    的通知，其标记写在 ``target_grade``（``__push:...``）。**不能**用返回行里的
+    ``target_grade`` 判断——``LifeDAO.page_notices`` 的 SELECT 不含该列，读出来恒为 None，
+    过滤会静默失效。因此改为：先取「私密行 id 集合」，再按 **id** 剔除；为避免剔除后
+    该页条数变少，最多向后补拉 2 页。
     这些推送对**本人**仍可见——走 ``/notice-feed`` 与 ``/notices/unread``（按投递记录取）。
     """
-    rows = cpp_bridge.life_dao().page_notices(page, size, category, target_grade)
-    rows = [r for r in rows if not is_private_audience(r.get("target_grade"))]
-    return ok(paged(rows, len(rows), page, size))
+    private_ids = notice_scheduler.private_notice_ids()
+    items: list[dict] = []
+    probe = page
+    for _ in range(3):                      # 1 页 + 最多补拉 2 页
+        rows = cpp_bridge.life_dao().page_notices(probe, size, category, target_grade)
+        if not rows:
+            break
+        items.extend(r for r in rows if int(r["id"]) not in private_ids)
+        if len(items) >= size or len(rows) < size:
+            break
+        probe += 1
+    items = items[:size]
+    # B20：DAO 的 SELECT 是编译期写死的，拿不到 B19 新列 → Python 侧按 id 补查
+    notice_service.attach_extended_fields(items)
+    return ok(paged(items, len(items), page, size))
 
 
 @router.get("/notice-feed")

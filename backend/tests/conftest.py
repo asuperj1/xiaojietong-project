@@ -81,3 +81,49 @@ def hdr_a(user_a: dict) -> dict:
 @pytest.fixture(scope="session")
 def hdr_b(user_b: dict) -> dict:
     return {"Authorization": f"Bearer {user_b['token']}"}
+
+
+# --------------------------------------------------------------- 管理员 ----
+# PR #60 审查要求：管理端用例不要依赖 user_a 恰好是管理员（角色随环境而变），
+# 必须有独立夹具；且临时账号用后即删（与审计 T-01 对探针用户的要求一致）。
+_ADMIN_PROBE_CODE = "pytest_admin"
+_ADMIN_PROBE_OPENID = "oXJT_DEV_" + _ADMIN_PROBE_CODE
+
+
+@pytest.fixture(scope="session")
+def admin_a(client: TestClient) -> dict:
+    """管理员账号登录数据（role=1）。
+
+    优先级：
+    1. 复用现成管理员（``code=test1`` 若其 role=1，本机即如此）——零副作用；
+    2. 否则**临时创建**管理员（``openid=oXJT_DEV_pytest_admin``），夹具结束时删除，
+       不留残留（用例需要真实执行管理端接口，不能靠 skip 糊过去）。
+    """
+    for code in ("test1", "admin"):
+        try:
+            data = _login(client, code)
+        except AssertionError:
+            continue
+        if int(data["user"].get("role") or 0) == 1:
+            yield data
+            return
+
+    dao = cpp_bridge.user_dao()
+    rows = cpp_bridge.query("SELECT id FROM user WHERE openid = ?", [_ADMIN_PROBE_OPENID])
+    created = False
+    if not rows:
+        uid = int(dao.create(_ADMIN_PROBE_OPENID, "pytest-admin"))
+        cpp_bridge.execute("UPDATE user SET role = 1 WHERE id = ?", [uid])
+        created = True
+    data = _login(client, _ADMIN_PROBE_CODE)
+    assert int(data["user"].get("role") or 0) == 1, "临时管理员创建失败（role != 1）"
+    try:
+        yield data
+    finally:
+        if created:          # 只删自己创建的，绝不碰别人数据
+            cpp_bridge.execute("DELETE FROM user WHERE openid = ?", [_ADMIN_PROBE_OPENID])
+
+
+@pytest.fixture(scope="session")
+def hdr_admin(admin_a: dict) -> dict:
+    return {"Authorization": f"Bearer {admin_a['token']}"}
