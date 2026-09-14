@@ -20,12 +20,23 @@
  * 本工具不依赖微信开发者工具：在 Node 里 stub `global.wx`，直接加载**真实**的
  * `miniprogram/utils/glass.js` 调用它，断言各场景的返回值。
  *
+ * ⚠️ v2（2026-09-14，二次审查时修正）
+ * --------------------------------
+ * v1 有两个问题，都会**误导**使用者：
+ *  ① 「修法验证」写死了逐字把 `getAppBaseInfo` 换成 `getDeviceInfo`。缺陷修好之后
+ *     源码里已找不到旧那一行 → 工具报 `[FAIL] …实现已变化？` 并返回 **EXIT=1**，
+ *     而实际上缺陷已修 —— 让作者以为没修好（真实踩到）。
+ *  ② 场景桩里**没有 `getDeviceInfo`** → 修复后的**新代码分支根本没被执行**：
+ *     旧写法在这里靠 `getSystemInfoSync()` 兜底也能“通过”，覆盖是假的。
+ * v2 改为**状态自适应**：识别源码是新/旧写法，另建一份“**另一种实现**”做反向对照；
+ *   两种状态下用**同一组场景**跑两份实现，**行为必须不同**（R3）—— 这是断言非空的保证。
+ *
  * 用法
  * ----
  *     node tools/verify_glass_probe.js                     # 测当前仓库
  *     node tools/verify_glass_probe.js --src <worktree路径>  # 测某个工作树（如 PR 分支）
  *
- * 退出码：0 = 全部场景符合预期（= 缺陷已修）；1 = 有场景不符合（= 缺陷仍在）。
+ * 退出码：0 = 当前实现的**行为契约全部满足**；1 = 有场景不满足（缺陷仍在 / 行为退化）。
  *
  * 文档依据：https://developers.weixin.qq.com/miniprogram/dev/api/base/system/wx.getAppBaseInfo.html
  */
@@ -118,126 +129,152 @@ const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), 'xjt-glass-'))
 const REAL_FILE = path.join(SANDBOX, 'glass.js')
 fs.copyFileSync(SRC_FILE, REAL_FILE)
 
-// 「修复版」：只改一行 —— 取 system 的字段来源
-//   原：typeof wx.getAppBaseInfo === 'function' ? wx.getAppBaseInfo() : wx.getSystemInfoSync()
+// 「另一种实现」：只改一行 —— 取 system 的字段来源（新老两种写法，双向可逆）
+//   旧：typeof wx.getAppBaseInfo === 'function' ? wx.getAppBaseInfo() : wx.getSystemInfoSync()
 //   新：typeof wx.getDeviceInfo   === 'function' ? wx.getDeviceInfo()   : wx.getSystemInfoSync()
-const FIXED_FILE = path.join(SANDBOX, 'glass.fixed.js')
-const raw = fs.readFileSync(REAL_FILE, 'utf8')
-const NEEDLE =
+const OLD_LINE =
   "typeof wx.getAppBaseInfo === 'function' ? wx.getAppBaseInfo() : wx.getSystemInfoSync()"
-const REPLACEMENT =
+const NEW_LINE =
   "typeof wx.getDeviceInfo === 'function' ? wx.getDeviceInfo() : wx.getSystemInfoSync()"
-const fixedSrc = raw.replace(NEEDLE, REPLACEMENT)
-const fixApplicable = fixedSrc !== raw
-fs.writeFileSync(FIXED_FILE, fixedSrc, 'utf8')
+const raw = fs.readFileSync(REAL_FILE, 'utf8')
+const isFixed = raw.includes(NEW_LINE)
+const ALT_FILE = path.join(SANDBOX, 'glass.alt.js')
+const altSrc = isFixed ? raw.replace(NEW_LINE, OLD_LINE) : raw.replace(OLD_LINE, NEW_LINE)
+const altApplicable = altSrc !== raw
+fs.writeFileSync(ALT_FILE, altSrc, 'utf8')
+const ALT_LABEL = isFixed ? '回退到原始写法（getAppBaseInfo）' : '改为修复写法（getDeviceInfo）'
 
 // ================================================================ 开始 ====
 
 console.log(`被测文件：${SRC_FILE}`)
+console.log(
+  `当前实现：${isFixed ? '✅ 修复后写法（getDeviceInfo）' : '⚠️  原始写法（getAppBaseInfo）'}`
+)
 console.log(`沙箱：${SANDBOX}`)
 
 // ------------------------------------------------- 一、复现：真实源码 ----
 
-bar('一、当前实现（真实源码）在各机型上的返回')
+bar('一、当前实现（真实源码）在各机型上的返回（期望值 = 设计契约）')
 
-// 基础库 ≥ 2.20.1：getAppBaseInfo 存在（文档字段，无 system）→ 走新分支
-const s1 = run(REAL_FILE, {
+// 基础库 ≥ 2.20.1 的**真实**环境：三个接口都在。
+//   `getAppBaseInfo` 按官方文档**不含 system**；`system` 在 getDeviceInfo / getSystemInfoSync 里。
+const baseLibNew = (device) => ({
   getAppBaseInfo: () => ({ ...APP_BASE_DOC }),
-  getSystemInfoSync: () => ({ ...SYS_INFO_IOS }),
+  getDeviceInfo: () => ({ ...device }),
+  getSystemInfoSync: () => ({ ...device }),
 })
+
 check(
-  'S1 iOS 15.4 + 基础库 3.17.3（getAppBaseInfo 存在）→ 按设计应启用毛玻璃',
-  s1,
+  'S1 iOS 15.4 + 基础库 3.17.3 → 应启用毛玻璃',
+  run(REAL_FILE, baseLibNew(DEVICE_INFO_IOS)),
   true,
-  '这是**决定性反例**：iOS 本该默认允许，实际恒为 false'
+  'iOS 按设计默认允许；恒为 false 即为缺陷'
+)
+check(
+  'S2 Android 12 + 基础库 3.17.3 → 应启用（系统 ≥ 9）',
+  run(REAL_FILE, baseLibNew(DEVICE_INFO_ANDROID12)),
+  true
+)
+check(
+  'S3 开发者工具（Windows 宿主）→ 应允许，便于预览',
+  run(REAL_FILE, baseLibNew(SYS_INFO_DEVTOOL_WIN)),
+  true
+)
+check(
+  'S4 Android 8.1 + 基础库 3.17.3 → 应保守 false',
+  run(REAL_FILE, baseLibNew(DEVICE_INFO_ANDROID8)),
+  false,
+  '反向对照：修复也不该“过度开启”低版本 Android'
 )
 
-const s2 = run(REAL_FILE, {
-  getAppBaseInfo: () => ({ ...APP_BASE_DOC }),
-  getSystemInfoSync: () => ({ ...SYS_INFO_ANDROID12 }),
-})
-check('S2 Android 12 + 基础库 3.17.3 → 按设计应启用（系统版本 ≥ 9）', s2, true)
-
-const s3 = run(REAL_FILE, {
-  getAppBaseInfo: () => ({ ...APP_BASE_DOC }),
-  getSystemInfoSync: () => ({ ...SYS_INFO_DEVTOOL_WIN }),
-})
-check('S3 开发者工具（Windows 宿主）→ 按注释应允许，便于预览', s3, true)
-
-// 反向对照：如果 getAppBaseInfo **恰好带上了** system（未文档化的字段），行为立刻不同
-const s4 = run(REAL_FILE, {
-  getAppBaseInfo: () => ({ ...APP_BASE_DOC, system: 'iOS 15.4' }),
-  getSystemInfoSync: () => ({ ...SYS_INFO_IOS }),
-})
+// ⭐ S5 / S6：**只有 getDeviceInfo 可用** —— 新写法的“唯一通路”。
+//   旧写法在这里会走到 `wx.getSystemInfoSync()`（undefined）→ TypeError → false。
+//   ⇒ 这条专治 v1 的假通过（桩里没给 getDeviceInfo，靠老接口兜底）。
+const onlyDevice = (device) => ({ getDeviceInfo: () => ({ ...device }) })
 check(
-  'S4 反向对照：若 getAppBaseInfo 返回里**带 system** → true',
-  s4,
+  'S5 iOS 15.4，仅有 getDeviceInfo（无 getAppBaseInfo / getSystemInfoSync）→ true',
+  run(REAL_FILE, onlyDevice(DEVICE_INFO_IOS)),
   true,
-  '证明返回值**完全取决于 `system` 字段是否存在**，而非机型判断逻辑'
+  '⭐ 这条**只**能被 getDeviceInfo 满足'
 )
-
-// 基础库 < 2.20.1：没有 getAppBaseInfo → 走 getSystemInfoSync（有 system）→ 行为正确
-const s5 = run(REAL_FILE, { getSystemInfoSync: () => ({ ...SYS_INFO_IOS }) })
-check('S5 老基础库（无 getAppBaseInfo，走 getSystemInfoSync）iOS → true', s5, true,
-  '⇒ 同一台设备「基础库新」反而判成不支持，是**升级即退化**，不易被察觉')
-
-const s6 = run(REAL_FILE, {
-  getAppBaseInfo: () => ({ ...APP_BASE_DOC }),
-  getSystemInfoSync: () => ({ ...SYS_INFO_ANDROID8 }),
-})
-check('S6 Android 8.1 + 基础库 3.17.3 → 应保守返回 false', s6, false)
 check(
-  'S7 Android 8.1 + 老基础库 → 应保守返回 false',
-  run(REAL_FILE, { getSystemInfoSync: () => ({ ...SYS_INFO_ANDROID8 }) }),
+  'S6 Android 8.1，仅有 getDeviceInfo → 仍应 false',
+  run(REAL_FILE, onlyDevice(DEVICE_INFO_ANDROID8)),
   false
 )
 
-const s8 = run(REAL_FILE, {
-  getAppBaseInfo: () => {
-    throw new Error('boom')
-  },
-  getSystemInfoSync: () => {
-    throw new Error('boom')
-  },
-})
-check('S8 探测接口全部抛异常 → 必须降级 false（不能崩）', s8, false)
+// 老基础库（< 2.20.1）：既没 getAppBaseInfo 也没 getDeviceInfo，只有 getSystemInfoSync
+const legacy = (device) => ({ getSystemInfoSync: () => ({ ...device }) })
+check(
+  'S7 老基础库仅有 getSystemInfoSync（iOS）→ true',
+  run(REAL_FILE, legacy(SYS_INFO_IOS)),
+  true
+)
+
+// 兜底：探测接口全抛异常 → 必须降级 false 且不崩
+check(
+  'S8 探测接口全部抛异常 → 必须降级 false（不能崩）',
+  run(REAL_FILE, {
+    getAppBaseInfo: () => {
+      throw new Error('boom')
+    },
+    getDeviceInfo: () => {
+      throw new Error('boom')
+    },
+    getSystemInfoSync: () => {
+      throw new Error('boom')
+    },
+  }),
+  false
+)
+
+// 极端：只有 getAppBaseInfo（文档字段、无 system），无其它接口 → false 且不崩
+check(
+  'S9 仅有 getAppBaseInfo（无 system）→ 必须 false 且不崩',
+  run(REAL_FILE, { getAppBaseInfo: () => ({ ...APP_BASE_DOC }) }),
+  false
+)
 
 // ------------------------------------------------- 二、验证修法有效 ----
 
-bar('二、修法验证：把取 system 的接口换成 getDeviceInfo（等价一行改动）')
+bar(`二、反向对照：加跑一份「${ALT_LABEL}」，同一组场景行为**必须不同**`)
 
-if (!fixApplicable) {
-  console.log('  [FAIL] 无法在源码里定位到那一行（实现已变化？），请人工确认')
+if (!altApplicable) {
+  console.log('  [FAIL] 源码里既找不到新写法也找不到旧写法 → 无法构造另一种实现，请人工确认')
   fail++
 } else {
-  const f1 = run(FIXED_FILE, {
-    getDeviceInfo: () => ({ ...DEVICE_INFO_IOS }),
-    getAppBaseInfo: () => ({ ...APP_BASE_DOC }),
-    getSystemInfoSync: () => ({ ...SYS_INFO_IOS }),
-  })
-  check('F1 修复后：iOS 15.4 → true', f1, true)
+  const realS1 = run(REAL_FILE, baseLibNew(DEVICE_INFO_IOS))
+  const realS5 = run(REAL_FILE, onlyDevice(DEVICE_INFO_IOS))
+  const altS1 = run(ALT_FILE, baseLibNew(DEVICE_INFO_IOS))
+  const altS5 = run(ALT_FILE, onlyDevice(DEVICE_INFO_IOS))
 
-  const f2 = run(FIXED_FILE, {
-    getDeviceInfo: () => ({ ...DEVICE_INFO_ANDROID12 }),
-    getAppBaseInfo: () => ({ ...APP_BASE_DOC }),
-    getSystemInfoSync: () => ({ ...SYS_INFO_ANDROID12 }),
-  })
-  check('F2 修复后：Android 12 → true', f2, true)
+  if (isFixed) {
+    check(
+      'R1 把接口回退成 getAppBaseInfo 后，iOS（基础库 3.17.3）→ 应**复现缺陷** false',
+      altS1,
+      false,
+      '同一组桩、同一台“设备”，唯一差别就是取 system 的接口 —— 行为相反'
+    )
+    check('R2 回退版：仅有 getDeviceInfo 时 → false（TypeError 被兜底）', altS5, false)
+  } else {
+    check('R1 改成 getDeviceInfo 后，iOS（基础库 3.17.3）→ 缺陷应被消除 true', altS1, true)
+    check('R2 修复版：仅有 getDeviceInfo 时 → true', altS5, true)
+  }
 
-  const f3 = run(FIXED_FILE, {
-    getDeviceInfo: () => ({ ...DEVICE_INFO_ANDROID8 }),
-    getAppBaseInfo: () => ({ ...APP_BASE_DOC }),
-    getSystemInfoSync: () => ({ ...SYS_INFO_ANDROID8 }),
-  })
-  check('F3 修复后：Android 8.1 → 仍为 false（没有过度开启）', f3, false)
-
-  const f4 = run(FIXED_FILE, { getSystemInfoSync: () => ({ ...SYS_INFO_IOS }) })
-  check('F4 修复后：无 getDeviceInfo（老基础库）→ 走 getSystemInfoSync，iOS → true', f4, true)
+  check(
+    'R3 两种实现在 S1 上行为**必须不同**（证明这组场景有区分度，不是空跑）',
+    realS1 === altS1,
+    false,
+    `当前实现 S1=${realS1} / S5=${realS5}；${ALT_LABEL} S1=${altS1} / S5=${altS5}`
+  )
 }
 
 // ---------------------------------------------------------------- 结论 ----
 
 bar('结论')
+console.log(
+  `  被测实现：${isFixed ? '修复后写法（getDeviceInfo）' : '原始写法（getAppBaseInfo）'}`
+)
 console.log(`  通过 ${pass} 项 / 失败 ${fail} 项`)
 console.log('  ⚠️ 本工具**不复现**视觉问题，只验证 `detectGlass()` 的返回值契约。')
 console.log('  ⚠️ 另需人工确认：`.is-glass-fallback` / `.is-glass-reduced` 是**祖先选择器**')
