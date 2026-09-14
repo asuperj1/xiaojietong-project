@@ -1,0 +1,71 @@
+# ============================================================
+# 第二所学校（省级推广示例）
+#
+# 存在的意义：**证明"一份配置描述一所学校"** ——
+# 与 xiaojietong.yml 相比，这里改的是：
+#   ① 学校名/校区/部门  ② 学号规则（8 位 + 首位字母）
+#   ③ 术语映射（本校黑话不同）  ④ 采集源（域名与选择器不同）
+# 全程**没有改一行代码**。
+# ============================================================
+version: 1
+
+school:
+  code: university-b
+  name: 某某工业大学
+  short_name: 某工大
+  campuses:
+    - 南湖校区
+    - 北湖校区
+  departments:
+    - 图书馆
+    - 教务处
+    - 保卫处
+    - 校医院
+
+grades:
+  - 2022级
+  - 2023级
+  - 2024级
+  - 2025级
+
+# 与校捷通不同：首位为大写字母 + 8 位数字（共 9 位）
+student_no:
+  pattern: '^[A-Z]\d{8}$'
+  hint: 首位大写字母 + 8 位数字（例：A20240001）
+  upper: true
+  strip: true
+
+term_map:
+  热水器: 违章电器
+  电热毯: 违章电器
+  一卡通: 校园卡
+  充值卡: 校园卡
+  校车: 通勤班车
+  教务系统: 教务系统
+
+sources:
+  - key: lib-gonggao
+    name: 图书馆公告
+    url: https://lib.university-b.edu.cn/gonggao/
+    enabled: true
+    type: html_list
+    category: 图书馆
+    rate_limit_qps: 0.5
+    respect_robots: true
+    selectors:
+      list: '.list li a'
+      title: '.article h1'
+      content: '.content'
+    tags: [图书馆]
+
+  - key: bwc-tongzhi
+    name: 保卫处通知
+    url: https://bwc.university-b.edu.cn/tzgg/
+    enabled: true
+    type: html_list
+    category: 通知
+    rate_limit_qps: 0.2
+    respect_robots: true
+    selectors:
+      list: '.news_list li a'
+    tags: [安全, 门禁]
