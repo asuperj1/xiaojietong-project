@@ -1,0 +1,63 @@
+# =============================================================================
+# 文件：deploy/internal-test/systemd/xiaojietong-api.service
+# 作用：校捷通后端 systemd 服务单元【模板】
+#       占位符由 scripts/06-install-systemd.sh 在安装时替换：
+#         __APP_DIR__   → 例如 /opt/xiaojietong
+#         __APP_USER__  → 例如 xjt
+#         __APP_PORT__  → 8080
+# ⚠️ 端口策略：只监听 __APP_PORT__（8080），**不存在 80/443 的配置**
+# ⚠️ 环境变量：统一由 EnvironmentFile 注入，不在单元文件里写任何密钥
+# =============================================================================
+
+[Unit]
+Description=校捷通后端 API（内部联调 · 公网 IP:__APP_PORT__）
+Documentation=file://__APP_DIR__/app/deploy/internal-test/README.md
+After=network-online.target mysql.service
+Wants=network-online.target
+# 数据库仅本机，故不硬依赖 mysql.service（MySQL 由包管理器托管时单元名可能不同）
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__/app/backend
+
+# 环境变量集中存放：权限 600，仅部署账号可读
+EnvironmentFile=__APP_DIR__/shared/server.env
+
+# ⚠️ workers 固定为 1：
+#   本项目限流计数、浏览量聚合、C++ 连接池均在【进程内存】中，
+#   多 worker 会导致限流失真、聚合重复计数、连接池翻倍。
+ExecStart=__APP_DIR__/app/backend/.venv/bin/python -m uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port __APP_PORT__ \
+    --workers 1 \
+    --log-level info \
+    --no-access-log
+
+# 访问日志由 journald 统一收集（上面 --no-access-log 关闭 uvicorn 自带格式，
+# 若需逐请求日志可改为 --access-log 并调整日志级别）
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xiaojietong-api
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGINT
+
+# ---------- 安全加固（最小权限）----------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=__APP_DIR__
+RestrictSUIDSGID=true
+# 注：Native 扩展 jt_db.cpython-*.so 位于 __APP_DIR__/app/backend/app/db/native/，
+#     已在 ReadWritePaths 覆盖范围内；未启用 ProtectExecutable 类限制以免加载失败。
+
+# 文件描述符与进程数上限
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

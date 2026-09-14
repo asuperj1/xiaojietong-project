@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     # 运行环境：dev（默认，方便本地开发）/ prod（启用安全硬校验，见 _validate_security）
     env: str = "dev"
 
+    # C21 适配器配置：当前生效的学校配置名（backend/app/adapters/configs/<name>.yml）。
+    # 「一份配置描述一所学校」——换学校只改这一项（或直接给文件路径），不改代码。
+    # 常用：python -m app.adapters --check 校验 configs/ 下全部学校配置。
+    school_config: str = "xiaojietong"
+
     # C++ 数据访问层（jt_db 连接池）
     db_host: str = "127.0.0.1"
     db_port: int = 3307  # 本机 MySQL 实例运行在 3307（非默认 3306），按实际修改
@@ -37,6 +42,17 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_seconds: int = 7200          # 2h
     jwt_refresh_expire_seconds: int = 604800  # 7d
+
+    # 内部联调访问闸门（见 app/core/access_gate.py）。
+    # 留空 = 关闭（本机开发默认，行为与之前一致）；
+    # 公网 IP 暴露期间**必须设为随机长串**，否则任何人可访问测试接口。
+    # 团队调用方式：请求头 X-Access-Token: <token>（或 ?access_token=<token>）
+    access_token: str = ""
+    # 豁免路径（逗号分隔）—— 只放行**基础存活探针**供部署脚本/监控使用。
+    # ⚠️ 刻意**不**豁免 /api/v1/health/detail 与 /health/selfcheck：
+    #    它们会回显数据库/连接池/Ollama 状态，属信息泄露，陌生人不应看到。
+    # 注意：健康检查挂在 api_prefix 下，完整路径为 /api/v1/health。
+    access_gate_exempt: str = "/api/v1/health"
 
     # 微信登录（真实接入需填 appid/secret；留空则仅开发态可用模拟 openid）
     wx_appid: str = ""
@@ -69,6 +85,12 @@ class Settings(BaseSettings):
     rag_embed_batch: int = 16            # 批量向量化每批条数
     rag_top_k: int = 3                   # 默认检索条数
     rag_score_threshold: float = 0.35    # 相似度阈值（低于则视为未收录）
+    # C16 检索重排：none（默认，不改变现有顺序）/ lexical（IDF+标题加权的词法重排）
+    # 实现见 app/services/rerank.py；填了未注册的名字会回退 none 并打 WARNING
+    rag_rerank: str = "none"
+    # C16 重排前先「多召」多少条候选：候选越多，标题/词法证据越充分，
+    # 但也越贵。3 篇候选时 IDF 基本失效（见 rerank.py 的口径说明），故默认 20。
+    rag_rerank_candidates: int = 20
     rag_vector_dir: str = "data/rag"     # 向量库持久化目录（相对 backend/）
 
     # ---------- 文件存储与上传访问（B14）----------

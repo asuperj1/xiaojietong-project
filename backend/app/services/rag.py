@@ -12,15 +12,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from app.core.config import settings
 from app.db import cpp_bridge
 from app.services.chunker import chunk_hash, chunk_text, summarize
 from app.services.embedder import embedder
+from app.services.rerank import resolve_reranker
 from app.services.vector_store import get_vector_store
+from app.services.zh_tokenizer import (
+    build_like_params,
+    like_condition,
+    match_score_expr,
+)
+from app.services.zh_tokenizer import terms as zh_terms
 
 logger = logging.getLogger(__name__)
 
@@ -66,35 +72,41 @@ def _cache_put(key: tuple[str, int], val: list[dict]) -> None:
 
 # ---------------------------------------------------------------- 检索 ----
 
-_TERM_SPLIT_RE = re.compile(r"[\s,，、;；/]+")
-
 
 async def _keyword_retrieve(question: str, top_k: int) -> list[dict]:
-    """降级实现：关键词 LIKE 匹配（拆分关键词，任一命中即可）。
+    """降级实现：关键词 LIKE 匹配（词元任一命中即可，按命中数排序）。
 
     审计 CAC-01 修复点：
       ① 原实现在 `async def` 内**同步**调用 `cpp_bridge.query`，会直接阻塞事件循环；
          现改为 `asyncio.to_thread` 丢到工作线程执行。
       ② 原实现无并发限制；现用 `_KEYWORD_SEM` 把降级查询并发限制在 2，
          避免故障期间打满连接池拖垮全站。
+
+    审计 CAC-25 修复点（中文提问检索恒为空）：
+      ③ 原实现按 `[\\s,，、;；/]+` 切词，但**中文问句没有空格**，整句被当作一个词去
+         执行 `LIKE '%图书馆几点关门？%'`，实测中文提问**全部 0 命中**。
+         现改用 `zh_tokenizer`（中文 2-gram，零依赖，无需 jieba）。
+      ④ 原实现无相关度排序：只沾一个泛词的文档会排在真正相关的文档前面。
+         现按**命中词元数**降序，再按 `updated_at` 降序。
     """
     if not question:
         return []
-    # 拆词：按空白/常见分隔符；无分隔时取整串（兼容中文长句）
-    terms = [t for t in _TERM_SPLIT_RE.split(question.strip()) if t][:5]
-    if not terms:
-        terms = [question[:20]]
-    cond = " OR ".join("(title LIKE ? OR content LIKE ?)" for _ in terms)
-    params: list[str] = []
-    for t in terms:
-        params += [f"%{t}%", f"%{t}%"]
+
+    term_list = zh_terms(question)
+    if not term_list:
+        return []
+
+    cond = like_condition(term_list)
+    # WHERE 与 ORDER BY 里的 LIKE 占位符**不能复用同一个绑定值**，故各绑一遍
+    params: list[Any] = build_like_params(term_list) * 2
     params.append(top_k)
 
     def _run() -> list[dict]:
         return cpp_bridge.query(
             f"SELECT title, category, LEFT(content, 200) AS content, source_url "
             f"FROM knowledge_doc WHERE status != 2 AND ({cond}) "
-            f"ORDER BY updated_at DESC LIMIT ?",
+            f"ORDER BY ({match_score_expr(term_list)}) DESC, updated_at DESC "
+            f"LIMIT ?",
             params,
         )
 
@@ -120,21 +132,35 @@ async def _retrieve_uncached(question: str, top_k: int) -> list[dict]:
     """实际回源逻辑（不读缓存）。
 
     优先向量检索；embedding/向量库不可用或未命中时降级关键词匹配。
+
+    `C16`：先按 `rag_rerank_candidates` **多召**候选，再用重排策略裁到 `top_k`。
+    重排放在**回源内部**而不是 `retrieve()` 外层 —— 否则缓存里存的是未重排的结果，
+    改了策略得等 TTL 过期才生效，且缓存命中时根本不会重排。
     """
+    reranker = resolve_reranker(settings.rag_rerank)
+    # 默认策略（none）不多召：不改变任何现有行为与开销
+    if reranker.name == "none":
+        cand_k = top_k
+    else:
+        cand_k = max(top_k, settings.rag_rerank_candidates)
+
     result: list[dict] = []
     emb = await embedder.embed_one(question)
     if emb is not None:
         try:
             store = get_vector_store()
             hits = await asyncio.to_thread(
-                store.search, emb, top_k, settings.rag_score_threshold
+                store.search, emb, cand_k, settings.rag_score_threshold
             )
             if hits:
                 result = _format_hits(hits)
         except Exception as exc:  # noqa: BLE001 - 向量库异常降级
             logger.warning("向量检索异常，降级关键词：%s", exc)
     if not result:
-        result = await _keyword_retrieve(question, top_k)
+        result = await _keyword_retrieve(question, cand_k)
+
+    if reranker.name != "none" and len(result) > 1:
+        result = reranker.rerank(question, result, top_k)
     return result
 
 
