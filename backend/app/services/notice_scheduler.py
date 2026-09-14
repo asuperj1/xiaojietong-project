@@ -56,6 +56,22 @@ def is_private_audience(target_grade: Any) -> bool:
     return str(target_grade or "").startswith(PRIVATE_TARGET_PREFIX)
 
 
+def private_notice_ids() -> set[int]:
+    """全部私密推送行的 id 集合。
+
+    ⚠️ 必须按 **id** 过滤，不能依赖行里的 ``target_grade`` 字段：
+    ``LifeDAO.page_notices`` 的 SELECT 只取
+    ``id,title,content,source,category,publish_time``（不含 target_grade），
+    因此调用方拿到的行里**根本没有**该字段，按字段过滤会静默失效
+    （PR #60 审查 P0：/life/notices 私密行泄漏）。
+    """
+    rows = cpp_bridge.query(
+        "SELECT id FROM campus_notice WHERE target_grade LIKE ?",
+        [f"{PRIVATE_TARGET_PREFIX}%"],
+    )
+    return {int(r["id"]) for r in rows}
+
+
 def parse_stages(value: str | Iterable[str] | None) -> list[str]:
     """解析档位配置（``"D7,D2"`` / ``["D7"]``）→ 合法档位列表。"""
     if value is None:
@@ -188,38 +204,60 @@ def _reminder_rows(now: datetime, user_id: Optional[int], limit: int) -> list[di
     return cpp_bridge.query(sql, params)
 
 
-_DEADLINE_FLAG: Optional[bool] = None
+_EXTENDED_COLUMNS: Optional[set[str]] = None
+EXTENDED_COLUMN_NAMES = ("deadline", "materials", "importance")
+
+
+def notice_extended_columns(refresh: bool = False) -> set[str]:
+    """``campus_notice`` 上**已存在**的扩展列（B19 ``14_notice_extend.sql`` 导入与否）。
+
+    结果进程内缓存；导入 SQL 后重启服务即自动启用，无需改代码/配置。
+    探测失败按「都没有」处理（降级：功能跳过而不是报错）。
+    """
+    global _EXTENDED_COLUMNS
+    if _EXTENDED_COLUMNS is not None and not refresh:
+        return _EXTENDED_COLUMNS
+    try:
+        rows = cpp_bridge.query(
+            "SELECT column_name AS c FROM information_schema.columns "
+            "WHERE table_schema = DATABASE() AND table_name = 'campus_notice' "
+            "AND column_name IN ('deadline','materials','importance')"
+        )
+        _EXTENDED_COLUMNS = {str(r.get("c") or "") for r in rows if r.get("c")}
+    except Exception:  # noqa: BLE001 - 探测失败按"未扩展"降级
+        _EXTENDED_COLUMNS = set()
+    return _EXTENDED_COLUMNS
 
 
 def notice_deadline_supported(refresh: bool = False) -> bool:
-    """``campus_notice.deadline`` 是否存在（B19 的 ``14_notice_extend.sql`` 是否已导入）。
+    """``campus_notice.deadline`` 是否存在（B19 的 ``14_notice_extend.sql`` 是否已导入）。"""
+    return "deadline" in notice_extended_columns(refresh)
 
-    结果缓存；B19 合入后重启服务即可自动启用，无需改配置。
-    """
-    global _DEADLINE_FLAG
-    if _DEADLINE_FLAG is not None and not refresh:
-        return _DEADLINE_FLAG
+
+def importance_of(row: dict) -> int:
+    """从通知行取重要度（1~5；缺失/非法/未打分 → 0）。"""
     try:
-        rows = cpp_bridge.query(
-            "SELECT COUNT(*) AS c FROM information_schema.columns "
-            "WHERE table_schema = DATABASE() AND table_name = 'campus_notice' "
-            "AND column_name = 'deadline'"
-        )
-        _DEADLINE_FLAG = bool(rows and int(rows[0]["c"]) > 0)
-    except Exception:  # noqa: BLE001 - 探测失败按"不支持"处理（降级）
-        _DEADLINE_FLAG = False
-    return _DEADLINE_FLAG
+        value = int(row.get("importance") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(5, value))
 
 
 def _notice_rows(now: datetime, limit: int) -> list[dict]:
-    """带截止时间的校园通知（仅当 B19 已扩展 deadline 列）。"""
+    """带截止时间的校园通知（仅当 B19 已扩展 deadline 列）。
+
+    扩展列按实际存在情况拼接（B20）：只加了 ``deadline`` 时也能跑，
+    ``materials`` / ``importance`` 存在才带上（重要度参与推送打分）。
+    """
     if not notice_deadline_supported():
         return []
+    cols = ["id", "title", "content", "source", "category", "target_grade", "deadline"]
+    present = notice_extended_columns()
+    cols += [c for c in ("materials", "importance") if c in present]
     window_start = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
     window_end = (now + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
     return cpp_bridge.query(
-        "SELECT id, title, content, source, category, target_grade, deadline "
-        "FROM campus_notice WHERE deadline IS NOT NULL "
+        f"SELECT {', '.join(cols)} FROM campus_notice WHERE deadline IS NOT NULL "
         "AND deadline BETWEEN ? AND ? AND target_grade NOT LIKE ? "
         "ORDER BY deadline LIMIT ?",
         [window_start, window_end, f"{PRIVATE_TARGET_PREFIX}%", int(limit)],
@@ -374,11 +412,19 @@ def dispatch(
                 })
                 continue
             try:
-                notice_id = _create_push_notice(
-                    "notice", nid, stage, f"{head} {title}",
+                # B20：重要度（抽取/打分结果）参与推送排序与文案，缺失时按 0 处理
+                imp = importance_of(row)
+                score = STAGE_RULES[stage][1] + 0.2 * imp
+                reason = f"{short}：{title}" + (f"（重要度 {imp}）" if imp else "")
+                materials = str(row.get("materials") or "").strip()
+                body = (
                     f"{row.get('content') or title}\n\n{head}，请及时办理。"
-                    f"\n截止时间：{_fmt(deadline)}\n来源：{row.get('source') or '校园通知'}",
-                    base,
+                    f"\n截止时间：{_fmt(deadline)}\n来源：{row.get('source') or '校园通知'}"
+                )
+                if materials:
+                    body += f"\n需要材料：{materials}"
+                notice_id = _create_push_notice(
+                    "notice", nid, stage, f"{head} {title}", body, base,
                 )
                 sent = 0
                 for u in users:
@@ -386,12 +432,12 @@ def dispatch(
                     if uid in readers:
                         skipped["read"] += 1
                         continue
-                    _deliver(notice_id, uid, STAGE_RULES[stage][1],
-                             f"{short}：{title}")
+                    _deliver(notice_id, uid, score, reason)
                     sent += 1
                 pushed.append({
                     "kind": "notice", "ref_id": nid, "stage": stage, "days_left": days_left,
                     "notice_id": notice_id, "title": title, "delivered": sent,
+                    "importance": imp,
                 })
             except Exception as exc:  # noqa: BLE001
                 errors.append({"kind": "notice", "ref_id": nid, "error": str(exc)[:200]})

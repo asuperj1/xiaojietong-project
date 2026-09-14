@@ -466,7 +466,11 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### GET /life/notices — 通知列表
 查询参数：`?category=选课&target_grade=2024级&page=&size=`
 响应 `data.items[]`：`{ "id":1,"title":"2026年秋季学期选课通知","source":"教务处","category":"选课","publish_time":"..." }`
-> **v1.16（B18）**：本接口为**公共口径**，会剔除「私密推送行」（`target_grade` 以 `__push:` 开头，见下方分层推送）。这类推送**只对投递对象本人可见**，需通过 `GET /life/notice-feed` 或 `GET /life/notices/unread` 获取（它们按投递记录取数）。
+> **v1.17（P0 修复）**：本接口为**公共口径**，必须剔除「私密推送行」（`target_grade` 以 `__push:` 开头，见下方分层推送）。
+> 实现要点：`LifeDAO.page_notices` 的 SELECT **不含** `target_grade` 列，因此**不能**用返回行里的该字段判断
+> （读出来恒为 `None`，过滤会静默失效 → 私密待办会泄漏给所有人）。正确做法是先取私密行 id 集合
+> （`services/notice_scheduler.private_notice_ids()`），再按 **id** 剔除；剔除后最多向后补拉 2 页保证条数。
+> 这类推送只对投递对象本人可见，需通过 `GET /life/notice-feed` 或 `GET /life/notices/unread` 获取（按投递记录取数）。
 
 ### POST /life/notices/{id}/read — 标记已读（精准推送回执）
 > v1.9 起同步更新投递记录（notice_delivery）的已读状态。
@@ -486,6 +490,19 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 
 ### GET /life/notices/unread — 未读列表（v1.9 新增）
 查询参数：`?page=&size=`；`data.items[]` 同 notice-feed，仅含 `is_read=0`，按得分倒序。
+
+> **B19 + B20 通知字段扩展（v1.18）**：导入 `db/sql/14_notice_extend.sql` 后，
+> `campus_notice` 增加 **`deadline`**（截止时间）/ **`materials`**（材料清单）/ **`importance`**（重要度 1~5），
+> 下列接口的 `items[]` **自动多返回这 3 个字段**（未打分/未抽取时为 `null`）：
+> `GET /life/notice-feed`、`GET /life/notices/unread`、`GET /life/notices`（私密行除外）。
+> **实现差异（重要）**：前两者走服务端 SQL（列按表结构动态拼），
+> `/life/notices` 走 **C++ DAO**（`page_notices` 的 SELECT 编译期写死，取不到新列），
+> 因此在那条路径上由 **Python 侧按 id 补查一次**（`services/notice.attach_extended_fields()`，
+> 1 页 1 条 SQL）——这样无需为字段扩展去动 C++ 并重编译。
+> **向后兼容**：旧字段全部保留；未导入该 SQL 时接口行为与 v1.17 完全一致
+> （服务端用 `information_schema` 探测列是否存在，不存在就不查、不报错，补查也直接跳过）。
+> `importance` 参与打分：通知流 `score += 0.2 × importance`（缺省 0，不改变旧排序）；
+> 分层推送（B18）同样把重要度计入推送得分，并在正文追加「需要材料：…」。
 
 ### POST /life/notices/read-batch — 批量已读（v1.9 新增）
 请求 `{ "notice_ids": [1,2,3] }` → 响应 `{ "updated": 3 }`
@@ -546,8 +563,12 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 删除文档 + 分块 + 向量；不存在返回 `1001`。
 
 ### POST /admin/knowledge/purge — 按来源前缀批量清理（v1.15 新增）
-请求 `{ "source_prefix":"samples/", "purge_vectors": true }`
-响应 `{ "matched":6, "deleted":6, "doc_ids":[...] }`（误导入回滚 / 基准数据清理）
+请求 `{ "source_prefix":"samples/", "purge_vectors": true, "dry_run": false }`
+响应 `{ "matched":6, "deleted":6, "doc_ids":[...], "pattern":"samples/%", "dry_run":false }`
+> **v1.17 护栏（PR #60 审查 P1）**：前缀按**字面**匹配——`%` / `_` / `\` 会被转义
+> （`a_b/` 不会误伤 `aXb/`，`%` 更不会匹配全库）；前缀短于 **3 字符**直接拒绝（`1001`）；
+> `dry_run=true` 只返回将要删除的清单（含实际 `pattern`）不动数据。
+> 误导入回滚 / 基准数据清理用。
 
 ### POST /admin/knowledge/index — 重建知识库索引（B15 异步化）
 查询参数：`?force=true`（全量重建，默认 false 只处理待向量化文档）
@@ -772,4 +793,6 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.14 | 2026-09-12 | 评审修复（P1+P2）：`storage.resign()` 补全上传签名闭环（商品图/收藏图/头像/菜品图返回前动态签名，修复"只写不读"导致开启校验后前端 403）；Celery 投递异常统一转契约错误（不再 HTTP 500）；`/agent/tasks` 限流收紧至 10/min；索引状态接口补充 eager 模式说明 |
 | v1.15 | 2026-09-13 | **B16 文档解析器 + B17 批量导入**：`POST /admin/knowledge/ingest` 升级为**双通道**（JSON 文本 / multipart 文件），支持 `.md/.markdown/.html/.htm/.pdf/.txt` 解析入库（PDF 三层引擎：pypdf → pdfminer → 内置零依赖抽取器，含 FlateDecode 与 `/ToUnicode` 中文还原），新增 `dry_run` 预览、`index`（入库与向量化解耦）、`dedup/overwrite`（按 `source_url` 去重）；新增 `GET /admin/knowledge/docs`（真实 total）、`GET /admin/knowledge/stats`、`DELETE /admin/knowledge/docs/{id}`、`POST /admin/knowledge/purge`；命令行批量导入管道 `python -m app.cli.kb_import`（进度、断点续传、`--require-min` 达标闸门、`--purge-source-prefix` 回滚、退出码语义） |
 | v1.16 | 2026-09-13 | **B18 分层推送调度**：新增 `services/notice_scheduler.py` + Celery beat 定时任务（每日 `XJT_NOTICE_PUSH_HOUR`）——待办到期前 **D-7 / D-2**（可选 `D0`）主动生成 `notice_delivery`；`reminder` 与 `campus_notice.deadline`（B19 列，自动探测）双来源；幂等键为「待办 × 档位」（`target_grade=__push:...`），手动补跑不重复推送；`GET /life/notices` 显式过滤私密推送行（不泄漏给他人，本人经未读/信息流可见）；新增 `POST /admin/notices/dispatch`（触发，支持 `now` 时间基准与 `dry_run`）、`GET /admin/notices/pending`（到期一览）、`POST /admin/notices/purge-private`（回收） |
+| v1.17 | 2026-09-13 | **PR #60 审查修复（1×P0 + 2×P1）**：① **P0** `GET /life/notices` 私密行泄漏——`LifeDAO.page_notices` 的 SELECT 不含 `target_grade`，按字段过滤恒失效，改为按 **id 集合**剔除（`private_notice_ids()`，剔除后最多补拉 2 页）；② **P1** `POST /admin/knowledge/purge` 增加通配符护栏（`%`/`_`/`\` 转义为字面匹配、前缀 <3 字符拒绝、新增 `dry_run` 预览）；③ **P1** 移除恒真空断言：`/life/notices` 零泄漏改为「id 不在公共列表 + 公共列表非空 + 调度前后集合不变」三重验证，越权用例改用普通账号（`err_forbidden` = HTTP 403 + `2003`） |
+| v1.18 | 2026-09-13 | **B19 通知表结构扩展 + B20 字段契约**：新增 `db/sql/14_notice_extend.sql`（**幂等**、可回滚）为 `campus_notice` 增加 `deadline`/`materials`/`importance`（均允许 NULL，不动现有数据）+ `idx_deadline` 索引；B20 契约：`/life/notice-feed`、`/life/notices/unread`、`/life/notices` 自动返回这 3 个新字段（**列不存在时不 SELECT，行为与 v1.17 一致**，向后兼容）；`importance` 计入通知流得分（+0.2/级）与 B18 推送得分，推送正文追加材料清单 |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
