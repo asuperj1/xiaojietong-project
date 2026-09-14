@@ -273,7 +273,10 @@ PYBIND11_MODULE(jt_db, m) {
              py::arg("target_type"), py::arg("target_id"), "点赞/取消，返回当前是否已赞")
         .def("pending_audit", &ForumDAO::pending_audit, py::arg("limit") = 50,
              "待 AI 审核帖子")
-        .def("hot_topics", &ForumDAO::hot_topics, py::arg("limit") = 20, "热点帖子");
+        .def("hot_topics", &ForumDAO::hot_topics, py::arg("limit") = 20, "热点帖子")
+        .def("search_topics", &ForumDAO::search_topics, py::arg("page"), py::arg("size"),
+             py::arg("keyword"), py::arg("category") = "", py::arg("audited_only") = true,
+             "C26 关键词搜索（FULLTEXT ngram；keyword 净化后为空则退化为 page_topics）");
 
     // ---- 二手 ----
     py::class_<SecondhandDAO>(m, "SecondhandDAO")
