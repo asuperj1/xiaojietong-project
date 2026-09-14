@@ -31,6 +31,22 @@ def normalize_source(source: str) -> str:
     return (source or "").strip().replace("\\", "/")[:255]
 
 
+# 批量删除护栏（PR #60 审查 P1）：
+#   · 前缀里的 % / _ / \ 必须转义，否则 `a_b` 会误伤 `aXb`、`%` 会**匹配全库**；
+#   · 前缀过短（如 "/" "a"）等价于无差别删除，直接拒绝。
+MIN_PURGE_PREFIX_CHARS = 3
+
+
+def like_prefix_pattern(prefix: str) -> str:
+    """把来源前缀转成**字面** LIKE 模式（配合 ``ESCAPE '\\\\'`` 使用）。"""
+    escaped = (
+        prefix.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return escaped + "%"
+
+
 def find_by_source(source_url: str) -> Optional[dict]:
     """按 source_url 查已入库文档（去重/续传判定用）。"""
     src = normalize_source(source_url)
@@ -239,24 +255,47 @@ def delete_doc(doc_id: int, *, purge_vectors: bool = True) -> bool:
     return True
 
 
-def purge_by_source_prefix(prefix: str, *, purge_vectors: bool = True) -> dict:
+def purge_by_source_prefix(
+    prefix: str, *, purge_vectors: bool = True, dry_run: bool = False
+) -> dict:
     """按 source_url 前缀批量清理（B17 基准测试/误导入回滚）。
 
+    Args:
+        prefix: 来源前缀（**按字面匹配**：``%``/``_``/``\\`` 会被转义，不会当通配符）。
+        purge_vectors: 是否同时清理向量库。
+        dry_run: 只统计不删除（先看清要删什么再动手）。
+
+    Raises:
+        ValueError: 前缀为空或短于 ``MIN_PURGE_PREFIX_CHARS``（防止误删全库）。
+
     Returns:
-        ``{"matched": n, "deleted": n, "doc_ids": [...]}``
+        ``{"matched": n, "deleted": n, "doc_ids": [...], "pattern": "...", "dry_run": bool}``
     """
     p = normalize_source(prefix)
-    if not p:
-        return {"matched": 0, "deleted": 0, "doc_ids": []}
+    if len(p) < MIN_PURGE_PREFIX_CHARS:
+        raise ValueError(
+            f"source_prefix 至少需要 {MIN_PURGE_PREFIX_CHARS} 个字符（防止误删全库），"
+            f"当前为 {p!r}"
+        )
+    pattern = like_prefix_pattern(p)
     rows = cpp_bridge.query(
-        "SELECT id FROM knowledge_doc WHERE source_url LIKE ? AND status != 2", [f"{p}%"]
+        "SELECT id FROM knowledge_doc WHERE source_url LIKE ? ESCAPE '\\\\' AND status != 2",
+        [pattern],
     )
     ids = [int(r["id"]) for r in rows]
+    if dry_run:
+        return {
+            "matched": len(ids), "deleted": 0, "doc_ids": ids,
+            "pattern": pattern, "dry_run": True,
+        }
     deleted = 0
     for doc_id in ids:
         if delete_doc(doc_id, purge_vectors=purge_vectors):
             deleted += 1
-    return {"matched": len(ids), "deleted": deleted, "doc_ids": ids}
+    return {
+        "matched": len(ids), "deleted": deleted, "doc_ids": ids,
+        "pattern": pattern, "dry_run": False,
+    }
 
 
 def stats() -> dict:
