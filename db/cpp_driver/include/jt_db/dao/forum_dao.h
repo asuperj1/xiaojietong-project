@@ -17,6 +17,18 @@ public:
     QueryResult page_topics(int page, int size, const std::string& category = "",
                             bool audited_only = true);
 
+    // C26 关键词搜索（标题 + 正文，FULLTEXT + ngram parser，见 db/sql/19_topic_fulltext.sql）
+    //
+    // keyword：**用户原样输入**（不需要调用方做任何转义）。内部会净化成 boolean 检索式：
+    //          去掉 boolean 运算符、按空白拆词、每个词前缀 `+`（= 这些字都要出现）。
+    //          ⚠️ 中文由**服务器**按 `ngram_token_size` 切成 n-gram（本机 = 2 字）——
+    //          这与 services/zh_tokenizer.py 的 2-gram 口径一致。
+    // 返回列：在 page_topics 的列基础上**追加 `relevance`**（相似度，DESC 排序）。
+    // 退化：keyword 为空或净化后为空 → **直接转 page_topics**（不返回空表）。
+    QueryResult search_topics(int page, int size, const std::string& keyword,
+                              const std::string& category = "",
+                              bool audited_only = true);
+
     // 发帖（返回帖子 id，失败 -1）
     long long create_topic(long long author_id, const std::string& title,
                            const std::string& content, const std::string& category);

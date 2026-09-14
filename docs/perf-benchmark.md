@@ -157,3 +157,121 @@ E:/miniconda3/python.exe bench_concurrent.py --n 600 --threads 1,4,8,16
 # 单线程基线（C6 原报告，保留可对比）
 E:/miniconda3/python.exe bench_dao.py --n 300
 ```
+
+---
+
+# 第三部分 · C26 帖子关键词搜索索引（2026-09-14）
+
+> 日期：2026-09-14 ｜ 脚本：`tools/bench_c26_topic_search.py` ｜ 表：`topic`（种子 1 万行）
+> 索引脚本：`db/sql/19_topic_fulltext.sql` ｜ DAO：`ForumDAO::search_topics`
+
+## 13. 问题与目标
+
+任务卡 `C26`（原编号 `C33`）验收：**1 万条帖子下关键词查询 p95 < 200ms** + 压测数据。
+
+实测现状（改造前）：
+
+| 项 | 实测值 | 核查命令 |
+|---|---|---|
+| `topic` 行数 | **23** | `SELECT COUNT(*) FROM topic` |
+| FULLTEXT 索引 | **一个都没有** | `information_schema.STATISTICS` |
+| `ngram_token_size` | 2（默认，与 `zh_tokenizer` 2-gram 口径一致） | `SHOW VARIABLES LIKE 'ngram%'` |
+| 唯一可用的搜索方式 | `title LIKE '%kw%' OR content LIKE '%kw%'`（`content` 还是 TEXT） | — |
+
+前置唯一键可用 ⇒ 前置通配符**不可能走 B+ 树** ⇒ 全表扫描。这与 `CAC-25`（按空格切词导致中文检索全空）是同一族问题的两个面。
+
+## 14. 方法
+
+| 项 | 值 |
+|---|---|
+| 数据 | 确定性生成 **10 000** 条帖子（`category='bench_c26'`，`random.seed(42)`），`created_at/updated_at` 铺开 90 天 |
+| 植入标记 | 热词「图书馆研讨间」37 行 + 冷词「馆际互借」37 行（**冷词只出现在植入行**） |
+| 新方案 | `MATCH(title, content) AGAINST (? IN BOOLEAN MODE)` + `FULLTEXT ... WITH PARSER ngram` |
+| 旧方案 | `title LIKE ? OR content LIKE ?`（同一 WHERE 的其余条件完全相同） |
+| 计时 | 每方案 15 轮，报 p50 / p95 / max（最近秩法，样本少时**保守取上界**） |
+| 复现 | `E:/miniconda3/python.exe tools/bench_c26_topic_search.py --rows 10000 --rounds 15`（跑完自动清理） |
+
+⚠️ **两种查询形态都要测**，否则结论会反过来（见 §15.3）：
+
+- **取页** `ORDER BY updated_at DESC LIMIT 20` —— 有 `LIMIT` 短路
+- **全量计数** `COUNT(*)` —— 无短路，直接暴露扫描量
+
+⚠️ **冷 / 热词都要测**：热词命中占比高，不是搜索框的典型形态（这是第一版基准踩的坑）。
+
+## 15. 实测结果（10 023 行）
+
+### 15.1 EXPLAIN 对照（冷词）
+
+| 方案 | type | key | 估算扫描行数 |
+|---|---|---|---|
+| OLD `LIKE '%馆际互借%'` | `ref` | `idx_audit_list` | **4 984** |
+| NEW `MATCH ... AGAINST` | `fulltext` | `ft_topic_search` | **1** |
+
+> ⚠️ OLD 的 `key` **不是 NULL** —— `audit_status=1` 覆盖绝大多数行，优化器会用
+> `idx_audit_list` 做一次 ref 扫描再逐行套 LIKE，**看起来"用了索引"，实际扫的仍是全表**。
+> 所以判定依据必须是「**没有**关键词索引可用 + 扫描量远大于 MATCH」，不能只看 `key=(none)`。
+
+### 15.2 分位数
+
+| 场景 | OLD LIKE p95 | NEW MATCH p95 | 结论 |
+|---|---|---|---|
+| **冷词** 取页 | 9.53 ms | **1.42 ms** | MATCH 快 **6.7x** ✅ 验收通过 |
+| **冷词** 全量计数 | 10.92 ms | **0.92 ms** | MATCH 快 **11.9x** |
+| 热词 取页 | **0.70 ms** | 32.32 ms | LIKE 更快（见 §15.3） |
+| 热词 全量计数 | 11.01 ms | 12.28 ms | 基本持平 |
+
+命中集一致性复核（两方案 `COUNT(*)` 必须相同）：
+
+| 词 | OLD LIKE 命中 | NEW MATCH 命中 |
+|---|---|---|
+| 冷词「馆际互借」 | 37 | **37** ✅ |
+| 热词「图书馆」 | 2 684 | **2 684** ✅ |
+
+### 15.3 ⚠️ 如实记录：热词下 `LIKE` 反而更快
+
+| 词 | 命中占比 | LIKE p95 | MATCH p95 |
+|---|---|---|---|
+| 冷词「馆际互借」 | 0.37% | 9.53 ms | 1.42 ms |
+| 热词「图书馆」 | **26%** | **0.70 ms** | 32.32 ms |
+
+**原因**：`ORDER BY updated_at DESC LIMIT 20` 与 `idx_audit_list` 的索引序一致，
+热词命中密集 ⇒ 顺着索引扫几十行就凑够 20 条，**短路**掉了全表扫描；
+而 FULLTEXT 必须把所有命中行取出来算 relevance、再 `filesort`，命中 2 684 行时反而更贵。
+
+**结论**：FULLTEXT 的收益来自**冷词 / 无短路**，而搜索框的真实形态就是冷词
+（用户搜的是具体的东西）。这**不**说明 FULLTEXT 在所有场景都更快——
+**热词 + 按时间取页**这种组合下旧方案更划算，若将来要优化，正确做法是
+按命中占比做一个路由（本任务不做，仅登记）。
+
+## 16. 附带验证（反向对照，证明结论不是空跑）
+
+| 断言 | 结果 |
+|---|---|
+| 冷/热词各 37 条植入行**全部**被 MATCH 找到 | ✅ 漏 0 条（漏了说明 ngram 未生效） |
+| `IGNORE INDEX (ft_topic_search)` 后查询报错 | ✅ `ERR 1191 Can't find FULLTEXT index` → 证明依赖的正是本索引 |
+| MATCH 命中行的正文确实含**全部 bigram** | ✅ 异常 0 条 |
+| 空词 / 纯符号 `"+++---~*"` → 退化为 `page_topics` | ✅ 结果**不含 `relevance` 列**且与 `page_topics` 同批 id |
+| `"-图书馆"` 与 `"图书馆"` 结果一致 | ✅ `-` 被净化，未被当成 boolean「排除」 |
+| 多词 `"宿舍 食堂"` → AND 语义 | ✅ AND 646 行 ≤ OR 4 635 行 |
+| `page=0 / size=0 / size=999` 归一化 | ✅ 不抛异常 |
+| 索引脚本重复执行 | ✅ `[skip] already exists`，列数仍为 2（幂等） |
+| 压测后数据回基线 | ✅ 10 023 → **23** 行 |
+
+## 17. 答辩口径（一句话）
+
+> 帖子表**原本没有任何全文索引**，关键词只能前置通配符 LIKE ⇒ 全表扫描；
+> 新增 `FULLTEXT(title, content) WITH PARSER ngram` 后，**1 万条帖子下冷词查询
+> p95 从 9.53ms 降到 1.42ms（6.7x），全量计数 10.92ms → 0.92ms（11.9x）**；
+> 并**如实记录**了热词因 `LIMIT` 短路而旧方案更快的边界，没有把基准做成"只挑好看的数"。
+
+## 18. 复现命令
+
+```powershell
+# 1) 建索引（幂等，可重复执行）
+mysql --host=127.0.0.1 --port=3307 -u<user> -p xiaojietong < db/sql/19_topic_fulltext.sql
+
+# 2) 压测（自动种子 1 万行 → 实测 → 清理还原）
+cd <repo>
+$env:XJT_DB_PASSWORD='***'; $env:XJT_DB_PORT='3307'
+E:/miniconda3/python.exe tools/bench_c26_topic_search.py --rows 10000 --rounds 15
+```
