@@ -12,12 +12,21 @@
  * 实测各场景行为，无需微信开发者工具、无需网络。
  *
  * 用法：
- *     node tools/verify_frontend_base_url_guard.js
+ *     node tools/verify_frontend_base_url_guard.js                  # 测当前仓库
+ *     node tools/verify_frontend_base_url_guard.js --src <工作树路径>  # 测指定工作树（如 PR 分支）
  * 退出码：0 = 全部通过；1 = 有失败
  *
  * 注意：脚本会故意打印若干条 `console.error`（那是被测代码的诊断日志，属预期行为）。
  * PowerShell 会把它渲染成红色错误块 —— 那只是显示效果、不代表失败；
  * 只看最后的 `[PASS]` / `[FAIL]` 与退出码。
+ *
+ * ⚠️ v2（2026-09-14，审查 PR #59 时修正）
+ * --------------------------------
+ * 沙箱原先**写死**只抄 `config/env.js` + `services/request.js`。PR #59（F10）给
+ * `app.js` 加了 `require('./utils/glass')` 之后，沙箱里没有 `utils/` →
+ * `require(app.js)` 直接 `MODULE_NOT_FOUND` → **工具失效、误报红**
+ * （实测：dev 上 26/26 OK；#59 head 上 EXIT=1）。
+ * 现在改为**按 `app.js` 的实际 `require` 递归复制本地依赖**，以后加依赖不必再改工具。
  */
 
 'use strict'
@@ -26,7 +35,13 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
-const ROOT = path.resolve(__dirname, '..')
+function argValue(name, fallback) {
+  const i = process.argv.indexOf(name)
+  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback
+}
+
+// --src 让同一个工具能测任意工作树（与 tools/verify_glass_probe.js 接口一致）
+const ROOT = path.resolve(argValue('--src', path.join(__dirname, '..')))
 const MP = path.join(ROOT, 'miniprogram')
 
 const sandboxes = []
@@ -44,21 +59,64 @@ function check(name, ok, detail) {
 }
 
 /**
+ * 把入口文件及其**本地依赖**递归复制进沙箱（相对路径以 `miniprogram/` 为基准）。
+ *
+ * 为何要递归：入口（`app.js`）的依赖会随功能增长。以前这里**写死**只抄
+ * `config/env.js` + `services/request.js`，F10 给 `app.js` 加了 `./utils/glass`
+ * 之后沙箱就缺文件 → `MODULE_NOT_FOUND`，**工具从“验证”退化成“误报”**。
+ *
+ * 只处理 `require('./x')` / `require('../x')` 这类**相对引用**；
+ * 包名（`require('fs')`）与跳出 `miniprogram/` 的引用不复制。
+ *
+ * @param {string} sandboxDir 沙箱根目录
+ * @param {string} relFromMp  相对 `miniprogram/` 的路径，如 `app.js` / `services/request.js`
+ * @param {Set<string>} seen  已处理集合（避免循环引用无限递归）
+ */
+function copyLocalRequires(sandboxDir, relFromMp, seen) {
+  seen = seen || new Set()
+  relFromMp = relFromMp.split(path.sep).join('/')
+  if (seen.has(relFromMp)) return
+  seen.add(relFromMp)
+
+  const src = path.join(MP, relFromMp)
+  if (!fs.existsSync(src) || !fs.statSync(src).isFile()) return
+
+  const dest = path.join(sandboxDir, relFromMp)
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  const code = fs.readFileSync(src, 'utf8')
+  fs.writeFileSync(dest, code)
+
+  // `../config/env` 这类引用要相对**当前文件所在目录**解析，
+  // 再映射回沙箱内的同一相对路径（与 Node 的解析规则一致）
+  const dirOfRel = path.posix.dirname(relFromMp)
+  const re = /require\(\s*['"](\.[^'"]*)['"]\s*\)/g
+  let m
+  while ((m = re.exec(code)) !== null) {
+    const spec = m[1].endsWith('.js') ? m[1] : m[1] + '.js'
+    const childRel = path.posix.normalize(path.posix.join(dirOfRel, spec))
+    if (childRel.startsWith('..')) continue // 跳出 miniprogram/ → 不复制（如包名）
+    copyLocalRequires(sandboxDir, childRel, seen)
+  }
+}
+
+/**
  * 建一个隔离沙箱：复制真实源码，并把 env.js 的 RELEASE_BASE_URL 换成指定值。
  * （RELEASE_BASE_URL 是模块级 const，只能靠改源码来模拟「已配置」的正式包）
  */
 function makeSandbox(releaseUrl) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xjt-env-'))
   sandboxes.push(dir)
-  fs.mkdirSync(path.join(dir, 'config'), { recursive: true })
-  fs.mkdirSync(path.join(dir, 'services'), { recursive: true })
 
+  // ① 入口 + 它 require 到的全部本地依赖（**别写死文件清单**，见 copyLocalRequires）
+  copyLocalRequires(dir, 'app.js')
+  copyLocalRequires(dir, path.join('services', 'request.js'))
+
+  // ② 再把 env.js 改成「已配置正式包」的版本 —— **必须在①之后**，否则会被①覆盖
   const envSrc = fs
     .readFileSync(path.join(MP, 'config', 'env.js'), 'utf8')
     .replace(/const RELEASE_BASE_URL = .*/, `const RELEASE_BASE_URL = ${JSON.stringify(releaseUrl)}`)
   fs.writeFileSync(path.join(dir, 'config', 'env.js'), envSrc)
-  fs.copyFileSync(path.join(MP, 'services', 'request.js'), path.join(dir, 'services', 'request.js'))
-  fs.copyFileSync(path.join(MP, 'app.js'), path.join(dir, 'app.js'))
+
   return dir
 }
 
