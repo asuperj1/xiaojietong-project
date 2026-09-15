@@ -45,12 +45,15 @@ CREATE TABLE IF NOT EXISTS `pickup_point` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='快递驿站 / 取件点';
 
 -- 种子（固定主键 + ON DUPLICATE KEY UPDATE ⇒ 重跑不产生重复行）
-INSERT INTO `pickup_point` (`name`, `address`, `open_time`, `campus`, `sort`, `enabled`) VALUES
-  ('三教快递柜',       '第三教学楼东侧一层',  '24 小时',     '',         50, 1),
-  ('中心馆驿站',       '中心图书馆北门旁',    '07:30-21:30', '',         40, 1),
-  ('行政楼快递站',     '行政楼 108 旁',       '08:30-18:00', '',         30, 1),
-  ('学生活动中心驿站', '学生活动中心西侧',    '08:00-20:00', '',         20, 1),
-  ('南区菜鸟驿站',     '南区生活区 3 号楼下', '07:00-22:00', '前卫南区', 10, 1);
+-- 幂等种子：单语句 + WHERE NOT EXISTS —— 跑几遍都只插一次（原写法每跑一次多 5 条）。
+INSERT INTO `pickup_point` (`name`, `address`, `open_time`, `campus`, `sort`, `enabled`)
+SELECT * FROM (
+  SELECT '三教快递柜'       AS n, '第三教学楼东侧一层'  AS a, '24 小时'     AS o, ''         AS c, 50 AS s, 1 AS e
+  UNION ALL SELECT '中心馆驿站',       '中心图书馆北门旁',    '07:30-21:30', '',         40, 1
+  UNION ALL SELECT '行政楼快递站',     '行政楼 108 旁',       '08:30-18:00', '',         30, 1
+  UNION ALL SELECT '学生活动中心驿站', '学生活动中心西侧',    '08:00-20:00', '',         20, 1
+  UNION ALL SELECT '南区菜鸟驿站',     '南区生活区 3 号楼下', '07:00-22:00', '前卫南区', 10, 1
+) x WHERE NOT EXISTS (SELECT 1 FROM `pickup_point`);
 
 -- ============================================== PART B · takeaway_order 改造
 -- ---------------------------------------------- STEP 1/4 先加**可空** biz_type
