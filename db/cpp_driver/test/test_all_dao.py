@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """校捷通 C++ 数据访问层 · 全部 DAO 集成测试。
 
-覆盖：Library / Forum / Secondhand / Job / Life。
+覆盖：User / Library / Forum / Secondhand / Job / Life。
 写操作均在事务内执行并回滚，避免污染种子数据。
 
 用法：
@@ -36,6 +36,7 @@ forum = jt_db.ForumDAO()
 sh = jt_db.SecondhandDAO()
 job = jt_db.JobDAO()
 life = jt_db.LifeDAO()
+user = jt_db.UserDAO()
 
 
 def main() -> None:
@@ -140,6 +141,36 @@ def main() -> None:
         assert oid > 0
         tx.rollback()
     ok += 1; print("[15] 通知已读/外卖下单 通过 (事务回滚)")
+
+    # ============ User · 搜索历史（C23）============
+    urows = user.page(1, 1)
+    assert urows, "user 表无数据，无法验证搜索历史"
+    uid = int(urows[0]["id"])
+
+    with jt_db.begin() as tx:
+        hid = user.add_search_history(uid, "测试-C23-高数")
+        assert hid > 0, "add_search_history 未返回行 id"
+        # 去重：带空格的同词再写一次 ⇒ 不新增行、且返回同一 id
+        assert int(user.add_search_history(uid, "  测试-C23-高数  ")) == int(hid), \
+            "trim 后应命中同一行（去重失效）"
+        hist = user.list_search_history(uid, 20)
+        assert any(int(r["id"]) == int(hid) for r in hist), hist
+        assert [str(r["created_at"]) for r in hist] == \
+            sorted([str(r["created_at"]) for r in hist], reverse=True), "未按 created_at 倒序"
+        # 超长关键词：UTF-8 字符截断而非报错（列宽 VARCHAR(128)）
+        assert int(user.add_search_history(uid, "测试-C23-" + "长" * 300)) > 0
+        # 空 / 纯空白拒绝落库
+        assert int(user.add_search_history(uid, "   ")) == -1
+        # 单删：拿别人的 user_id 删不掉（防越权）
+        assert user.delete_search_history(uid + 99999, int(hid)) is False
+        assert user.delete_search_history(uid, int(hid)) is True
+        # 清空返回删除行数
+        assert int(user.clear_search_history(uid)) >= 1
+        tx.rollback()
+    left = jt_db.query(
+        "SELECT COUNT(*) AS c FROM user_search_history WHERE keyword LIKE '测试-C23-%'")
+    assert int(left[0]["c"]) == 0, left
+    ok += 1; print("[16] 搜索历史 增(去重)/查(倒序)/单删(防越权)/清空 通过 (事务回滚)")
 
     print(f"\n【成功】全部 DAO 测试通过！共 {ok} 组断言")
 

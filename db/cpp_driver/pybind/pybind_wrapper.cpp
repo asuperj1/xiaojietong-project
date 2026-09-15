@@ -238,6 +238,18 @@ PYBIND11_MODULE(jt_db, m) {
         .def("update_role", &UserDAO::update_role, py::arg("id"), py::arg("role"),
              "更新角色")
         .def("remove", &UserDAO::remove, py::arg("id"), "删除用户")
+        .def("add_search_history", &UserDAO::add_search_history,
+             py::arg("user_id"), py::arg("keyword"),
+             "C23 写入搜索历史并去重（同人同词只留一行，重复搜索顶到最新）；"
+             "keyword 先 trim 再按 UTF-8 字符截到 128，空则返回 -1 不落库")
+        .def("list_search_history", &UserDAO::list_search_history,
+             py::arg("user_id"), py::arg("limit") = 20,
+             "C23 按 (user_id, created_at DESC) 取最近 N 条搜索历史（走 idx_user_created）")
+        .def("delete_search_history", &UserDAO::delete_search_history,
+             py::arg("user_id"), py::arg("history_id"),
+             "C23 删除单条搜索历史（WHERE 带 user_id，防越权）；返回是否删除成功")
+        .def("clear_search_history", &UserDAO::clear_search_history,
+             py::arg("user_id"), "C23 清空该用户全部搜索历史；返回删除行数")
         .def("count", &UserDAO::count, "用户总数");
 
     // ---- 图书馆 ----
