@@ -251,6 +251,15 @@ PYBIND11_MODULE(jt_db, m) {
              "C23 删除单条搜索历史（WHERE 带 user_id，防越权）；返回是否删除成功")
         .def("clear_search_history", &UserDAO::clear_search_history,
              py::arg("user_id"), "C23 清空该用户全部搜索历史；返回删除行数")
+        .def("update_student_no", &UserDAO::update_student_no, py::arg("id"),
+             py::arg("student_no"),
+             "C22 绑定/修改学号（同时刷新 student_no_updated_at）；学号重复抛异常")
+        .def("student_no_change_remaining_days",
+             &UserDAO::student_no_change_remaining_days, py::arg("id"),
+             py::arg("interval_days"),
+             "C22 距下次可改学号剩余天数：0 可改 / >0 还需等 N 天 / -1 用户不存在")
+        .def("bump_token_version", &UserDAO::bump_token_version, py::arg("id"),
+             "C22 token 版本号 +1（登出后旧 token 立即失效）；返回新版本号，-1 用户不存在")
         .def("count", &UserDAO::count, "用户总数");
 
     // ---- 图书馆 ----
