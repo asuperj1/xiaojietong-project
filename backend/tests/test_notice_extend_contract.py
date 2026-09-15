@@ -93,31 +93,25 @@ def test_notice_columns_alias_prefix_applies_to_extended(monkeypatch):
     assert "n.id" in cols and "n.publish_time" in cols
 
 
-def test_attach_extended_fields_is_noop_before_ddl(monkeypatch):
-    """未导入 DDL ⇒ **一条补查 SQL 都不能发**，且原样返回（旧行为）。"""
-    monkeypatch.setattr(notice, "notice_extended_columns", lambda *a, **k: set())
+def test_life_notices_extended_keys_follow_ddl_state(client, hdr_a):
+    """集成：`/life/notices` 的扩展字段必须**跟着 DDL 状态走**（B20 ②：DAO 直出）。
 
-    def _boom(*_a, **_k):
-        raise AssertionError("未导入 DDL 时不应发起补查 SQL")
-
-    monkeypatch.setattr(notice.cpp_bridge, "query", _boom)
-    rows = [{"id": "40", "title": "t"}]
-    assert notice.attach_extended_fields(rows) == rows
-
-
-def test_life_notices_has_no_extended_keys_before_ddl(client, hdr_a):
-    """集成：当前库未导入 DDL ⇒ `/life/notices` 不得出现这 3 个字段。
-
-    **反向对照**：同时断言旧字段在 —— 否则「没有新字段」可能只是因为返回了空对象。
+    - 未导入 DDL（``notice_extended_columns()`` 为空）⇒ 这 3 个字段不得出现（向后兼容）；
+    - 已导入 ⇒ 必须出现（缺字段说明 DAO SELECT 没同步或没重编译）；
+    **反向对照**：两种情况都断言旧字段在，否则「有没有新字段」可能只是因为返回了空对象。
     """
     resp = client.get("/api/v1/life/notices?page=1&size=5", headers=hdr_a)
     assert resp.status_code == 200, resp.text
     items = resp.json()["data"]["items"]
     if not items:
-        pytest.skip("campus_notice 当前无可见行，无法做向后兼容集成断言")
+        pytest.skip("campus_notice 当前无可见行，无法做集成断言")
+    ddl_applied = bool(notice.notice_extended_columns())
     for it in items:
         for name in notice._EXTENDED_NAMES:
-            assert name not in it, f"未导入 DDL 却返回了 {name} —— 向后兼容被破坏"
+            if ddl_applied:
+                assert name in it, f"已导入 DDL 却缺字段 {name}（DAO SELECT 未同步 / 未重编译）"
+            else:
+                assert name not in it, f"未导入 DDL 却返回了 {name} —— 向后兼容被破坏"
         for base in _BASE_KEYS:
             assert base in it, f"旧字段 {base} 丢失（反向对照失败：不能是返回空对象）"
 
@@ -135,40 +129,30 @@ def test_notice_columns_includes_extended_when_ddl_applied(monkeypatch):
     assert "n.id" in cols                     # 旧字段仍必须在
 
 
-def test_attach_extended_fields_merges_when_ddl_applied(monkeypatch):
-    """列存在时按 id 合并进通知行；**旧字段必须保留**。"""
-    monkeypatch.setattr(
-        notice, "notice_extended_columns", lambda *a, **k: set(notice._EXTENDED_NAMES)
+def test_life_dao_select_declares_extended_columns():
+    """B20 ②：`/life/notices` 的字段由 **C++ DAO 直出** ⇒ DAO 源码必须 SELECT 这 3 列。
+
+    纯文本断言（不依赖已编译产物），挡住两种回退：DAO 漏列、以及再往 Python 侧加兜底补查。
+    """
+    import re
+    from pathlib import Path
+
+    dao = (
+        Path(__file__).resolve().parents[2]
+        / "db" / "cpp_driver" / "src" / "dao" / "life_dao.cpp"
     )
-    fake = [
-        {
-            "id": "40",
-            "deadline": "2026-09-20 18:00:00",
-            "materials": "报名表\n成绩单",
-            "importance": "4",
-        }
-    ]
-    monkeypatch.setattr(notice.cpp_bridge, "query", lambda sql, params=None: fake)
-    rows = [{"id": "40", "title": "t", "content": "c"}]
-    out = notice.attach_extended_fields(rows)
-    assert out[0]["deadline"] == "2026-09-20 18:00:00"
-    assert out[0]["materials"] == "报名表\n成绩单"
-    assert out[0]["importance"] == "4"
-    assert out[0]["title"] == "t" and out[0]["content"] == "c"
+    if not dao.is_file():
+        pytest.skip(f"找不到 DAO 源码：{dao}")
+    src = dao.read_text(encoding="utf-8", errors="ignore")
+    match = re.search(r"page_notices\b.*?SELECT(.*?)FROM\s+campus_notice", src, re.DOTALL)
+    assert match, "life_dao.cpp 中未找到 page_notices 的 SELECT"
+    for name in notice._EXTENDED_NAMES:
+        assert name in match.group(1), f"LifeDAO::page_notices 的 SELECT 缺少 {name}（B20 ②）"
 
 
-def test_attach_extended_fields_fills_none_for_rows_missing_in_extra(monkeypatch):
-    """补查没覆盖到的行：3 个字段填 `None`（**不能**缺 key，否则前端字段不一致）。"""
-    monkeypatch.setattr(
-        notice, "notice_extended_columns", lambda *a, **k: set(notice._EXTENDED_NAMES)
+def test_python_side_attach_helper_removed():
+    """B20 ③：Python 侧补查兜底已删除——扩展列统一由 DAO 直出，避免两套字段来源。"""
+    assert not hasattr(notice, "attach_extended_fields"), (
+        "attach_extended_fields 应已删除（B20 ③）：扩展列由 LifeDAO 直出，"
+        "再保留补查会出现两套真值来源，字段一致性无法保证"
     )
-    monkeypatch.setattr(
-        notice.cpp_bridge,
-        "query",
-        lambda sql, params=None: [{"id": "40", "deadline": None, "materials": None, "importance": None}],
-    )
-    rows = [{"id": "40", "title": "t"}, {"id": "41", "title": "t2"}]
-    out = notice.attach_extended_fields(rows)
-    for row in out:
-        for name in notice._EXTENDED_NAMES:
-            assert name in row, f"{name} 缺失 —— 同一页内字段应一致存在"
