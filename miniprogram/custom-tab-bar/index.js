@@ -14,20 +14,22 @@
 //   - **不做转写**：POST /voice/transcribe（B28）未就绪，弹窗内只做「录音自检」，不上传。
 //   - 真机布局 / 震动 / 弹窗 / 隐藏效果 = MANUAL CHECK REQUIRED。
 
-Component({  data: {
+const { TAB_LIST } = require('../utils/tab-order')
+
+// 录音自检时长：弹窗文案与 start() 共用同一个值，
+// 避免"文案说 2.5 秒、实际录 3 秒"这种只有真机才发现的漂移。
+const RECORDER_CHECK_MS = 2500
+
+Component({
+  data: {
     selected: 0, // 当前选中项，由各 Tab 页 onShow 调 setSelected() 写入
     hidden: false, // 全屏态隐藏（POC 由 AI 页顶部按钮触发，见 utils/tabbar.js）
     glassFallback: false, // F10 能力探测结果：不支持毛玻璃时走实心降级
-    // 5 项：必须与 app.json 的 tabBar.list 严格一致（由 tools/verify_f12_tabbar_poc.js 断言）
-    // ⚠️ 顺序按方案 §1.4「AI 助手置于正中」：AI 必须在 5 项的第 3 位（index 2），
+    // 5 项与顺序来自 utils/tab-order.js（JS 侧唯一事实来源），
+    // 仍需与 app.json 的 tabBar.list 严格一致（由 tools/verify_f12_tabbar_poc.js 断言）。
+    // ⚠️ 顺序按方案 §1.4「AI 助手置于正中」：AI 在 5 项的第 3 位（index 2），
     //    否则「中部凸起圆形」会偏左（这也是 F12 相对现状的一处**有意的顺序调整**）。
-    list: [
-      { key: 'index', pagePath: '/pages/index/index', text: '首页' },
-      { key: 'service', pagePath: '/pages/service/service', text: '服务' },
-      { key: 'chat', pagePath: '/pages/chat/chat', text: 'AI助手', raised: true },
-      { key: 'forum', pagePath: '/pages/forum/forum', text: '论坛' },
-      { key: 'user', pagePath: '/pages/user/user', text: '我的' },
-    ],
+    list: TAB_LIST,
   },
 
   lifetimes: {
@@ -73,13 +75,20 @@ Component({  data: {
       if (!path) return
       wx.switchTab({
         url: path,
+        // 失败只 console.error 的话，用户看到的就是"点了没反应"（底栏是这个页面上唯一的导航出口）。
+        // 与 pages/map 等页面的既有做法一致：失败要给可见反馈。
         fail: (err) => {
           console.error('[tabbar-poc] switchTab 失败：', path, err)
+          wx.showToast({ title: '切换失败，请重试', icon: 'none' })
         },
       })
     },
 
-    /** 长按：仅 AI 项唤起语音（POC 验证触发链路） */
+    /**
+     * 长按：仅 AI 项唤起语音（POC 验证触发链路）。
+     * `data-raised="{{item.raised}}"` 在 dataset 里可能是布尔 true、也可能是字符串 'true'
+     * （模板插值经 dataset 往返后会字符串化），故两种都认。
+     */
     onItemLongPress(e) {
       const { raised } = e.currentTarget.dataset
       if (raised !== true && raised !== 'true') return
@@ -100,7 +109,8 @@ Component({  data: {
         content:
           '长按触发链路已生效：震动 → 语音入口。\n' +
           '转写需 POST /voice/transcribe（B28，未就绪）。\n' +
-          '可点「录音自检」验证本机录音能力（2.5 秒后自动停止，不上传）。',
+          '可点「录音自检」验证本机录音能力（' +
+          `${RECORDER_CHECK_MS / 1000} 秒后自动停止，不上传）。`,
         confirmText: '录音自检',
         cancelText: '关闭',
         success: (res) => {
@@ -119,13 +129,22 @@ Component({  data: {
         return
       }
       this._recorderPending = true
-      this._recorder.start({
-        duration: 2500, // 上限 2.5s，自动 stop → onStop
-        format: 'mp3',
-        sampleRate: 16000,
-        numberOfChannels: 1,
-        encodeBitRate: 48000,
-      })
+      // start() 在部分环境会**同步抛错**（vibrateShort 已按同样理由兜底）。
+      // 不兜底的话 _recorderPending 会永久停在 true，之后真正的回调会被
+      // _finishRecorderCheck 当成"非本次自检的迟到回调"丢掉 —— 表现为静默无反应。
+      try {
+        this._recorder.start({
+          duration: RECORDER_CHECK_MS, // 上限到点自动 stop → onStop
+          format: 'mp3',
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          encodeBitRate: 48000,
+        })
+      } catch (err) {
+        this._finishRecorderCheck(
+          `录音启动失败：${(err && err.errMsg) || err}\n常见原因：未授权 scope.record 或当前环境不支持。`
+        )
+      }
     },
 
     _finishRecorderCheck(message) {

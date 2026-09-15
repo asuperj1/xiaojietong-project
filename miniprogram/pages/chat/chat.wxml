@@ -1,5 +1,5 @@
 <!-- AI 对话页（F4）：顶部操作条 + 消息列表 + 底部输入 -->
-<view class="chat-page">
+<view class="chat-page {{tabBarHidden ? 'chat-page--fullscreen' : ''}}">
   <!-- 顶部操作条：【+ 新会话】/【历史】 -->
   <view class="top-bar">
     <button class="top-btn" bindtap="onNewConversation">+ 新会话</button>

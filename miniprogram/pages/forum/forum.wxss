@@ -63,7 +63,9 @@
 .fab {
   position: fixed;
   right: 32rpx;
-  bottom: 80rpx;
+  /* F12：抬到自定义 TabBar 之上，否则会被 110rpx 高的底栏盖住（原生 tabBar 时代 80rpx 够用）。
+     126rpx = 底栏 110rpx + 16rpx 间距；改动需同步 custom-tab-bar/index.wxss 的 .tabbar 高度。 */
+  bottom: calc(126rpx + env(safe-area-inset-bottom));
   background: #4A90D9;
   color: #ffffff;
   padding: 20rpx 32rpx;
@@ -80,4 +82,10 @@
 .retry {
   margin: 24rpx auto 0;
   width: 240rpx;
+}
+
+/* F12：底部留白 = 抬高后的悬浮按钮所需空间(≈202rpx) + 底栏呼吸位，避免最后一条帖子被按钮/底栏压住。
+   （覆盖文件开头 .forum-page 的 140rpx：那是原生 tabBar 时代的取值。） */
+.forum-page {
+  padding-bottom: calc(250rpx + env(safe-area-inset-bottom));
 }

@@ -5,11 +5,8 @@
 // 非 Tab 页、或自定义 TabBar 尚未挂载时会返回 undefined，必须容错。
 //
 // 归属：F12（二阶段任务单 §3.3）。POC 阶段只做「选中态 + 显隐」两件事。
-
-// Tab 顺序 = 唯一事实来源，必须与 app.json 的 tabBar.list 严格一致
-// （由 tools/verify_f12_tabbar_poc.js 断言）
-// 顺序依据方案 §1.4：AI 助手置于正中 → 5 项的第 3 位
-const TAB_ORDER = ['index', 'service', 'chat', 'forum', 'user']
+// Tab 清单与顺序来自 utils/tab-order.js（JS 侧唯一事实来源）。
+const { TAB_INDEX } = require('./tab-order')
 
 function tabBarOf(page) {
   if (!page || typeof page.getTabBar !== 'function') return null
@@ -26,8 +23,8 @@ function tabBarOf(page) {
  * 页面尚未接入自定义 TabBar 时静默返回 false（不阻断页面逻辑）。
  */
 function syncTabBar(page, key) {
-  const selected = TAB_ORDER.indexOf(key)
-  if (selected < 0) {
+  const selected = TAB_INDEX[key]
+  if (selected === undefined) {
     console.warn('[tabbar] 未知的 Tab key：', key)
     return false
   }
@@ -48,4 +45,4 @@ function setTabBarHidden(page, hidden) {
   return true
 }
 
-module.exports = { TAB_ORDER, syncTabBar, setTabBarHidden }
+module.exports = { syncTabBar, setTabBarHidden }

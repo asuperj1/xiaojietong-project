@@ -1,5 +1,8 @@
 <!-- F12 POC：自定义 TabBar —— 5 项 + AI 居中凸起圆形（长按唤起语音） -->
 <view class="tabbar {{hidden ? 'tabbar--hidden' : ''}} {{glassFallback ? 'is-glass-fallback' : ''}}">
+  <!-- 长按绑在**整个 tab 项**上（圆 + 文字），而不是只绑 96rpx 的圆：
+       圆面积小、真机上不好按，而 `data-raised` 守卫已保证只有 AI 项会响应，
+       所以放大热区不改变语义、只改善手感（真机验收点③④需要按得中）。 -->
   <view
     wx:for="{{list}}"
     wx:key="pagePath"
@@ -9,6 +12,9 @@
     bindtap="onItemTap"
     bindlongpress="onItemLongPress"
   >
+    <!-- 图标槽位（48rpx，方案 §1.5）：POC 先占位、暂不放图标，
+         以免 F11 图标集接入后每项高度变化、导致今天的真机布局结论失效 -->
+    <view wx:if="{{!item.raised}}" class="tabbar-icon-slot"></view>
     <!-- AI 项：居中凸起圆形按钮（POC 用文字「AI」标识，图标待 F11 图标集合入后接入） -->
     <view wx:if="{{item.raised}}" class="tabbar-fab xj-glass-strong">AI</view>
     <view class="tabbar-label">{{item.text}}</view>

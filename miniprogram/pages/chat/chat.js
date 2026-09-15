@@ -28,17 +28,25 @@ Page({
   // 而不是留一个永远不触发的机制。F14 接入侧边栏后应删除本按钮，改由侧边栏/全屏会话状态驱动。
   onToggleFullscreenPoc() {
     const next = !this.data.tabBarHidden
-    this.setData({ tabBarHidden: next })
+    // 先尝试，成功才改状态 —— 否则按钮会显示「显示底栏」但底栏其实没被隐藏（假反馈）
     if (!setTabBarHidden(this, next)) {
-      // 非自定义 TabBar（如未开启 custom）时如实反馈，不假装生效
       wx.showToast({ title: '自定义 TabBar 未生效', icon: 'none' })
+      return
     }
+    this.setData({ tabBarHidden: next })
   },
 
   onShow() {
     // F12：同步自定义 TabBar 选中项。
     // 必须放在下面所有提前 return 之前，否则「有历史回传 / 有待发送关键词」时会漏掉同步。
     syncTabBar(this, 'chat')
+    // F12 POC：每次进入本页都从「显示底栏」开始。
+    // 隐藏状态是**按页面实例**保存的，若不在 onShow 复位，一旦 F14 删掉 POC 按钮，
+    // 隐藏过的用户会永久停在本页（没有底栏可切走）—— 提前消除这个死锁。
+    if (this.data.tabBarHidden) {
+      this.setData({ tabBarHidden: false })
+      setTabBarHidden(this, false)
+    }
 
     const app = this._app
     if (!app || !app.globalData) return
