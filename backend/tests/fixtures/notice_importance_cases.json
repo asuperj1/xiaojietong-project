@@ -1,0 +1,28 @@
+{
+  "name": "notice_importance_c28",
+  "description": "C28 通知重要度打分评测集。expected 为**分数区间**（打分是启发式，锁死精确值会过拟合）；base 为基准时间，用于 deadline 驱动的紧迫度。",
+  "base": "2026-09-15T10:00:00",
+  "task": "C28",
+  "cases": [
+    { "id": "I01", "title": "国家奖学金申请材料提交提醒", "content": "请符合条件的同学于 9 月 30 日前将申请材料提交至所在学院学工办，逾期不再受理。", "expected_band": [4, 5], "group": "critical+consequence" },
+    { "id": "I02", "title": "关于 2025-2026 学年第一学期期末考试安排的通知", "content": "本次期末考试定于 2026 年 1 月 5 日开考，具体考场安排于考前一周公布，请留意教务系统通知。", "expected_band": [3, 4], "group": "critical" },
+    { "id": "I03", "title": "宿舍安全用电专项检查通知", "content": "本周三起开展宿舍安全用电检查，请勿使用大功率电器，违规电器将统一收缴。", "expected_band": [4, 5], "group": "critical+consequence" },
+    { "id": "I04", "title": "校园一卡通系统升级公告", "content": "一卡通系统将于 10 月 15 日 22:00 至次日 6:00 停机升级，期间无法充值消费。", "expected_band": [3, 4], "group": "critical" },
+    { "id": "I05", "title": "本周五图书馆闭馆时间调整", "content": "因设备检修，本周五图书馆将于 17:00 提前闭馆，请合理安排自习时间。", "expected_band": [2, 3], "group": "major" },
+    { "id": "I06", "title": "2026 届毕业生秋季双选会通知", "content": "双选会定于 10 月 20 日在中心校区体育馆举行，请携带简历参加，着装整洁。", "expected_band": [3, 4], "group": "critical" },
+    { "id": "I07", "title": "图书馆新书推荐与借阅规则更新", "content": "本月上新图书 320 册，借阅上限由 5 册调整为 10 册，借期 30 天。", "expected_band": [1, 3], "group": "minor" },
+    { "id": "I08", "title": "校园二手交易平台使用规范", "content": "发布闲置物品请勿包含联系方式与站外链接，违规内容将被下架并计入信用记录。", "expected_band": [2, 4], "group": "consequence" },
+    { "id": "I09", "title": "校医院开通网上挂号", "content": "校医院支持微信预约挂号，具体流程见附件。", "expected_band": [1, 2], "group": "minor" },
+    { "id": "I10", "title": "2026年秋季学期选课通知", "content": "本学期选课将于 9 月 1 日开始，请同学们登录教务系统选课。", "expected_band": [3, 4], "group": "critical" },
+    { "id": "I11", "title": "紧急通知：全校停电检修", "content": "因线路检修，明日上午全校范围内停电，请提前做好安排。", "expected_band": [4, 5], "group": "critical+wide+urgent" },
+    { "id": "I12", "title": "关于个别班级调课的通知", "content": "因教师出差，个别班级本周课程调整，详见课表。", "expected_band": [1, 2], "group": "narrow", "note": "影响面窄应扣分" },
+    { "id": "I13", "title": "人工智能前沿讲座预告", "content": "本周五下午在图书馆报告厅举办讲座，欢迎参加。", "expected_band": [1, 3], "group": "minor" },
+    { "id": "I14", "title": "关于补考报名的提醒", "content": "请需要补考的同学尽快登录系统报名。", "expected_band": [3, 5], "group": "critical+reminder" },
+    { "id": "I15", "title": "全国大学英语四六级报名最后期限", "content": "本次报名于本周五截止，逾期作废。", "expected_band": [4, 5], "group": "major+consequence+reminder" },
+    { "id": "I16", "title": "提交材料", "content": "请在系统内提交。", "deadline": "2026-09-15T16:00:00", "expected_band": [3, 5], "group": "deadline_driven", "note": "距截止 6 小时 ⇒ 紧迫度 +2" },
+    { "id": "I17", "title": "提交材料", "content": "请在系统内提交。", "deadline": "2026-09-14T10:00:00", "expected_band": [2, 4], "group": "deadline_expired", "note": "已过期不计紧迫度（不得靠过期时间刷高分）" },
+    { "id": "I18", "title": "关于图书馆开放时间的说明", "content": "图书馆日常开放时间为 8:00-22:00。", "expected_band": [1, 2], "group": "neutral" },
+    { "id": "I19", "title": "关于加强校园防疫工作的通知", "content": "全体师生请注意，进入教学楼需佩戴口罩。", "expected_band": [3, 5], "group": "critical+wide" },
+    { "id": "I20", "title": "期末考试违纪处理规定", "content": "考试作弊者一律取消成绩并给予处分。", "expected_band": [4, 5], "group": "critical+consequence" }
+  ]
+}
