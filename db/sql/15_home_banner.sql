@@ -40,18 +40,10 @@ CREATE TABLE IF NOT EXISTS `home_banner` (
 
 -- ---------------------------------------------------------------- 种子（幂等）
 -- 固定主键 + ON DUPLICATE KEY UPDATE：重跑只更新，不会重复插入。
-INSERT INTO `home_banner` (`id`, `title`, `image`, `link_type`, `link_target`, `sort`, `enabled`)
-VALUES
-    (1, '校园通知新版上线', '/static/images/banner-notice.png', 'page',   '/pages/notice/index', 30, 1),
-    (2, 'AI 助手帮你答疑',  '/static/images/banner-ai.png',     'page',   '/pages/ai/index',     20, 1),
-    (3, '二手交易更放心',   '/static/images/banner-second.png', 'page',   '/pages/second/index', 10, 1)
-ON DUPLICATE KEY UPDATE
-    `title`       = VALUES(`title`),
-    `image`       = VALUES(`image`),
-    `link_type`   = VALUES(`link_type`),
-    `link_target` = VALUES(`link_target`),
-    `sort`        = VALUES(`sort`),
-    `enabled`     = VALUES(`enabled`);
+INSERT INTO `home_banner` (`title`, `image_url`, `link_url`, `sort`, `enabled`) VALUES
+  ('迎新季·校园服务上新',   '/static/banners/welcome.png',     '/pages/service/service',  30, 1),
+  ('AI 助手·一句话办校园事', '/static/banners/ai.png',          '/pages/agent/index',      20, 1),
+  ('二手好物·闲置漂流',     '/static/banners/secondhand.png',  '/pages/secondhand/index', 10, 1);
 
 -- ---------------------------------------------------------------- 自检
 SELECT column_name AS `列`, column_type AS `类型`, is_nullable AS `可空`, column_comment AS `说明`
