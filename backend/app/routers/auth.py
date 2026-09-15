@@ -9,7 +9,7 @@ import logging
 
 import httpx
 import jwt
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -18,6 +18,7 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    token_version_of,
 )
 from app.db import cpp_bridge
 
@@ -97,10 +98,11 @@ async def wechat_login(body: WechatLoginIn):
         is_new = True
 
     uid = int(user["id"])
+    tv = int(user.get("token_version", 0) or 0)   # C22：把当前版本写进 token
     return ok(
         {
-            "token": create_access_token(uid, int(user.get("role", 0))),
-            "refresh_token": create_refresh_token(uid),
+            "token": create_access_token(uid, int(user.get("role", 0)), tv),
+            "refresh_token": create_refresh_token(uid, tv),
             "user": _user_view(user),
             "is_new": is_new,
         }
@@ -120,15 +122,36 @@ def refresh(body: RefreshIn):
     user = cpp_bridge.user_dao().find_by_id(uid)
     if user is None:
         raise err_token()
+    tv = int(user.get("token_version", 0) or 0)
+    # C22：刷新也不能绕过登出 —— 否则拿旧 refresh_token 就能换回新 access_token，
+    # 让「登出使 token 失效」形同虚设。
+    if token_version_of(payload) != tv:
+        raise err_token()
     return ok(
         {
-            "token": create_access_token(uid, int(user.get("role", 0))),
-            "refresh_token": create_refresh_token(uid),
+            "token": create_access_token(uid, int(user.get("role", 0)), tv),
+            "refresh_token": create_refresh_token(uid, tv),
         }
     )
 
 
 @router.post("/logout")
-def logout():
-    # 无状态 JWT：前端丢弃 token 即可
+def logout(authorization: str = Header(default="")):
+    """登出。
+
+    C22 起不再是空操作：把 `user.token_version` +1，使该用户**所有已签发的
+    access / refresh token 立即失效**（deps 与 /auth/refresh 都会比对 tv）。
+
+    设计取舍：**不强制鉴权**（拿不到/无效 token 也返回成功）——
+      · 登出必须是幂等的，客户端丢 token 后再调一次不能报错；
+      · 保持与旧版兼容，不因新增鉴权而打断现有前端调用。
+    """
+    if authorization.startswith("Bearer "):
+        try:
+            payload = decode_token(authorization[7:])
+        except jwt.PyJWTError:
+            return ok()          # token 坏了也算登出成功
+        uid = int(payload.get("uid", 0) or 0)
+        if uid > 0:
+            cpp_bridge.user_dao().bump_token_version(uid)
     return ok()
