@@ -23,6 +23,7 @@
 | **`11_audit.sql`** | **M9 内容安全治理（C7）** | **audit_word（敏感词库，19 词种子）/ audit_log（审核留痕）** |
 | **`12_notice_delivery.sql`** | **M8 扩展（C7）** | **notice_delivery（投递/曝光/得分/已读明细）** |
 | **`13_index_optimize.sql`** | **性能优化（C7）** | 11 个复合索引（见下） |
+| **`14_notice_extend.sql`** | **B19 通知表扩展（二阶段 W1）** | **campus_notice + deadlines/materials/importance（抽取结果存储位，均允许 NULL）+ idx_deadline** |
 | `99_init_data.sql` | 种子数据 | 演示用最小数据集 |
 | `99b_knowledge_faq.sql` | 增量 | 知识库 FAQ 追加 |
 | `99c_agent_tool_schema.sql` | 增量 | agent_tool 工具 schema 修正 |

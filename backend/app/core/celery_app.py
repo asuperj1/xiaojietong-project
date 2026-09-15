@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import settings
 
@@ -42,6 +43,24 @@ celery_app.conf.update(
     task_track_started=True,
     broker_connection_retry_on_startup=True,
 )
+
+# ---------- 定时任务（B18 分层推送调度）----------
+# 每天 XJT_NOTICE_PUSH_HOUR:XJT_NOTICE_PUSH_MINUTE（默认 08:00，Asia/Shanghai）扫描待办，
+# 对待办到期前 7 天 / 2 天生成投递记录（notice_delivery）。
+# ⚠️ beat 与 worker 都需要运行才会真正定时：
+#     celery -A app.core.celery_app:celery_app worker -l info -P solo -B
+#     （生产建议把 beat 拆成独立进程/单实例，避免多副本重复调度——调度本身幂等）
+# 未启用 Celery（eager 模式）时没有 beat，可手动触发：
+#     POST /api/v1/admin/notices/dispatch
+if settings.celery_enabled and settings.notice_push_enabled:
+    celery_app.conf.beat_schedule = {
+        "xjt-notice-push-daily": {
+            "task": "xjt.dispatch_notice_push",
+            "schedule": crontab(hour=settings.notice_push_hour, minute=settings.notice_push_minute),
+            "options": {"expires": 3600},
+        }
+    }
+    celery_app.conf.beat_schedule_filename = "data/celerybeat-schedule"
 
 
 def celery_status() -> dict:
