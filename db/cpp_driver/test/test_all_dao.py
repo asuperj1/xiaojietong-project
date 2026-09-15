@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """校捷通 C++ 数据访问层 · 全部 DAO 集成测试。
 
-覆盖：User / Home / Library / Forum / Secondhand / Job / Life。
+覆盖：User / Home / Library / Forum / Secondhand / Job / Life（含 C25 代收闭环）。
 写操作均在事务内执行并回滚，避免污染种子数据。
 
 用法：
@@ -226,6 +226,79 @@ def main() -> None:
         "SELECT COUNT(*) AS c FROM home_banner WHERE title LIKE '测试-C24-%'")
     assert int(left[0]["c"]) == 0, left
     ok += 1; print("[17] 轮播 列表(启用/有效期/sort DESC)/增改删 通过 (事务回滚)")
+
+    # ============ Life · 代收闭环（C25）============
+    points = life.page_pickup_points()
+    assert len(points) >= 3, f"驿站种子应有 >= 3 条，实际 {len(points)}"
+    p_sorts = [int(p["sort"]) for p in points]
+    assert p_sorts == sorted(p_sorts, reverse=True), f"驿站未按 sort DESC：{p_sorts}"
+    codes = {life.generate_pickup_code() for _ in range(5)}
+    assert all(len(c) == 6 for c in codes), codes
+    assert all(c.isalnum() for c in codes), codes
+
+    with jt_db.begin() as tx:
+        # 先记下历史「代买」存量，结尾要证明它没被动过
+        legacy_before = int(
+            jt_db.query("SELECT COUNT(*) AS c FROM takeaway_order WHERE biz_type = 1")[0]["c"]
+        )
+
+        # 驿站：增 → 排序 → 软删（软删后任何列表都查不到）
+        pid = life.create_pickup_point("测试-C25-驿站", "某处", "08:00-20:00", "", 999, 1)
+        assert pid > 0
+        assert int(life.page_pickup_points(False, 200)[0]["id"]) == int(pid), "sort 最大应排第一"
+        assert life.find_pickup_point(pid) is not None
+        assert life.remove_pickup_point(pid) is True
+        assert life.find_pickup_point(pid) is None, "软删后应查不到"
+        assert all(int(p["id"]) != int(pid) for p in life.page_pickup_points(True, 200)), \
+            "软删的驿站不该出现在任何列表（含 include_disabled）"
+
+        # 代收下单：biz_type=2 / delivery_fee=0 / 取件码 6 位且可回查
+        seed_point = int(points[0]["id"])
+        oid = life.create_pickup_order(1, 1, '[{"id":1,"num":1}]', 12.50, seed_point)
+        assert oid > 0
+        code = str(jt_db.query(
+            "SELECT pickup_code FROM takeaway_order WHERE id = ?", [oid])[0]["pickup_code"])
+        assert len(code) == 6, f"取件码应为 6 位：{code!r}"
+        order = life.find_order_by_pickup_code(code)
+        assert order is not None, "取件码应能回查到订单"
+        assert int(order["biz_type"]) == 2, f"代收订单 biz_type 应为 2：{order['biz_type']}"
+        assert int(order["pickup_point_id"]) == seed_point
+        row = jt_db.query(
+            "SELECT delivery_fee FROM takeaway_order WHERE id = ?", [oid])[0]
+        assert float(row["delivery_fee"]) == 0.0, "代收不计费 ⇒ delivery_fee 必须为 0"
+
+        # 到件：错误取件码必须失败（不能拿别的码标这单）
+        assert life.mark_order_arrived(oid, "WRONG9") is False, "错误取件码竟然标记成功"
+        assert jt_db.query(
+            "SELECT arrived_at FROM takeaway_order WHERE id = ?", [oid])[0]["arrived_at"] == ""
+        assert life.mark_order_arrived(oid, code) is True
+        arrived1 = jt_db.query(
+            "SELECT arrived_at FROM takeaway_order WHERE id = ?", [oid])[0]["arrived_at"]
+        assert arrived1, "到件时间应已写入"
+        # 幂等：重复到件不得改动已记录的时间
+        assert life.mark_order_arrived(oid, code) is True
+        arrived2 = jt_db.query(
+            "SELECT arrived_at FROM takeaway_order WHERE id = ?", [oid])[0]["arrived_at"]
+        assert arrived2 == arrived1, f"重复到件不应改动时间：{arrived1} -> {arrived2}"
+
+        # 到件通知：幂等
+        assert life.mark_order_notified(oid) is True
+        n1 = jt_db.query(
+            "SELECT notified_at FROM takeaway_order WHERE id = ?", [oid])[0]["notified_at"]
+        assert n1
+        assert life.mark_order_notified(oid) is True
+        n2 = jt_db.query(
+            "SELECT notified_at FROM takeaway_order WHERE id = ?", [oid])[0]["notified_at"]
+        assert n2 == n1, "重复通知标记不应改动时间"
+
+        # 历史代买订单：存量与标签不变
+        legacy_after = int(
+            jt_db.query("SELECT COUNT(*) AS c FROM takeaway_order WHERE biz_type = 1")[0]["c"]
+        )
+        assert legacy_after == legacy_before, \
+            f"历史代买订单被动过：{legacy_before} -> {legacy_after}"
+        tx.rollback()
+    ok += 1; print("[18] 代收闭环 驿站/取件码/到件(幂等+防错码)/历史代买不受影响 通过 (事务回滚)")
 
     print(f"\n【成功】全部 DAO 测试通过！共 {ok} 组断言")
 

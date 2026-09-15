@@ -339,7 +339,30 @@ PYBIND11_MODULE(jt_db, m) {
         .def("menu_items", &LifeDAO::menu_items, py::arg("merchant_id"), "商家菜单")
         .def("create_order", &LifeDAO::create_order, py::arg("user_id"),
              py::arg("merchant_id"), py::arg("items_json"), py::arg("amount"),
-             "下单，返回订单 id（失败 -1）");
+             "下单，返回订单 id（失败 -1）")
+        .def("page_pickup_points", &LifeDAO::page_pickup_points,
+             py::arg("include_disabled") = false, py::arg("limit") = 50,
+             "C25 驿站列表：默认只返回启用且未软删，按 sort DESC, id ASC")
+        .def("find_pickup_point", &LifeDAO::find_pickup_point, py::arg("id"),
+             "C25 取单条驿站（不存在 / 已软删返回 None）")
+        .def("create_pickup_point", &LifeDAO::create_pickup_point, py::arg("name"),
+             py::arg("address"), py::arg("business_hours"), py::arg("contact_phone"),
+             py::arg("sort") = 0, py::arg("status") = 1, "C25 新增驿站，返回新行 id")
+        .def("remove_pickup_point", &LifeDAO::remove_pickup_point, py::arg("id"),
+             "C25 **软删**驿站（历史订单仍能查到驿站）")
+        .def("generate_pickup_code", &LifeDAO::generate_pickup_code, py::arg("length") = 6,
+             "C25 生成未被占用的取件码（随机 + 唯一性校验；撞码 8 次返回空串）")
+        .def("create_pickup_order", &LifeDAO::create_pickup_order, py::arg("user_id"),
+             py::arg("merchant_id"), py::arg("items_json"), py::arg("amount"),
+             py::arg("pickup_point_id"),
+             "C25 代收下单：biz_type=2、delivery_fee=0、自动生成取件码")
+        .def("find_order_by_pickup_code", &LifeDAO::find_order_by_pickup_code,
+             py::arg("pickup_code"), "C25 取件码回查订单")
+        .def("mark_order_arrived", &LifeDAO::mark_order_arrived, py::arg("order_id"),
+             py::arg("pickup_code"),
+             "C25 驿站到件（订单与取件码须同时匹配；幂等，只写首次时间）")
+        .def("mark_order_notified", &LifeDAO::mark_order_notified, py::arg("order_id"),
+             "C25 到件通知已发（幂等：非空即不再改）");
 
     // ---- 通用收藏（C10 收敛：原由 favorite.py 拼原生 SQL）----
     py::class_<FavoriteDAO>(m, "FavoriteDAO")
