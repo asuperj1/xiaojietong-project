@@ -79,8 +79,22 @@ for (const file of svgFiles) {
   const missing = SVG_CONTRACT.filter(([, re]) => !re.test(raw)).map(([label]) => label)
   check(`${file} 符合线性样式契约`, missing.length === 0, missing.length ? `缺 ${missing.join(' / ')}` : '')
 
-  check(`${file} 无硬编码颜色`, !COLOR_RE.test(raw), (raw.match(COLOR_RE) || []).join(','))
+  // 颜色检查前先剥掉 path 的 d 属性：路径数据里可能偶然出现颜色单词，避免误报
+  const withoutPathData = raw.replace(/\sd="[^"]*"/g, '')
+  check(
+    `${file} 无硬编码颜色`,
+    !COLOR_RE.test(withoutPathData),
+    (withoutPathData.match(COLOR_RE) || []).join(',')
+  )
   check(`${file} 无外链 / CDN 引用`, !/href=|<image|url\(|@import|<script/i.test(raw))
+
+  // 官方 image 组件对 SVG 的两条限制（见 static/icons/README.md §1）
+  check(`${file} 无 <style> 元素（官方 SVG 限制）`, !/<style/i.test(raw))
+  check(`${file} 无百分比单位（官方 SVG 限制）`, !/%/.test(raw))
+
+  // 路径数据非空且以 moveto 起笔（防截断 / 空图标）
+  const d = ((raw.match(/\sd="([^"]*)"/) || [])[1] || '').trim()
+  check(`${file} 路径数据非空且以 moveto 起笔`, /^[Mm]/.test(d) && d.length > 8, `d="${d.slice(0, 24)}"`)
 }
 
 check('user-solid.svg 已补齐（F11 明确要求）', svgFiles.includes('user-solid.svg'))
@@ -131,6 +145,17 @@ const legacyPngs = [
 ]
 const missingPng = legacyPngs.filter((p) => !fs.existsSync(path.join(ICON_DIR, p)))
 check('原有 10 个 PNG 资产未被删除', missingPng.length === 0, missingPng.join(', '))
+
+// 官方 image 组件注意：svg 且 mode=scaleToFill 时 WebView 会居中 → 宫格统一用 aspectFit
+for (const rel of ['pages/index/index.wxml', 'pages/service/service.wxml']) {
+  const raw = fs.readFileSync(path.join(MP, rel), 'utf8')
+  const tag = (raw.match(/<image[^>]*class="grid-icon"[^>]*>/) || [])[0]
+  check(
+    `${rel} 宫格 <image> 使用 mode="aspectFit"`,
+    !!tag && /mode="aspectFit"/.test(tag),
+    tag || '未找到 <image class="grid-icon">'
+  )
+}
 
 // ------------------------------------------------- D. 业务行为未变（回归守卫）
 
