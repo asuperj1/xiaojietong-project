@@ -25,6 +25,7 @@
 #include "jt_db/dao/job_dao.h"
 #include "jt_db/dao/life_dao.h"
 #include "jt_db/dao/favorite_dao.h"
+#include "jt_db/dao/home_dao.h"
 #include "jt_db/transaction.h"
 
 namespace py = pybind11;
@@ -359,4 +360,25 @@ PYBIND11_MODULE(jt_db, m) {
              py::arg("limit"), py::arg("offset"), "我的收藏·物品（分页）")
         .def("count_items", &FavoriteDAO::count_items, py::arg("user_id"),
              "我的收藏·物品总数");
+
+    // ---- 首页运营（C24：home_banner 轮播位）----
+    py::class_<HomeDAO>(m, "HomeDAO")
+        .def(py::init<>())
+        .def("list_banners", &HomeDAO::list_banners, py::arg("limit") = 20,
+             "C24 前台轮播列表：只返回「启用 + 在有效期内」，按 sort DESC, id DESC")
+        .def("list_all_banners", &HomeDAO::list_all_banners, py::arg("limit") = 100,
+             "C24 管理端轮播列表：不做任何业务过滤（含停用/未生效/已过期）")
+        .def("find_banner", &HomeDAO::find_banner, py::arg("id"),
+             "C24 取单条轮播（不存在返回 None）")
+        .def("create_banner", &HomeDAO::create_banner, py::arg("title"), py::arg("image"),
+             py::arg("link_type"), py::arg("link_target"), py::arg("sort") = 0,
+             py::arg("start_at") = "", py::arg("end_at") = "", py::arg("enabled") = 1,
+             "C24 新增轮播；start_at/end_at 传空串表示 NULL（不限制）；返回新行 id")
+        .def("update_banner", &HomeDAO::update_banner, py::arg("id"), py::arg("title"),
+             py::arg("image"), py::arg("link_type"), py::arg("link_target"),
+             py::arg("sort"), py::arg("start_at"), py::arg("end_at"), py::arg("enabled"),
+             "C24 整行更新轮播（先 find_banner 拿现值再改，避免把未传字段清空）")
+        .def("set_banner_enabled", &HomeDAO::set_banner_enabled, py::arg("id"),
+             py::arg("enabled"), "C24 上/下架轮播（避免调用方做读-改-写）")
+        .def("remove_banner", &HomeDAO::remove_banner, py::arg("id"), "C24 删除轮播");
 }

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """校捷通 C++ 数据访问层 · 全部 DAO 集成测试。
 
-覆盖：User / Library / Forum / Secondhand / Job / Life。
+覆盖：User / Home / Library / Forum / Secondhand / Job / Life。
 写操作均在事务内执行并回滚，避免污染种子数据。
 
 用法：
@@ -37,6 +37,7 @@ sh = jt_db.SecondhandDAO()
 job = jt_db.JobDAO()
 life = jt_db.LifeDAO()
 user = jt_db.UserDAO()
+home = jt_db.HomeDAO()
 
 
 def main() -> None:
@@ -171,6 +172,60 @@ def main() -> None:
         "SELECT COUNT(*) AS c FROM user_search_history WHERE keyword LIKE '测试-C23-%'")
     assert int(left[0]["c"]) == 0, left
     ok += 1; print("[16] 搜索历史 增(去重)/查(倒序)/单删(防越权)/清空 通过 (事务回滚)")
+
+    # ============ Home · 轮播位（C24）============
+    banners = home.list_banners()
+    assert len(banners) >= 3, f"种子轮播应有 >= 3 条，实际 {len(banners)}"
+    sorts = [int(b["sort"]) for b in banners]
+    assert sorts == sorted(sorts, reverse=True), f"未按 sort DESC 排序：{sorts}"
+    assert all(int(b["enabled"]) == 1 for b in banners), "默认列表不该含停用轮播"
+
+    with jt_db.begin() as tx:
+        # 停用：不出现在前台列表，但管理端列表能看到（反向对照）
+        off = home.create_banner("测试-C24-停用", "", "none", "", 5, "", "", 0)
+        assert off > 0
+        visible = {int(b["id"]) for b in home.list_banners(200)}
+        all_ids = {int(b["id"]) for b in home.list_all_banners(200)}
+        assert int(off) not in visible, "停用轮播出现在了前台列表"
+        assert int(off) in all_ids, "管理端列表应能看到停用轮播（反向对照失败）"
+
+        # 已过期 / 未生效：均不得出现在前台列表，但管理端必须能看到
+        # （否则已过期的轮播在后台不可见、无法编辑或重新启用）
+        expired = home.create_banner("测试-C24-过期", "", "none", "", 5, "",
+                                     "2000-01-01 00:00:00", 1)
+        not_yet = home.create_banner("测试-C24-未生效", "", "none", "", 5,
+                                     "2099-01-01 00:00:00", "", 1)
+        visible = {int(b["id"]) for b in home.list_banners(200)}
+        all_ids = {int(b["id"]) for b in home.list_all_banners(200)}
+        assert int(expired) not in visible, "已过期轮播出现在了前台列表"
+        assert int(not_yet) not in visible, "未生效轮播出现在了前台列表"
+        assert int(expired) in all_ids, "管理端应能看到已过期轮播"
+        assert int(not_yet) in all_ids, "管理端应能看到未生效轮播"
+
+        # 有效期内 + sort 最大 ⇒ 应排第一
+        live = home.create_banner("测试-C24-生效", "", "none", "", 999)
+        assert live > 0
+        assert int(home.list_banners(200)[0]["id"]) == int(live), \
+            "有效期内的最大值应排第一"
+        assert home.find_banner(live) is not None
+
+        # 上/下架
+        assert home.set_banner_enabled(live, 0) is True
+        assert int(live) not in {int(b["id"]) for b in home.list_banners(200)}
+        assert home.set_banner_enabled(live, 1) is True
+        assert int(live) in {int(b["id"]) for b in home.list_banners(200)}
+
+        # 改（整行）与删
+        assert home.update_banner(live, "测试-C24-已改", "", "page", "/pages/x", 3, "", "", 1)
+        assert home.find_banner(live)["title"] == "测试-C24-已改"
+        assert home.remove_banner(live) is True
+        assert home.find_banner(live) is None
+        tx.rollback()
+
+    left = jt_db.query(
+        "SELECT COUNT(*) AS c FROM home_banner WHERE title LIKE '测试-C24-%'")
+    assert int(left[0]["c"]) == 0, left
+    ok += 1; print("[17] 轮播 列表(启用/有效期/sort DESC)/增改删 通过 (事务回滚)")
 
     print(f"\n【成功】全部 DAO 测试通过！共 {ok} 组断言")
 
