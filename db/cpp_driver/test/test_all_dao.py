@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """校捷通 C++ 数据访问层 · 全部 DAO 集成测试。
 
-覆盖：Library / Forum / Secondhand / Job / Life。
+覆盖：User / Library / Forum / Secondhand / Job / Life。
 写操作均在事务内执行并回滚，避免污染种子数据。
 
 用法：
@@ -36,6 +36,7 @@ forum = jt_db.ForumDAO()
 sh = jt_db.SecondhandDAO()
 job = jt_db.JobDAO()
 life = jt_db.LifeDAO()
+user = jt_db.UserDAO()
 
 
 def main() -> None:
@@ -134,6 +135,41 @@ def main() -> None:
         assert oid > 0
         tx.rollback()
     ok += 1; print("[15] 通知已读/外卖下单 通过 (事务回滚)")
+
+    # ============ User（C22 新增）============
+    # C22 给 UserDAO 加了两个方法，并且把 token_version / student_no_updated_at
+    # 加进了鉴权查询 —— 这两列拿不到的话，deps 的 token 失效校验与「1 次/7 天」
+    # 限频都会静默失效，所以这里先断言列真的在。
+    urows = user.page(1, 1)
+    if urows:
+        uid = int(urows[0]["id"])
+        row = user.find_by_id(uid)
+        assert row is not None
+        for col in ("token_version", "student_no_updated_at"):
+            assert col in row, f"find_by_id 缺少 {col}（C22 依赖它，否则功能是死代码）: {sorted(row)}"
+        ok += 1; print(f"[16] 用户行含 token_version/student_no_updated_at 通过 (uid={uid})")
+
+        tv0 = int(row.get("token_version") or 0)
+        with jt_db.begin() as tx:
+            assert int(user.bump_token_version(uid)) == tv0 + 1
+            assert int(user.bump_token_version(uid)) == tv0 + 2   # 可连续自增
+            tx.rollback()
+        ok += 1; print("[17] token_version 自增 通过 (事务回滚)")
+
+        with jt_db.begin() as tx:
+            # 从没改过 ⇒ 剩余 0；改完 ⇒ 剩余 > 0（7 天窗口生效）
+            assert user.student_no_change_remaining_days(uid, 7) >= 0
+            assert user.update_student_no(uid, "C22DAO000001") is True
+            assert user.find_by_id(uid)["student_no"] == "C22DAO000001"   # 回读
+            assert user.student_no_change_remaining_days(uid, 7) > 0
+            tx.rollback()
+        ok += 1; print("[18] 学号绑定 + 回读 + 限频生效 通过 (事务回滚)")
+
+    # 不存在的用户：写返回 False、版本返回 -1、剩余天数返回 -1（不抛异常）
+    assert user.update_student_no(999000001, "C22NONE") is False
+    assert user.bump_token_version(999000001) == -1
+    assert user.student_no_change_remaining_days(999000001, 7) == -1
+    ok += 1; print("[19] 不存在用户返回 False / -1 通过")
 
     print(f"\n【成功】全部 DAO 测试通过！共 {ok} 组断言")
 
