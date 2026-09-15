@@ -36,37 +36,14 @@ def notice_columns(alias: str = "") -> str:
     ``campus_notice`` 的 ``deadline``/``materials``/``importance`` 由 B19 的
     ``14_notice_extend.sql`` 提供——**未导入时不 SELECT 这些列**（否则 SQL 报错），
     导入后接口自动多返回这 3 个字段（**向后兼容**：旧字段全部保留）。
+
+    注意：``/life/notices`` 走的是 C++ DAO（``LifeDAO.page_notices``），
+    其 SELECT 已同步加上这 3 列（B20 ②，需先执行 DDL 再重编译 jt_db），
+    因此那条路径不经过本函数。
     """
     prefix = f"{alias}." if alias else ""
     cols = list(_BASE_COLUMNS) + [c for c in _EXTENDED_NAMES if c in notice_extended_columns()]
     return ", ".join(f"{prefix}{c}" for c in cols)
-
-
-def attach_extended_fields(rows: list[dict]) -> list[dict]:
-    """给**已查出的通知行**补上扩展字段（B20，供 C++ DAO 路径复用）。
-
-    ``LifeDAO.page_notices`` 的 SELECT 是编译期写死的
-    （``id,title,content,source,category,publish_time``），拿不到 B19 的新列；
-    为不牵动 C++ 重编译，这里按 id 一次性补查（1 页 1 条 SQL，代价可忽略）。
-    未导入 ``14_notice_extend.sql`` 时**原样返回**（行为与旧版一致）。
-    """
-    want = [c for c in _EXTENDED_NAMES if c in notice_extended_columns()]
-    if not rows or not want:
-        return rows
-    ids = [int(r["id"]) for r in rows if r.get("id") is not None]
-    if not ids:
-        return rows
-    placeholders = ",".join("?" for _ in ids)
-    extra = cpp_bridge.query(
-        f"SELECT id, {', '.join(want)} FROM campus_notice WHERE id IN ({placeholders})",
-        ids,
-    )
-    by_id = {int(r["id"]): r for r in extra}
-    for row in rows:
-        source = by_id.get(int(row["id"]), {})
-        for col in want:
-            row[col] = source.get(col)
-    return rows
 
 
 def _user_tags(user_id: int) -> list[str]:

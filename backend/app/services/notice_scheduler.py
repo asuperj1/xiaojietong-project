@@ -28,11 +28,14 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Optional
 
 from app.core.config import settings
 from app.db import cpp_bridge
+
+logger = logging.getLogger(__name__)
 
 # 私密推送行的 target_grade 前缀（B10 同步使用同一常量做过滤）
 PRIVATE_TARGET_PREFIX = "__push:"
@@ -224,7 +227,12 @@ def notice_extended_columns(refresh: bool = False) -> set[str]:
             "AND column_name IN ('deadline','materials','importance')"
         )
         _EXTENDED_COLUMNS = {str(r.get("c") or "") for r in rows if r.get("c")}
-    except Exception:  # noqa: BLE001 - 探测失败按"未扩展"降级
+    except Exception as exc:  # noqa: BLE001 - 探测失败按"未扩展"降级
+        # B20 ④：探测失败必须留痕——否则「没导入 DDL」与「查询出错」表现一样，
+        # 排查时无法区分（曾因此误判为"列未生效"）。
+        logger.warning(
+            "campus_notice 扩展列探测失败（按未扩展处理，B19/B20 字段将不返回）：%s", exc
+        )
         _EXTENDED_COLUMNS = set()
     return _EXTENDED_COLUMNS
 

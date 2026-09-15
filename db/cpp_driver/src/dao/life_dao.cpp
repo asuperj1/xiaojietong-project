@@ -14,7 +14,8 @@ QueryResult LifeDAO::page_notices(int page, int size, const std::string& categor
     const long long offset = static_cast<long long>((page - 1) * size);
 
     return DbSession::current()->query(
-        "SELECT id, title, content, source, category, publish_time "
+        "SELECT id, title, content, source, category, publish_time, "
+        "       deadline, materials, importance "
         "FROM campus_notice "
         "WHERE (? = '' OR category = ?) "
         "  AND (? = '' OR target_grade = ? OR target_grade = '') "

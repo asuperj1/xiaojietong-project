@@ -17,7 +17,7 @@ from fastapi import APIRouter
 from app.core.celery_app import celery_status
 from app.core.config import settings
 from app.db import cpp_bridge
-from app.services import rag
+from app.services import notice_scheduler, rag
 from app.services.embedder import embedder
 from app.services.vector_store import get_vector_store
 
@@ -118,6 +118,10 @@ async def health_detail():
         "retrieval_mode": retrieval_mode,
         "degrade_reason": degrade_reason,
         "celery": celery_status(),
+        # B20：通知扩展列是否就位（B19 的 14_notice_extend.sql 已导入 = true）。
+        # 用于快速判断"字段缺失"是没跑 DDL 还是接口没重启（列探测结果进程内缓存）。
+        "notice_deadline_supported": notice_scheduler.notice_deadline_supported(),
+        "notice_extended_columns": sorted(notice_scheduler.notice_extended_columns()),
     }
 
 

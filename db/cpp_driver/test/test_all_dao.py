@@ -121,6 +121,13 @@ def main() -> None:
     notices = life.page_notices(1, 10)
     ok += 1; print(f"[13] 通知分页通过: {len(notices)} 条")
 
+    # B20 ②：page_notices 必须带上 B19 扩展列（deadline/materials/importance），
+    # 否则 /life/notices 的字段契约会静默缺列（上一版只能靠 Python 侧补查兜底）。
+    if notices:
+        for col in ("deadline", "materials", "importance"):
+            assert col in notices[0], f"page_notices 缺少 B19 扩展列：{col}"
+        ok += 1; print(f"[13b] 通知扩展列通过: {sorted(notices[0].keys() & {'deadline', 'materials', 'importance'})}")
+
     merchants = life.page_merchants(1, 10)
     assert len(merchants) >= 1
     menu = life.menu_items(int(merchants[0]["id"]))

@@ -126,8 +126,9 @@ def notices(
             break
         probe += 1
     items = items[:size]
-    # B20：DAO 的 SELECT 是编译期写死的，拿不到 B19 新列 → Python 侧按 id 补查
-    notice_service.attach_extended_fields(items)
+    # B20：deadline/materials/importance 已由 LifeDAO.page_notices 直接 SELECT 返回
+    # （C++ 侧已对齐 14_notice_extend.sql，见 db/cpp_driver/src/dao/life_dao.cpp），
+    # 因此这里不再需要 Python 补查。
     return ok(paged(items, len(items), page, size))
 
 
