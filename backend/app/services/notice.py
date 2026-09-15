@@ -69,6 +69,62 @@ def attach_extended_fields(rows: list[dict]) -> list[dict]:
     return rows
 
 
+# `LifeDAO::page_notices` 的 size 上限。注意 C++ 侧是 `size > 100 → size = 20`（**重置**，
+# 不是截到 100），所以一次最多只要 100 条，要多了反而只剩 20 条。
+_DAO_MAX_SIZE = 100
+
+
+def public_notice_page(
+    private_ids: set[int], page: int, size: int, category: str = "", target_grade: str = ""
+) -> list[dict]:
+    """`/life/notices` 的公共通知分页：剔除私密推送行，且**不破坏分页**。
+
+    ## 为什么不能「先取第 page 页、不够再向后补拉」
+
+    ``private_ids`` 里的行要从结果里剔掉，剔完这页就不足 ``size`` 条。
+    若改成「再取下一页补上」，会把**第 N 页的窗口整体前移**：
+    第 N 页返回的尾部条目，下次又在第 N+1 页出现；真正属于第 N+1 页的条目被挤掉。
+
+    实测（``size=3``，插入 1 条私密行）：
+    ``page1=[9008,9007,9006]`` / ``page2=[9006,9005,9004]``
+    ⇒ 9006 **重复**、9003 **漏掉**（已由 `tests/test_life_notices_paging.py` 固定）。
+
+    ## 正确做法
+
+    分页窗口的定义就是「按 ``publish_time DESC`` 的第 ``start..start+size`` 条」，
+    所以必须**先取到覆盖目标窗口的完整前缀、剔完私密行、再切片**，而不是逐个窗口补拉：
+
+    - 前缀放得下（``span <= _DAO_MAX_SIZE``）⇒ **单次查询**取 ``[0, span)`` 后切片；
+    - 前缀过长（窗口落在 100 条之后，或私密行极多）⇒ 退化为逐页累积至 ``page + 1`` 页。
+
+    开销：**无私密行时保持单次查询**（与旧版一致，零额外开销）。
+    """
+    if page < 1:
+        page = 1
+    start = (page - 1) * size
+    want = start + size
+    if not private_ids:
+        return cpp_bridge.life_dao().page_notices(page, size, category, target_grade)
+
+    # 多取整整一页做缓冲：私密行最多让窗口前移「私密行条数」位，一页缓冲足够常见情况。
+    span = want + size
+    if span <= _DAO_MAX_SIZE:
+        rows = cpp_bridge.life_dao().page_notices(1, span, category, target_grade)
+        public = [r for r in rows if int(r["id"]) not in private_ids]
+        if len(rows) < span or len(public) >= want:
+            return public[start:want]
+
+    public = []
+    for probe in range(1, page + 2):
+        rows = cpp_bridge.life_dao().page_notices(probe, size, category, target_grade)
+        if not rows:
+            break
+        public.extend(r for r in rows if int(r["id"]) not in private_ids)
+        if len(rows) < size:
+            break
+    return public[start:want]
+
+
 def _user_tags(user_id: int) -> list[str]:
     rows = cpp_bridge.query("SELECT tag FROM user_tag WHERE user_id = ?", [user_id])
     return [str(r.get("tag") or "") for r in rows if r.get("tag")]

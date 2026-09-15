@@ -110,22 +110,18 @@ def notices(
     **B18 私密行过滤（PR #60 审查 P0 修复）**：分层推送（D-7 / D-2）是**投递给具体用户**
     的通知，其标记写在 ``target_grade``（``__push:...``）。**不能**用返回行里的
     ``target_grade`` 判断——``LifeDAO.page_notices`` 的 SELECT 不含该列，读出来恒为 None，
-    过滤会静默失效。因此改为：先取「私密行 id 集合」，再按 **id** 剔除；为避免剔除后
-    该页条数变少，最多向后补拉 2 页。
+    过滤会静默失效。因此改为：先取「私密行 id 集合」，再按 **id** 剔除。
+
+    ⚠️ 剔除后本页条数会不足，但**不能**用「再取下一页补上」凑数：那会把本页窗口整体前移，
+    导致同一条同时出现在相邻两页、并漏掉靠后的条目（**实测 size=3 时 9006 重复 / 9003 漏掉**）。
+    正确做法是「取够前缀 → 剔除 → 切片」，见 ``services.notice.public_notice_page``；
+    回归见 ``tests/test_life_notices_paging.py``。
     这些推送对**本人**仍可见——走 ``/notice-feed`` 与 ``/notices/unread``（按投递记录取）。
     """
     private_ids = notice_scheduler.private_notice_ids()
-    items: list[dict] = []
-    probe = page
-    for _ in range(3):                      # 1 页 + 最多补拉 2 页
-        rows = cpp_bridge.life_dao().page_notices(probe, size, category, target_grade)
-        if not rows:
-            break
-        items.extend(r for r in rows if int(r["id"]) not in private_ids)
-        if len(items) >= size or len(rows) < size:
-            break
-        probe += 1
-    items = items[:size]
+    items = notice_service.public_notice_page(
+        private_ids, page, size, category, target_grade
+    )
     # B20：DAO 的 SELECT 是编译期写死的，拿不到 B19 新列 → Python 侧按 id 补查
     notice_service.attach_extended_fields(items)
     return ok(paged(items, len(items), page, size))
