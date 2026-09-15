@@ -145,7 +145,9 @@ SELECT CONCAT('历史代买存量 = ', SUM(`biz_type` = 1), ' 行，代收 = ', 
               ' 行，总行数 = ', COUNT(*)) AS `回填自检（历史行必须全是 biz_type=1）`
 FROM `takeaway_order`;
 
-SELECT CONCAT('pickup_point 行数 = ', COUNT(*), '，启用 = ', SUM(`status` = 1)) AS `驿站自检`
+-- 驿站自检：真实表用的是 `enabled`（0 停用 / 1 启用），
+-- 原写法引用 `status` 会报 ERROR 1054 Unknown column 'status'。
+SELECT CONCAT('pickup_point 行数 = ', COUNT(*), '，启用 = ', SUM(`enabled` = 1)) AS `驿站自检`
 FROM `pickup_point`;
 
 -- ============================================================
