@@ -520,6 +520,54 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 
 ---
 
+---
+
+## 10.5 首页与搜索（B21 / B22，v1.20 新增）
+
+> 均需登录（无 token → `401`）。
+
+### GET /home/banners — 首页轮播位（B21）
+响应 `data`：
+```json
+{ "items": [ { "id":1, "title":"迎新季·校园服务上新",
+               "image_url":"/static/banners/welcome.png", "link_url":"/pages/service/service",
+               "link_type":"page", "sort":30, "start_at":null, "end_at":null } ],
+  "columns": ["image_url","link_url"] }
+```
+- 过滤：`enabled = 1` **且** 在有效期内（`start_at IS NULL OR <= NOW()`；`end_at IS NULL OR >= NOW()`）；
+- 排序：**`sort` 倒序**（越大越前，与 `db/sql/15_home_banner.sql` 一致），同分按 `id` 升序；
+- ⚠️ **列名兼容（临时）**：`home_banner` 存在两种历史形状（本机 `image_url`/`link_url`；
+  `15_` 建表定义 `image`/`link_type`/`link_target`），服务端用 `information_schema` 探测后
+  **统一输出契约字段** `image_url`/`link_url`，并附 `columns` 便于排查；B19 schema 收敛定稿后可简化。
+
+### GET /home/feed — 首页信息流（B21）
+查询参数：`?sort=recommend|hot&page=&size=`（`sort` 默认 `recommend`；非法值 → **`1001`**，不是 422）
+- `recommend`：B11 个性化打分（兴趣标签 + 行为偏好 + 热度 + 时效），逐条带 `score`/`reason`/`matched_tags`，冷启动回落热度榜；
+- `hot`：论坛热度榜（`ForumDAO.hot_topics`，单次上限 50 条，超出 → `1001`）；
+  **安全兜底**：服务端按 id 复核 `audit_status = 1 AND is_deleted = 0` 后才返回
+  —— 因为 `is_hot` 是人工热度标，与审核状态是两条独立链路（实测把热度标打到违规帖「代考包过」后它会出现在热榜里）。
+  根治建议：`hot_topics` 的 SQL 直接加 `AND audit_status = 1`（需重编译，建议并入 W1 C++ 批次）。
+
+### GET /search/history — 搜索历史（B22）
+查询参数：`?limit=20`（≤100）；`data`：`{ "items":[{"id":1,"keyword":"图书馆","created_at":"..."}], "total":3 }`
+> 倒序（`created_at DESC`，走 `idx_user_time`）。
+
+### POST /search/history — 写入搜索词（B22，**自动去重**）
+请求 `{ "keyword": "图书馆" }` → 响应 `{ "id":1, "keyword":"图书馆", "created_at":"...", "dedup": false }`
+- **必须用 `ON DUPLICATE KEY UPDATE created_at = CURRENT_TIMESTAMP`**：唯一键 `uk_user_keyword(user_id, keyword)`，
+  直接 INSERT 同词会 `ERROR 1062`；ODKU 后语义 = 重搜同词即刷新时间、记录顶到最前（`dedup=true` 表示该词此前已存在）；
+- 空/纯空白 → `1001`；超 64 字 → `1001`（列 `VARCHAR(64)`，不让 MySQL 抛 1406）；
+- 写入后**自动裁剪**为每人最近 50 条（防历史无限增长）。
+
+### DELETE /search/history/{id} — 单删（B22）
+删除的是**自己的**记录（SQL 带 `user_id = ?`，删别人的 id 不生效）：
+不存在或不属于当前用户 → `1001`。
+
+### DELETE /search/history — 清空（B22）
+只清当前用户，响应 `{ "deleted": 2 }`。
+
+---
+
 ## 11. 管理端（管理员角色）
 
 ### GET /admin/metrics — 系统指标
