@@ -15,9 +15,14 @@
  *   D. 首页 / 服务页宫格的**业务行为未变**（条目名 / 跳转 url / tab 标志逐条比对）——
  *      F11 只换图标资产，不改业务。
  *
+ * 另有 E 段 **emoji 字形盘点**：只统计、不断言。F11 验收口径（「全站无彩色 / 粗重图标」）
+ * 只覆盖**图标资产**，emoji 字形的口径与归属见 `miniprogram/static/icons/README.md` §5；
+ * E 段存在的意义是让该口径**可复现**，而不是让 emoji 参与 PASS/FAIL。
+ *
  * 用法：
  *     node tools/verify_f11_icon_set.js
  * 退出码：0 = 全部通过；1 = 有失败
+ * 输出：A~D 段是断言（决定退出码）；E 段是 `[INFO]` 统计（不影响退出码）。
  */
 
 'use strict'
@@ -98,6 +103,24 @@ for (const file of svgFiles) {
 }
 
 check('user-solid.svg 已补齐（F11 明确要求）', svgFiles.includes('user-solid.svg'))
+
+// 评审（PR #77）疑问：「user-solid.svg 与 user.svg 逐字节相同、且零引用」。
+// 处置：文件名 `user-solid.svg` 是任务单 §3.3 F11 **点名要求的产出**，不能改名、不能删除；
+// 内容与 `user.svg` 同形是**刻意**的 —— 纯线性体系里选中态由颜色表达、不由填充表达（README §4.2）。
+// 因此这里把「两者等值」**锁定为断言**：一旦有人只改其中一个，本脚本立刻报错，
+// 防止两个文件在后续 F12~F17 中悄悄漂移成不同形态。
+const solidPath = path.join(ICON_DIR, 'user-solid.svg')
+const plainPath = path.join(ICON_DIR, 'user.svg')
+const missingOf = [solidPath, plainPath].filter((p) => !fs.existsSync(p)).map((p) => path.basename(p))
+const solidBuf = missingOf.length ? Buffer.alloc(0) : fs.readFileSync(solidPath)
+const plainBuf = missingOf.length ? Buffer.alloc(0) : fs.readFileSync(plainPath)
+check(
+  'user-solid.svg 与 user.svg 逐字节等值（刻意的线性同形槽位，锁死防漂移）',
+  missingOf.length === 0 && solidBuf.equals(plainBuf),
+  missingOf.length
+    ? `文件缺失：${missingOf.join(' / ')}`
+    : `user-solid=${solidBuf.length}B / user=${plainBuf.length}B，内容已不一致`
+)
 
 // ------------------------------------------------- B. 引用完整性（全 miniprogram）
 
@@ -227,6 +250,71 @@ for (const [rel, spec] of Object.entries(EXPECTED)) {
     }
   })
 }
+
+// ------------------------------------------- E. emoji 字形盘点（仅统计，不断言）
+
+console.log('\nE. emoji 字形盘点（[INFO] 仅统计，不影响退出码 —— 不在 F11 验收口径内，见 static/icons/README.md §5）')
+
+// 三种口径（详细解释与「评审报告 109 处」的对账见 README §5.2）：
+//   A（采用）: Extended_Pictographic 码点 + 独立 VS16(U+FE0F) —— 与 README §5 历史数字同口径
+//   BASE     : 只数 Extended_Pictographic 基字形（A 与 BASE 的差 = 独立 VS16 数）
+//   BROAD    : A ∪ 箭头(→ ← ↑ ↓) ∪ 带圈字母数字(①②…) —— 非 pictographic 的排版符号，仅供参考对账
+const EMOJI_RE = /\p{Extended_Pictographic}|\uFE0F/gu
+const EMOJI_BASE_RE = /\p{Extended_Pictographic}/gu
+const EMOJI_BROAD_RE = /\p{Extended_Pictographic}|\uFE0F|[\u2190-\u21FF]|[\u2460-\u24FF]/gu
+const CENSUS_EXTS = ['.js', '.wxml', '.wxss', '.json']
+
+const census = new Map(CENSUS_EXTS.map((ext) => [ext, { files: 0, count: 0, base: 0, broad: 0, broadFiles: 0 }]))
+const shapes = { error: 0, empty: 0, inline: 0 }
+const baseGlyphs = new Map() // 基字形 -> 处数（用于 README §5.2 的对账）
+
+// 单遍扫描：每个源文件只读一次，同时累计三种口径与 wxml 形态分布。
+for (const file of sourceFiles) {
+  const raw = fs.readFileSync(file, 'utf8')
+  const ext = path.extname(file)
+  const row = census.get(ext)
+  if (!row) continue
+
+  const count = (raw.match(EMOJI_RE) || []).length
+  if (count > 0) {
+    row.files += 1
+    row.count += count
+    const baseHits = raw.match(EMOJI_BASE_RE) || []
+    row.base += baseHits.length
+    for (const g of baseHits) baseGlyphs.set(g, (baseGlyphs.get(g) || 0) + 1)
+  }
+  const broad = (raw.match(EMOJI_BROAD_RE) || []).length
+  row.broad += broad
+  if (broad > 0) row.broadFiles += 1
+
+  if (ext !== '.wxml' || count === 0) continue
+  // 形态分布按**行**归类：行内含 xj-empty-icon 且含 ⚠ = 错误态；含 xj-empty-icon = 空态；其余 = 行内文本。
+  for (const line of raw.split(/\r?\n/)) {
+    const n = (line.match(EMOJI_RE) || []).length
+    if (!n) continue
+    const hasEmptyIcon = /xj-empty-icon/.test(line)
+    const bucket = hasEmptyIcon ? (/⚠/.test(line) ? 'error' : 'empty') : 'inline'
+    shapes[bucket] += n
+  }
+}
+
+const rows = [...census.entries()]
+const total = (pick) => rows.reduce((a, [, r]) => a + pick(r), 0)
+const byExt = (pick) => rows.map(([ext, r]) => `${ext} ${pick(r)}`).join(' · ')
+
+console.log('  [INFO] 口径A（采用）= Extended_Pictographic + 独立 VS16；范围 = miniprogram/ 下 .js/.wxml/.wxss/.json')
+console.log(`  [INFO] 合计 ${total((r) => r.count)} 处 / ${total((r) => r.files)} 个文件（含 emoji 的文件数）`)
+console.log(`  [INFO] 分扩展名（处/文件）：${byExt((r) => `${r.count}/${r.files}`)}`)
+console.log(`  [INFO] 只数基字形 = ${total((r) => r.base)} 处（${byExt((r) => r.base)}）；独立 VS16 = ${total((r) => r.count) - total((r) => r.base)} 处`)
+const topGlyphs = [...baseGlyphs.entries()]
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, 5)
+  .map(([g, n]) => `${g} ${n}`)
+  .join(' · ')
+console.log(`  [INFO] 基字形 Top5：${topGlyphs}`)
+console.log(`  [INFO] wxml 形态分布：错误态 \`.xj-empty-icon\` ⚠️ ${shapes.error} · 空态 ${shapes.empty} · 行内文本 ${shapes.inline}`)
+console.log(`  [INFO] 参考口径（并计 →/①② 等非 pictographic 符号）= ${total((r) => r.broad)} 处 / ${total((r) => r.broadFiles)} 个文件（${byExt((r) => r.broad)}）`)
+console.log('  [INFO] F11 验收只覆盖「图标资产」：彩色 PNG 引用 = 0（见 C 段）；emoji 归属见 README §5')
 
 // ---------------------------------------------------------------- 汇总
 
