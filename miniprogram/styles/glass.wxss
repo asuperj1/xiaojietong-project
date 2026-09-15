@@ -1,0 +1,104 @@
+/* ============================================================
+   F10 玻璃样式库（液态毛玻璃）—— progressive enhancement
+   依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §1.2
+   设计原则：默认态即「安全可读」，能力越强才越透明、越毛玻璃。
+     默认（无 CSS 变量 / 无 @supports / 无 backdrop-filter）：浅色半透明实底 + 细边 + 柔和阴影
+     @supports 命中时（正向增强）：换 .62 玻璃底并叠加 blur(20px) saturate(180%)
+     运行时类：.is-glass-fallback（探测不支持 → 实心）/ .is-glass-reduced（用户减弱透明）
+   所有关键 var() 均带 literal fallback：任意一项能力缺失都不会导致样式丢失或不可读。
+   ============================================================ */
+
+/* ---- 默认态（基线）：不依赖 CSS 变量 / @supports / backdrop-filter ---- */
+.xj-glass,
+.xj-glass-card,
+.xj-glass-panel,
+.xj-glass-strong {
+  position: relative;
+  /* reduced 安全底：略高不透明度，保证任意背景上的文字可读 */
+  background: rgba(255, 255, 255, 0.86);
+  background: var(--xj-glass-bg-reduced, rgba(255, 255, 255, 0.86));
+  border: 1rpx solid rgba(255, 255, 255, 0.55);
+  border: 1rpx solid var(--xj-glass-border, rgba(255, 255, 255, 0.55));
+  /* 柔和阴影 + 顶部高光边（不叠加厚重投影） */
+  box-shadow: 0 8px 24px rgba(31, 38, 135, 0.08), inset 0 2rpx 0 rgba(255, 255, 255, 0.6);
+  box-shadow: var(--xj-shadow-soft, 0 8px 24px rgba(31, 38, 135, 0.08)),
+    var(--xj-shadow-highlight, inset 0 2rpx 0 rgba(255, 255, 255, 0.6));
+}
+
+/* 卡片：统一圆角与内边距，避免各页各写一套 */
+.xj-glass-card {
+  border-radius: 24rpx;
+  border-radius: var(--xj-radius-card, 24rpx);
+  padding: 24rpx;
+  padding: var(--xj-space-md, 24rpx);
+}
+
+/* 面板：大圆角 + 更大留白（侧边栏 / 分区容器 / 底部弹层） */
+.xj-glass-panel {
+  border-radius: 28rpx;
+  border-radius: var(--xj-radius-panel, 28rpx);
+  padding: 32rpx;
+  padding: var(--xj-space-lg, 32rpx);
+}
+
+/* ---- 正向增强：仅当引擎支持 backdrop-filter 时才转为真玻璃 ----
+   （不用 @supports not：不存在“默认依赖现代能力、再回头降级”的路径） */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .xj-glass,
+  .xj-glass-card,
+  .xj-glass-panel,
+  .xj-glass-strong {
+    background: rgba(255, 255, 255, 0.62);
+    background: var(--xj-glass-bg, rgba(255, 255, 255, 0.62));
+
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: var(--xj-glass-blur, blur(20px) saturate(180%));
+
+    backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: var(--xj-glass-blur, blur(20px) saturate(180%));
+  }
+
+  /* 强玻璃：弹窗 / 浮层 / 需要更高文字可读性的场景（比基础玻璃更实） */
+  .xj-glass-strong {
+    background: rgba(255, 255, 255, 0.82);
+    background: var(--xj-glass-bg-strong, rgba(255, 255, 255, 0.82));
+  }
+}
+
+/* ---- 运行时降级类（由 JS 能力探测结果 / 用户设置驱动，库内不自动注入）---- */
+
+/* .is-glass-fallback：能力探测判定不支持（低端 Android 等）→ 实心白底 + 发丝边 */
+.is-glass-fallback .xj-glass,
+.is-glass-fallback .xj-glass-card,
+.is-glass-fallback .xj-glass-panel,
+.is-glass-fallback .xj-glass-strong {
+  background: #ffffff;
+  background: var(--xj-glass-bg-fallback, #ffffff);
+  border-color: rgba(31, 35, 41, 0.06);
+  border-color: var(--xj-border-hairline, rgba(31, 35, 41, 0.06));
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* .is-glass-reduced：用户开启「减弱透明效果」→ 提高不透明度并去掉模糊（兼顾性能） */
+.is-glass-reduced .xj-glass,
+.is-glass-reduced .xj-glass-card,
+.is-glass-reduced .xj-glass-panel,
+.is-glass-reduced .xj-glass-strong {
+  background: rgba(255, 255, 255, 0.86);
+  background: var(--xj-glass-bg-reduced, rgba(255, 255, 255, 0.86));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ---- 可选：页面低饱和渐变背景 ----
+   仅提供显式启用入口（页面根节点加 .xj-page-bg），不改动既有 page 背景，
+   避免影响尚未整改的旧页面。 */
+.xj-page-bg {
+  background: linear-gradient(160deg, #FDF6F8 0%, #F2F7FD 55%, #F6F4FC 100%);
+  background: var(
+    --xj-bg-page,
+    linear-gradient(160deg, #FDF6F8 0%, #F2F7FD 55%, #F6F4FC 100%)
+  );
+}

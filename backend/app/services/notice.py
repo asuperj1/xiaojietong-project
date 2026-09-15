@@ -17,9 +17,56 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.db import cpp_bridge
+from app.services.notice_scheduler import PRIVATE_TARGET_PREFIX, notice_extended_columns
 
 _MAX_TAG_HITS = 3
 _MAX_NOTICES = 200
+# 私密推送行（B18）的 target_grade 形如 ``__push:reminder:12:D7``，
+# 是"仅投递对象可见"的推送通知，绝不能进入他人的可见口径。
+_PRIVATE_LIKE = f"{PRIVATE_TARGET_PREFIX}%"
+
+_BASE_COLUMNS = ("id", "title", "content", "source", "category", "target_grade", "publish_time")
+# B19 的 14_notice_extend.sql 提供的扩展列（B20 契约字段）
+_EXTENDED_NAMES = ("deadline", "materials", "importance")
+
+
+def notice_columns(alias: str = "") -> str:
+    """按实际表结构拼通知列（B20 字段契约）。
+
+    ``campus_notice`` 的 ``deadline``/``materials``/``importance`` 由 B19 的
+    ``14_notice_extend.sql`` 提供——**未导入时不 SELECT 这些列**（否则 SQL 报错），
+    导入后接口自动多返回这 3 个字段（**向后兼容**：旧字段全部保留）。
+    """
+    prefix = f"{alias}." if alias else ""
+    cols = list(_BASE_COLUMNS) + [c for c in _EXTENDED_NAMES if c in notice_extended_columns()]
+    return ", ".join(f"{prefix}{c}" for c in cols)
+
+
+def attach_extended_fields(rows: list[dict]) -> list[dict]:
+    """给**已查出的通知行**补上扩展字段（B20，供 C++ DAO 路径复用）。
+
+    ``LifeDAO.page_notices`` 的 SELECT 是编译期写死的
+    （``id,title,content,source,category,publish_time``），拿不到 B19 的新列；
+    为不牵动 C++ 重编译，这里按 id 一次性补查（1 页 1 条 SQL，代价可忽略）。
+    未导入 ``14_notice_extend.sql`` 时**原样返回**（行为与旧版一致）。
+    """
+    want = [c for c in _EXTENDED_NAMES if c in notice_extended_columns()]
+    if not rows or not want:
+        return rows
+    ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+    if not ids:
+        return rows
+    placeholders = ",".join("?" for _ in ids)
+    extra = cpp_bridge.query(
+        f"SELECT id, {', '.join(want)} FROM campus_notice WHERE id IN ({placeholders})",
+        ids,
+    )
+    by_id = {int(r["id"]): r for r in extra}
+    for row in rows:
+        source = by_id.get(int(row["id"]), {})
+        for col in want:
+            row[col] = source.get(col)
+    return rows
 
 
 def _user_tags(user_id: int) -> list[str]:
@@ -43,10 +90,11 @@ def _behavior_categories(user_id: int) -> set[str]:
 def _visible_notices(user: dict) -> list[dict]:
     grade = str(user.get("grade") or "")
     return cpp_bridge.query(
-        "SELECT id, title, content, source, category, target_grade, publish_time "
-        "FROM campus_notice WHERE target_grade = '' OR target_grade = ? "
+        f"SELECT {notice_columns()} "
+        "FROM campus_notice WHERE (target_grade = '' OR target_grade = ?) "
+        "AND target_grade NOT LIKE ? "
         "ORDER BY publish_time DESC LIMIT ?",
-        [grade, _MAX_NOTICES],
+        [grade, _PRIVATE_LIKE, _MAX_NOTICES],
     )
 
 
@@ -101,6 +149,17 @@ def score_notice(notice: dict, user: dict, tags: list[str], behavior: set[str]) 
         days = max(0.0, (datetime.now() - published).total_seconds() / 86400)
         score += max(0.0, 0.5 * (1 - days / 7))
 
+    # 6) 重要度（B19/B20 抽取结果 1~5；缺失或未打分按 0，不影响旧行为）
+    try:
+        importance = int(notice.get("importance") or 0)
+    except (TypeError, ValueError):
+        importance = 0
+    importance = max(0, min(5, importance))
+    if importance:
+        score += 0.2 * importance
+        if not reason:
+            reason = f"重要度 {importance} 的通知"
+
     return {
         "score": round(score, 3),
         "matched_tags": matched,
@@ -139,8 +198,8 @@ def unread_list(user: dict, page: int, size: int) -> tuple[list[dict], int]:
     ensure_deliveries(user)
     uid = int(user["id"])
     rows = cpp_bridge.query(
-        "SELECT n.id, n.title, n.content, n.source, n.category, n.target_grade, "
-        "n.publish_time, d.score, d.reason, d.matched_tags, d.created_at AS delivered_at "
+        f"SELECT {notice_columns('n')}, "
+        "d.score, d.reason, d.matched_tags, d.created_at AS delivered_at "
         "FROM notice_delivery d JOIN campus_notice n ON n.id = d.notice_id "
         "WHERE d.user_id = ? AND d.is_read = 0 "
         "ORDER BY d.score DESC, n.publish_time DESC LIMIT ? OFFSET ?",
@@ -158,8 +217,8 @@ def build_feed(user: dict, page: int, size: int) -> tuple[list[dict], int]:
     ensure_deliveries(user)
     uid = int(user["id"])
     rows = cpp_bridge.query(
-        "SELECT n.id, n.title, n.content, n.source, n.category, n.target_grade, "
-        "n.publish_time, d.score, d.reason, d.matched_tags, d.is_read "
+        f"SELECT {notice_columns('n')}, "
+        "d.score, d.reason, d.matched_tags, d.is_read "
         "FROM notice_delivery d JOIN campus_notice n ON n.id = d.notice_id "
         "WHERE d.user_id = ? "
         "ORDER BY d.score DESC, n.publish_time DESC LIMIT ? OFFSET ?",

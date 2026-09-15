@@ -1,7 +1,14 @@
 """全局配置：通过环境变量注入，前缀 XJT_。"""
 
+from pathlib import Path
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# .env 固定按 **backend/ 目录** 解析（而非当前工作目录）：
+# 这样无论从哪个目录启动 uvicorn，或执行 `python -m app.cli.kb_import`
+# 之类的命令行工具，都能读到同一份本机配置（DB 端口/密码等）。
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 # 默认 JWT 密钥：仅供本地开发。长度 ≥32 字节，以满足 PyJWT 对 HS256 的建议下限
 # （旧值 "xjt-dev-secret-change-me" 仅 24 字节，会触发 InsecureKeyLengthWarning）。
@@ -9,7 +16,9 @@ _DEFAULT_JWT_SECRET = "xjt-dev-secret-change-me-at-least-32b"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="XJT_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="XJT_", env_file=str(_ENV_FILE), extra="ignore"
+    )
 
     # 应用
     app_name: str = "校捷通"
@@ -113,6 +122,22 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://127.0.0.1:6379/0"
     celery_result_backend: str = "redis://127.0.0.1:6379/1"
 
+    # ---------- 分层推送调度（B18：待办到期前 D-7 / D-2 主动触达）----------
+    # 定时任务在到期前 7 天、2 天生成投递记录（notice_delivery），可加 D0（当天/逾期）。
+    # 未启用 Celery 时由管理端接口 POST /admin/notices/dispatch 手动触发（eager 同步执行）。
+    notice_push_enabled: bool = True
+    notice_push_stages: str = "D7,D2"     # 逗号分隔；可选值 D7/D2/D0
+    notice_push_hour: int = 8             # 每日调度时点（Asia/Shanghai）
+    notice_push_minute: int = 0
+    notice_push_channel: int = 1          # 投递渠道：1 站内 2 小程序订阅消息 3 短信
+    notice_push_max_items: int = 500       # 单次调度的待办条数上限
+    notice_push_max_fanout: int = 500      # 单条通知最多投递用户数
+    reminder_auto_done: bool = False      # 到期推送后是否把 reminder.is_done 置 1（默认不代用户改状态）
+
+    # ---------- 知识库批量导入（B17）----------
+    kb_import_state_file: str = "data/kb_import_state.json"   # 断点续传状态文件（相对 backend/）
+    kb_import_batch_size: int = 200       # 单批入库篇数（配合 --batch-size 覆盖）
+
     # ---------- 派生属性 ----------
 
     @property
@@ -135,6 +160,13 @@ class Settings(BaseSettings):
         """CORS 允许来源列表（逗号分隔；空值回退为 *）。"""
         items = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
         return items or ["*"]
+
+    @property
+    def notice_push_stage_list(self) -> list[str]:
+        """B18 启用档位（大小写不敏感，非法值忽略；全非法时回退 D7,D2）。"""
+        valid = {"D7", "D2", "D0"}
+        items = [s.strip().upper() for s in self.notice_push_stages.replace("，", ",").split(",")]
+        return [s for s in items if s in valid] or ["D7", "D2"]
 
     # ---------- 启动校验 ----------
 
