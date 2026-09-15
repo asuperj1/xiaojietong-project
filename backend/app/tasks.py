@@ -62,6 +62,36 @@ def build_knowledge_index(force: bool = False, doc_ids: list[int] | None = None)
     return asyncio.run(rag.build_index(doc_ids=doc_ids, force=force))
 
 
+@celery_app.task(name="xjt.dispatch_notice_push")
+def dispatch_notice_push(
+    stages: list[str] | None = None,
+    now: str | None = None,
+    dry_run: bool = False,
+    user_id: int | None = None,
+) -> dict:
+    """分层推送调度（B18）：D-7 / D-2 待办触达，写 notice_delivery。
+
+    - **定时**：Celery beat 每日 ``XJT_NOTICE_PUSH_HOUR`` 触发（见 core/celery_app.py）；
+    - **手动**：``POST /api/v1/admin/notices/dispatch``，未启用 Celery 时同步执行；
+    - **可重放**：``now`` 支持传入 ISO 时间（如 ``2026-09-20T08:00:00``），
+      用于回归验证"再过 5 天会不会推 D-2"，不必真的等 5 天。
+    """
+    from datetime import datetime
+
+    from app.services import notice_scheduler
+
+    _ensure_db()
+    base = None
+    if now:
+        try:
+            base = datetime.fromisoformat(str(now).replace("Z", "").strip())
+        except ValueError as exc:
+            raise ValueError(f"now 参数不是合法 ISO 时间：{now}") from exc
+    return notice_scheduler.dispatch(
+        stages=stages, now=base, dry_run=bool(dry_run), user_id=user_id
+    )
+
+
 def task_state(task_id: str) -> dict[str, Any]:
     """查询异步任务状态（供管理端索引状态接口使用）。"""
     result = celery_app.AsyncResult(task_id)
