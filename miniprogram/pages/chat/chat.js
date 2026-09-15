@@ -1,5 +1,6 @@
 // AI 对话页（Tab）—— F4：SSE 流式多轮对话 + 停止 / 新建会话 / 历史
 const { sseRequest } = require('../../services/request')
+const { syncTabBar, setTabBarHidden } = require('../../utils/tabbar')
 
 Page({
   data: {
@@ -8,6 +9,7 @@ Page({
     sending: false,      // 是否正在生成回答
     conversationId: null, // 当前会话 id（首条消息前为 null）
     scrollIntoView: '',  // 滚动锚点 id
+    tabBarHidden: false, // F12 POC：全屏态（隐藏自定义 TabBar）开关，正式态由 F14 侧边栏/全屏会话驱动
   },
 
   // 非渲染态字段
@@ -21,7 +23,31 @@ Page({
     this._app = getApp()
   },
 
+  // F12 POC：全屏态显隐开关。
+  // 存在的意义：让「全屏页隐藏 TabBar」这条验收可以在真机上被手动验证（可反复切换、可逆），
+  // 而不是留一个永远不触发的机制。F14 接入侧边栏后应删除本按钮，改由侧边栏/全屏会话状态驱动。
+  onToggleFullscreenPoc() {
+    const next = !this.data.tabBarHidden
+    // 先尝试，成功才改状态 —— 否则按钮会显示「显示底栏」但底栏其实没被隐藏（假反馈）
+    if (!setTabBarHidden(this, next)) {
+      wx.showToast({ title: '自定义 TabBar 未生效', icon: 'none' })
+      return
+    }
+    this.setData({ tabBarHidden: next })
+  },
+
   onShow() {
+    // F12：同步自定义 TabBar 选中项。
+    // 必须放在下面所有提前 return 之前，否则「有历史回传 / 有待发送关键词」时会漏掉同步。
+    syncTabBar(this, 'chat')
+    // F12 POC：每次进入本页都从「显示底栏」开始。
+    // 隐藏状态是**按页面实例**保存的，若不在 onShow 复位，一旦 F14 删掉 POC 按钮，
+    // 隐藏过的用户会永久停在本页（没有底栏可切走）—— 提前消除这个死锁。
+    if (this.data.tabBarHidden) {
+      this.setData({ tabBarHidden: false })
+      setTabBarHidden(this, false)
+    }
+
     const app = this._app
     if (!app || !app.globalData) return
 

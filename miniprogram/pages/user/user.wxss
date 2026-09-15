@@ -62,3 +62,9 @@
   margin: 24rpx auto 0;
   width: 240rpx;
 }
+
+/* F12：为 fixed 定位的自定义 TabBar 自留底部空间（原生 tabBar 由框架预留，自定义不会）。
+   留白 = 底栏占用高度(110rpx + 安全区) + 24rpx 呼吸位；改动需同步 custom-tab-bar/index.wxss。 */
+.xj-page {
+  padding-bottom: calc(134rpx + env(safe-area-inset-bottom));
+}

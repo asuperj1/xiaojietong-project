@@ -1,5 +1,6 @@
 // 我的页（Tab）—— F8：用户基础信息 + 各业务入口 + 退出登录
 const { request } = require('../../services/request')
+const { syncTabBar } = require('../../utils/tabbar')
 
 Page({
   data: {
@@ -17,6 +18,8 @@ Page({
   },
 
   onShow() {
+    // F12：同步自定义 TabBar 选中项
+    syncTabBar(this, 'user')
     this.fetch()
   },
 

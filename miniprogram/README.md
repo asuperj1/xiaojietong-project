@@ -5,6 +5,7 @@
 ```
 miniprogram/
 ├── app.js / app.json / app.wxss        # 全局配置、路由、TabBar
+├── custom-tab-bar/      # 自定义 TabBar（F12，目录名由微信框架固定：必须叫 custom-tab-bar）
 ├── pages/
 │   ├── chat/            # AI 助手对话页（SSE 流式）
 │   ├── agent/           # Agent 任务中心
@@ -17,7 +18,7 @@ miniprogram/
 │   └── user/            # 我的
 ├── components/          # 复用组件
 ├── services/            # API 封装（request.js）
-├── utils/
+├── utils/               # format.js / glass.js（F10）/ tab-order.js + tabbar.js（F12）
 └── static/
 ```
 
