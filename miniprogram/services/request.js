@@ -186,11 +186,13 @@ function decodeUtf8Partial(bytes) {
  * @param {Object} handlers 事件回调
  * @param {Function} [handlers.onSources] sources 事件（引用来源数组）
  * @param {Function} [handlers.onChunk] chunk 事件（每次一段 delta 文本）
+ * @param {Function} [handlers.onRefused] refused 事件（C20 拒答，{ delta, reason }；未提供时降级走 onChunk）
+ * @param {Function} [handlers.onCitations] citations 事件（C20 引用清洗，{ fabricated, final }）
  * @param {Function} [handlers.onDone] done 事件（{ conversation_id, message_id }）
  * @param {Function} [handlers.onError] 出错回调（网络/解析/业务错误/登录失效）
  * @returns {RequestTask} 调用方可 task.abort() 主动终止
  */
-function sseRequest(path, data = {}, { onSources, onChunk, onDone, onError } = {}) {
+function sseRequest(path, data = {}, { onSources, onChunk, onRefused, onCitations, onDone, onError } = {}) {
   // 与 request() 使用同一套环境解析规则（getBaseUrl）
   //
   // ⚠️ 同 request()：环境解析失败必须走 onError。若直接同步抛出，
@@ -249,6 +251,19 @@ function sseRequest(path, data = {}, { onSources, onChunk, onDone, onError } = {
         if (payload && typeof payload.delta === 'string' && typeof onChunk === 'function') {
           onChunk(payload.delta)
         }
+        break
+      // `C20` 拒答：后端判定检索结果不足以回答，**没有调模型**，直接给结论文案。
+      // 提供了 onRefused 就单独走它（调用方可标记气泡为“无依据”）；否则当普通正文。
+      case 'refused':
+        if (payload && typeof payload.delta === 'string') {
+          if (typeof onRefused === 'function') onRefused(payload)
+          else if (typeof onChunk === 'function') onChunk(payload.delta)
+        }
+        break
+      // `C20` 引用清洗：正文已经流式展示过了，这里下发修正后的全文（final）
+      // 与被剔除的伪造引用（fabricated），由调用方覆盖气泡内容。
+      case 'citations':
+        if (payload && typeof onCitations === 'function') onCitations(payload)
         break
       case 'done':
         finished = true
