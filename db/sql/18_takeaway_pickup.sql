@@ -43,8 +43,8 @@ CREATE TABLE IF NOT EXISTS `pickup_point` (
     PRIMARY KEY (`id`),
     KEY `idx_enabled_sort` (`enabled`, `sort`),
     KEY `idx_campus` (`campus`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='取件驿站（代收业务）';
 
--- 幂等种子：单语句 + WHERE NOT EXISTS —— 跑几遍都只插一次（原写法每跑一次多 5 条）。
 -- 种子（**固定主键 + ON DUPLICATE KEY UPDATE**：可补齐缺行、可更新文案、不重复插入）
 INSERT INTO `pickup_point` (`id`, `name`, `address`, `open_time`, `campus`, `sort`, `enabled`) VALUES
   (1, '三教快递柜',       '第三教学楼东侧一层',  '24 小时',     '',         50, 1),
