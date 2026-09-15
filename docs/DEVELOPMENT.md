@@ -166,6 +166,55 @@ xiaojietong-project/
 3. 入库即向量化：管理端 `POST /admin/knowledge/ingest`（embedding 不可用时返回 `embed_failed`，Ollama 就绪后重跑建索引）
 4. 向量库位置：`backend/data/rag/`（ChromaDB 持久化，勿提交到 Git）
 
+### 6.5 知识库批量导入（B17 · 二阶段）
+1. **预演不写库**（不需要数据库，先验解析质量）：
+   `cd backend && python -m app.cli.kb_import ..\docs\kb_samples --dry-run`
+2. **正式导入**（默认不向量化，先灌库更快；分类按子目录名自动识别）：
+   `python -m app.cli.kb_import ..\docs\kb_samples --source-prefix samples/`
+3. **断点续传**：直接重跑同一条命令——内容未变且库内文档仍在的文件走 `skip(unchanged)`；
+   内容变化需 `--force` 覆盖，否则报 `conflict`（避免静默改写已审校的知识）。
+4. **补建向量索引**：`python -m app.cli.kb_import --index-only`（按批调用 `rag.build_index`），
+   或管理端 `POST /admin/knowledge/index`（Celery 异步）。
+5. **回滚**：`python -m app.cli.kb_import --purge-source-prefix samples/`
+   （同步清理状态文件记录）；接口版：`POST /admin/knowledge/purge`。
+6. **达标闸门**：`--require-min 120` → 库内总篇数不足时退出码 1（供 CI 用，见 T-02）。
+7. 状态文件：`backend/data/kb_import_state.json`（gitignore），记录 `相对路径 -> {sha256, doc_id}`。
+8. **容量验证（≥120 篇）**：
+   ```powershell
+   pwsh backend\tests\gen_kb_bench.ps1 -Count 120        # 生成合成语料（载荷用，非知识内容）
+   cd backend
+   # 首轮：断言本轮新建+覆盖 ≥120 篇（首次实测 120 篇 / 0.98s）
+   & ".\.venv\Scripts\python.exe" -m app.cli.kb_import "$env:TEMP\xjt_kb_bench" --source-prefix bench/ --require-new 120
+   # 续传轮：**不要带 --require-new**（本轮新建为 0 属正常），只想校验总量就换成 --require-min
+   & ".\.venv\Scripts\python.exe" -m app.cli.kb_import "$env:TEMP\xjt_kb_bench" --source-prefix bench/ --require-min 120
+   & ".\.venv\Scripts\python.exe" -m app.cli.kb_import --purge-source-prefix bench/   # 回滚
+   ```
+   `--require-new N` 断言「**本轮**新建+覆盖 ≥ N 篇」；`--require-min N` 断言「**库内**总篇数 ≥ N」。
+   两者语义不同：续传轮全部 `skip(unchanged)` 时 `--require-new` 会如实报未达标（退出码 1）并打印提示。
+   回滚按 `source_url` 前缀 `bench/` 精确删除，不碰真实语料；目录扫描自动跳过 `README*`、`_`/`.` 开头文件。
+9. 扫描排除规则：`README*` / 说明文件、`.` 或 `_` 开头的文件、`__pycache__`/`.venv`/`build` 等目录不入库
+   （语料目录里的"说明文档"描述的是语料本身，不属于校园知识）。
+
+### 6.6 待办分层推送（B18 · 二阶段）
+1. 档位配置：`XJT_NOTICE_PUSH_STAGES=D7,D2`（可加 `D0` 表示当天/逾期）；
+   调度时点 `XJT_NOTICE_PUSH_HOUR/MINUTE`（默认 08:00，Asia/Shanghai）。
+2. 定时执行需 Celery：`celery -A app.core.celery_app:celery_app worker -l info -P solo -B`
+   （`-B` 启动 beat；生产建议 beat 单独一个实例）。
+3. 未启用 Celery（无 Redis）时**手动触发**：
+   `POST /api/v1/admin/notices/dispatch`（`async=false` 同步返回统计，支持 `dry_run` 与 `now` 时间基准）。
+4. **验收/回归不必等 7 天**：传 `now=<未来时间>` 即可模拟"再过 5 天应命中 D-2"。
+5. 排查「为什么没推送」：`GET /api/v1/admin/notices/pending` 看 `stage`（`null`=未进窗口）与 `pushed`。
+6. 私密推送行：写入 `campus_notice`，`target_grade='__push:<kind>:<id>:<stage>'`（幂等键），
+   `GET /life/notices` 会过滤它们；本人经 `notice-feed`/`notices/unread` 可见；
+   回收用 `POST /admin/notices/purge-private`。
+
+### 6.7 文档解析器扩展（B16）
+- 新格式接入：`app/services/parser/__init__.py` 里 `register(kind, bytes_parser, exts)`，
+  解析器签名 `fn(data: bytes, name: str) -> ParsedDoc`（见 `base.finalize`）。
+- PDF 三层引擎：`pypdf` → `pdfminer.six` → 内置（标准库）。安装 `pypdf` 可提升压缩对象流/加密 PDF 的成功率；
+  能力边界（扫描件、缺 `/ToUnicode` 等）会写进响应的 `warnings`，不静默丢内容。
+- 单测：`python -m pytest tests/test_kb_parser.py -q`（纯解析，不依赖数据库）。
+
 ## 7. 编码规范（Copilot 已按此执行）
 
 - 语言：注释/文档/消息简体中文；标识符英文
