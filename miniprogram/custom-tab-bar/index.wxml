@@ -1,0 +1,16 @@
+<!-- F12 POC：自定义 TabBar —— 5 项 + AI 居中凸起圆形（长按唤起语音） -->
+<view class="tabbar {{hidden ? 'tabbar--hidden' : ''}} {{glassFallback ? 'is-glass-fallback' : ''}}">
+  <view
+    wx:for="{{list}}"
+    wx:key="pagePath"
+    class="tabbar-item {{item.raised ? 'tabbar-item--raised' : ''}} {{selected === index ? 'is-active' : ''}}"
+    data-path="{{item.pagePath}}"
+    data-raised="{{item.raised}}"
+    bindtap="onItemTap"
+    bindlongpress="onItemLongPress"
+  >
+    <!-- AI 项：居中凸起圆形按钮（POC 用文字「AI」标识，图标待 F11 图标集合入后接入） -->
+    <view wx:if="{{item.raised}}" class="tabbar-fab xj-glass-strong">AI</view>
+    <view class="tabbar-label">{{item.text}}</view>
+  </view>
+</view>

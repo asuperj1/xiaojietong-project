@@ -1,4 +1,6 @@
 // 服务页（Tab）—— 业务大宫格（与首页宫格一致的常驻入口）
+const { syncTabBar } = require('../../utils/tabbar')
+
 Page({
   data: {
     gridItems: [
@@ -11,6 +13,11 @@ Page({
       { id: 7, name: '通知公告', icon: '/static/icons/notice.png', url: '/pages/life/notices', tab: false },
       { id: 8, name: '任务中心', icon: '/static/icons/task.png', url: '/pages/agent/index', tab: false },
     ],
+  },
+
+  // F12：自定义 TabBar 需要在每个 Tab 页 onShow 同步选中项
+  onShow() {
+    syncTabBar(this, 'service')
   },
 
   onGridTap(e) {

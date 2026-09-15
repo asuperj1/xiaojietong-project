@@ -1,0 +1,100 @@
+/* ============================================================
+   F12 POC：自定义 TabBar 样式
+   依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §1.4
+     - 5 项，AI 居中「圆形放大按钮」（直径约 96rpx，上浮，玻璃底 + 蓝色描边）
+   复用 F10 玻璃样式库（@import 使其在组件内自洽，不依赖宿主页面样式）：
+     - 默认态即「安全可读」，@supports 命中才升级为真毛玻璃
+     - .is-glass-fallback 由组件按 wx 能力探测结果自行挂载
+   所有 var() 均带 literal fallback，能力缺失不会导致样式丢失。
+   ============================================================ */
+@import "../styles/glass.wxss";
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+
+  display: flex;
+  align-items: stretch;
+  height: 100rpx;
+  /* iOS 底部安全区（constant 在前，兼容旧版 WebView） */
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: content-box;
+
+  /* 玻璃底：默认走 glass.wxss 的「安全底」，@supports 命中时自动升级 */
+  background: rgba(255, 255, 255, 0.86);
+  background: var(--xj-glass-bg-reduced, rgba(255, 255, 255, 0.86));
+  border-top: 1rpx solid rgba(255, 255, 255, 0.55);
+  border-top: 1rpx solid var(--xj-glass-border, rgba(255, 255, 255, 0.55));
+  box-shadow: 0 -8rpx 24rpx rgba(31, 38, 135, 0.08);
+  /* FAB 需要溢出顶边，禁止裁剪 */
+  overflow: visible;
+
+  transition: transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    opacity 300ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* 全屏态：整体下移隐藏（保留 DOM，避免反复创建销毁组件） */
+.tabbar--hidden {
+  transform: translateY(110%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tabbar-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* 5 项均匀分布；AI 项靠此列的负 margin 上浮出来 */
+  padding-top: 8rpx;
+  box-sizing: border-box;
+}
+
+.tabbar-label {
+  font-size: 22rpx;
+  line-height: 1.2;
+  color: #8A9099;
+  color: var(--xj-text-secondary, #8A9099);
+  transition: color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tabbar-item.is-active .tabbar-label {
+  color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
+  font-weight: 600;
+  font-weight: var(--xj-font-weight-semibold, 600);
+}
+
+/* ---- AI 居中凸起圆形按钮 ---- */
+.tabbar-fab {
+  width: 96rpx;
+  height: 96rpx;
+  border-radius: 50%;
+  /* 上浮：负外边距把圆顶出 TabBar 顶边，形成「凸起」 */
+  margin-top: -40rpx;
+  margin-bottom: 6rpx;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30rpx;
+  font-weight: 600;
+  font-weight: var(--xj-font-weight-semibold, 600);
+  color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
+  /* 玻璃底 + 蓝色描边（xj-glass-strong 提供玻璃底，这里补描边与圆形阴影） */
+  border: 2rpx solid rgba(74, 144, 217, 0.55);
+  box-shadow: 0 8rpx 20rpx rgba(74, 144, 217, 0.22),
+    inset 0 2rpx 0 rgba(255, 255, 255, 0.6);
+}
+
+/* 按下反馈（长按语音的即时视觉确认，配合震动） */
+.tabbar-item--raised:active .tabbar-fab {
+  transform: scale(0.96);
+  transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}

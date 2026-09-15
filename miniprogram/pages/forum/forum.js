@@ -1,6 +1,7 @@
 // 论坛页（Tab）—— F7：帖子列表（最新/分类/热点）+ 发帖入口
 const { request } = require('../../services/request')
 const { formatTime } = require('../../utils/format')
+const { syncTabBar } = require('../../utils/tabbar')
 
 const CATS = [
   { label: '全部', value: '' },
@@ -23,6 +24,8 @@ Page({
   },
 
   onShow() {
+    // F12：同步自定义 TabBar 选中项
+    syncTabBar(this, 'forum')
     // Tab 每次进入刷新列表（发帖/点赞返回后保持最新）
     this.refresh()
   },
