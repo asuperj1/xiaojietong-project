@@ -88,6 +88,12 @@ def main() -> None:
     with jt_db.begin() as tx:
         item_id = sh.publish(1, "测试出售-高数教材", "九成新", "教材", 25.00)
         assert item_id > 0
+        # 审计 DATA-01 加固后，match_items_for_wish 会过滤掉 audit_status != 1 的物品
+        # （"AI 供需匹配不得返回待审物品"，这是**正确的安全行为**）。
+        # 而 publish() 不写 audit_status，落到表默认值（待审）⇒ 匹配不到自己刚发布的商品。
+        # 所以测试数据要先"过审"，否则本行断言恒失败 —— 这就是本文件此前卡在 L93 的原因。
+        assert jt_db.execute(
+            "UPDATE secondhand_item SET audit_status = 1 WHERE id = ?", [item_id])[0] > 0
         wish_id = sh.create_wish(2, "求购高数教材", "教材", 30.00)
         assert wish_id > 0
         matched = sh.match_items_for_wish(wish_id)
