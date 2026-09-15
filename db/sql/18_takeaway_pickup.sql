@@ -31,30 +31,29 @@ CREATE TABLE IF NOT EXISTS `pickup_point` (
     `id`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `name`           VARCHAR(128)    NOT NULL                COMMENT '驿站名（如 菜鸟驿站·一食堂店）',
     `address`        VARCHAR(255)    NOT NULL DEFAULT ''     COMMENT '地址 / 位置描述',
-    `business_hours` VARCHAR(64)     NOT NULL DEFAULT ''     COMMENT '营业时间',
-    `latitude`       DECIMAL(10,6)   NOT NULL DEFAULT 0      COMMENT '纬度',
+    `open_time`    VARCHAR(64)     NOT NULL DEFAULT ''     COMMENT '营业时间（如 07:30-21:00）',
+    `campus`       VARCHAR(32)     NOT NULL DEFAULT ''     COMMENT '所属校区（空=全部）',
     `longitude`      DECIMAL(10,6)   NOT NULL DEFAULT 0      COMMENT '经度',
     `contact_phone`  VARCHAR(32)     NOT NULL DEFAULT ''     COMMENT '联系电话',
     `sort`           INT             NOT NULL DEFAULT 0      COMMENT '排序，越大越靠前',
-    `status`         TINYINT         NOT NULL DEFAULT 1      COMMENT '1启用 0停用',
+    `enabled`      TINYINT         NOT NULL DEFAULT 1      COMMENT '0 停用 1 启用',
     `is_deleted`     TINYINT         NOT NULL DEFAULT 0      COMMENT '软删除 0否 1是',
     `created_at`     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at`     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    KEY `idx_status_sort` (`status`, `sort`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='快递驿站 / 取件点';
+    KEY `idx_enabled_sort` (`enabled`, `sort`),
+    KEY `idx_campus` (`campus`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='取件驿站（代收业务）';
 
--- 种子（固定主键 + ON DUPLICATE KEY UPDATE ⇒ 重跑不产生重复行）
-INSERT INTO `pickup_point` (`id`, `name`, `address`, `business_hours`, `sort`, `status`) VALUES
-    (1, '菜鸟驿站·一食堂店', '第一食堂东侧 10 米',       '08:00-20:00', 30, 1),
-    (2, '京东快递·图书馆店', '图书馆一层北门内',         '09:00-19:00', 20, 1),
-    (3, '顺丰驿站·三公寓店', '第三学生公寓 1 号楼门厅',   '08:30-20:30', 10, 1)
-ON DUPLICATE KEY UPDATE
-    `name`           = VALUES(`name`),
-    `address`        = VALUES(`address`),
-    `business_hours` = VALUES(`business_hours`),
-    `sort`           = VALUES(`sort`),
-    `status`         = VALUES(`status`);
+-- 种子（**固定主键 + ON DUPLICATE KEY UPDATE**：可补齐缺行、可更新文案、不重复插入）
+INSERT INTO `pickup_point` (`id`, `name`, `address`, `open_time`, `campus`, `sort`, `enabled`) VALUES
+  (1, '三教快递柜',       '第三教学楼东侧一层',  '24 小时',     '',         50, 1),
+  (2, '中心馆驿站',       '中心图书馆北门旁',    '07:30-21:30', '',         40, 1),
+  (3, '行政楼快递站',     '行政楼 108 旁',       '08:30-18:00', '',         30, 1),
+  (4, '学生活动中心驿站', '学生活动中心西侧',    '08:00-20:00', '',         20, 1),
+  (5, '南区菜鸟驿站',     '南区生活区 3 号楼下', '07:00-22:00', '前卫南区', 10, 1)
+ON DUPLICATE KEY UPDATE `name`=VALUES(`name`), `address`=VALUES(`address`), `open_time`=VALUES(`open_time`),
+  `campus`=VALUES(`campus`), `sort`=VALUES(`sort`), `enabled`=VALUES(`enabled`);
 
 -- ============================================== PART B · takeaway_order 改造
 -- ---------------------------------------------- STEP 1/4 先加**可空** biz_type
@@ -149,7 +148,9 @@ SELECT CONCAT('历史代买存量 = ', SUM(`biz_type` = 1), ' 行，代收 = ', 
               ' 行，总行数 = ', COUNT(*)) AS `回填自检（历史行必须全是 biz_type=1）`
 FROM `takeaway_order`;
 
-SELECT CONCAT('pickup_point 行数 = ', COUNT(*), '，启用 = ', SUM(`status` = 1)) AS `驿站自检`
+-- 驿站自检：真实表用的是 `enabled`（0 停用 / 1 启用），
+-- 原写法引用 `status` 会报 ERROR 1054 Unknown column 'status'。
+SELECT CONCAT('pickup_point 行数 = ', COUNT(*), '，启用 = ', SUM(`enabled` = 1)) AS `驿站自检`
 FROM `pickup_point`;
 
 -- ============================================================

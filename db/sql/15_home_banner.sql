@@ -5,7 +5,7 @@
 --
 -- 字段契约（权威出处）：
 --   docs/二阶段整改方案-前端UI重构与后端支撑.md L324（旧编号 C30 / 现 C24）：
---   `title`/`image`/`link_type`/`link_target`/`sort`/`start_at`/`end_at`/`enabled`
+--   `title`/`image_url`/`link_url`/`sort`/`start_at`/`end_at`/`enabled`
 --
 -- 幂等性：
 --   · 建表用 `CREATE TABLE IF NOT EXISTS` —— 重复执行不报错、**不清空数据**；
@@ -25,9 +25,8 @@ USE xiaojietong;
 CREATE TABLE IF NOT EXISTS `home_banner` (
     `id`          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `title`       VARCHAR(128)    NOT NULL DEFAULT ''        COMMENT '轮播标题',
-    `image`       VARCHAR(255)    NOT NULL DEFAULT ''        COMMENT '图片 URL',
-    `link_type`   VARCHAR(32)     NOT NULL DEFAULT 'none'    COMMENT '跳转类型 none/page/notice/url',
-    `link_target` VARCHAR(255)    NOT NULL DEFAULT ''        COMMENT '跳转目标（页面路径 / 公告 id / URL）',
+    `image_url`  VARCHAR(255)    NOT NULL DEFAULT ''        COMMENT '图片地址',
+    `link_url`   VARCHAR(255)    NOT NULL DEFAULT ''        COMMENT '跳转地址（小程序路径或外链）',
     `sort`        INT             NOT NULL DEFAULT 0         COMMENT '排序，越大越靠前',
     `start_at`    DATETIME        NULL     DEFAULT NULL      COMMENT '生效开始，NULL=立即生效',
     `end_at`      DATETIME        NULL     DEFAULT NULL      COMMENT '生效结束，NULL=永不过期',
@@ -40,18 +39,14 @@ CREATE TABLE IF NOT EXISTS `home_banner` (
 
 -- ---------------------------------------------------------------- 种子（幂等）
 -- 固定主键 + ON DUPLICATE KEY UPDATE：重跑只更新，不会重复插入。
-INSERT INTO `home_banner` (`id`, `title`, `image`, `link_type`, `link_target`, `sort`, `enabled`)
-VALUES
-    (1, '校园通知新版上线', '/static/images/banner-notice.png', 'page',   '/pages/notice/index', 30, 1),
-    (2, 'AI 助手帮你答疑',  '/static/images/banner-ai.png',     'page',   '/pages/ai/index',     20, 1),
-    (3, '二手交易更放心',   '/static/images/banner-second.png', 'page',   '/pages/second/index', 10, 1)
-ON DUPLICATE KEY UPDATE
-    `title`       = VALUES(`title`),
-    `image`       = VALUES(`image`),
-    `link_type`   = VALUES(`link_type`),
-    `link_target` = VALUES(`link_target`),
-    `sort`        = VALUES(`sort`),
-    `enabled`     = VALUES(`enabled`);
+-- 幂等种子：单语句 + WHERE NOT EXISTS —— 跑几遍都只插一次（原写法每跑一次多 3 条）。
+-- 种子（**固定主键 + ON DUPLICATE KEY UPDATE**：可补齐缺行、可更新文案、不重复插入）
+INSERT INTO `home_banner` (`id`, `title`, `image_url`, `link_url`, `sort`, `enabled`) VALUES
+  (1, '迎新季·校园服务上新',   '/static/banners/welcome.png',    '/pages/service/service',  30, 1),
+  (2, 'AI 助手·一句话办校园事', '/static/banners/ai.png',         '/pages/agent/index',      20, 1),
+  (3, '二手好物·闲置漂流',     '/static/banners/secondhand.png', '/pages/secondhand/index', 10, 1)
+ON DUPLICATE KEY UPDATE `title`=VALUES(`title`), `image_url`=VALUES(`image_url`),
+  `link_url`=VALUES(`link_url`), `sort`=VALUES(`sort`), `enabled`=VALUES(`enabled`);
 
 -- ---------------------------------------------------------------- 自检
 SELECT column_name AS `列`, column_type AS `类型`, is_nullable AS `可空`, column_comment AS `说明`
