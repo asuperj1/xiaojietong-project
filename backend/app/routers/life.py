@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from app.core.deps import get_current_user
 from app.core.response import BizError, err_param, ok, paged
 from app.db import cpp_bridge
+from app.schemas.notice import coerce_extended_fields
 from app.services import notice as notice_service
 from app.services import notice_scheduler
 from app.services.storage import resign
@@ -127,8 +128,10 @@ def notices(
         probe += 1
     items = items[:size]
     # B20：deadline/materials/importance 已由 LifeDAO.page_notices 直接 SELECT 返回
-    # （C++ 侧已对齐 14_notice_extend.sql，见 db/cpp_driver/src/dao/life_dao.cpp），
-    # 因此这里不再需要 Python 补查。
+    # （C++ 侧已对齐 14_notice_extend.sql，见 db/cpp_driver/src/dao/life_dao.cpp）。
+    # 这里只做**契约规范化**：缺列补 None、importance 字符串转 int，保证前端字段恒定。
+    for item in items:
+        coerce_extended_fields(item)
     return ok(paged(items, len(items), page, size))
 
 

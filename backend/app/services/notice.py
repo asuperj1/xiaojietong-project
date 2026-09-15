@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.db import cpp_bridge
+from app.schemas.notice import EXTENDED_FIELD_NAMES
 from app.services.notice_scheduler import PRIVATE_TARGET_PREFIX, notice_extended_columns
 
 _MAX_TAG_HITS = 3
@@ -26,8 +27,10 @@ _MAX_NOTICES = 200
 _PRIVATE_LIKE = f"{PRIVATE_TARGET_PREFIX}%"
 
 _BASE_COLUMNS = ("id", "title", "content", "source", "category", "target_grade", "publish_time")
-# B19 的 14_notice_extend.sql 提供的扩展列（B20 契约字段）
-_EXTENDED_NAMES = ("deadline", "materials", "importance")
+# B19 的 14_notice_extend.sql 提供的扩展列（B20 契约字段）。
+# 列名的**唯一声明源**在 app/schemas/notice.py（SQL / C++ DAO / Pydantic 契约三方对齐），
+# 这里改为引用，避免改一处漏一处。
+_EXTENDED_NAMES = EXTENDED_FIELD_NAMES
 
 
 def notice_columns(alias: str = "") -> str:
