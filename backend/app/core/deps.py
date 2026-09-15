@@ -8,7 +8,7 @@ import jwt
 from fastapi import Depends, Header
 
 from app.core.response import err_auth, err_forbidden, err_token
-from app.core.security import decode_token
+from app.core.security import decode_token, token_version_of
 from app.db import cpp_bridge
 
 
@@ -29,6 +29,10 @@ def get_current_user(authorization: str = Header(default="")) -> Optional[dict]:
         raise err_forbidden("用户不存在")
     if user.get("status") == "1":
         raise err_forbidden("账号已禁用")
+    # C22：token 版本号比对 —— 登出/改密会把库里版本 +1，旧 token 就此失效。
+    # 老 token 没有 tv ⇒ token_version_of 返回 0；库列默认也是 0 ⇒ 不会误踢。
+    if token_version_of(payload) != int(user.get("token_version", 0) or 0):
+        raise err_token()
     return user
 
 

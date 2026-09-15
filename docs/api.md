@@ -98,7 +98,25 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### POST /auth/refresh
 请求 `{ "refresh_token": "..." }` → 响应 `{ "token": "...", "refresh_token": "..." }`
 
-### POST /auth/logout — 登出（可无 token）
+**C22**：refresh 也会校验 `tv`（token 版本号）——登出后旧 refresh_token 同样失效，**不能靠 refresh 绕过登出**。
+refresh_token 载荷同样带 `tv`；老 refresh_token 无 `tv` 时按 0 处理（兼容）。
+
+### POST /auth/logout — 登出（可无 token，幂等）
+
+请求头**可选** `Authorization: Bearer <token>`：
+
+| 情况 | 行为 |
+|---|---|
+| **带头** | 该用户 `token_version` +1 ⇒ **已签发的全部 access/refresh token 立即失效**；旧 token 再访问任何鉴权接口返回 `2001`，`/auth/refresh` 也拒绝 |
+| **不带头** | 无副作用，仍返回 `ok`（幂等，前端可无条件调用） |
+
+响应 `data`：`{ "ok": true, "token_version": <新版本号> }`
+
+> **实现**：依赖 `user.token_version` 列（B19 `db/sql/17_user_student_no.sql`，默认 0）。
+> JWT 载荷新增 `tv` 声明；`deps.get_current_user` 比对 `payload.tv == user.token_version`，不一致 ⇒ `2001`。
+> **向后兼容**：老 token 无 `tv` ⇒ 按 0 处理，恰好等于库列默认值 ⇒ **不会把已登录用户误踢下线**。
+> ⚠️ 改动前 logout 是 **no-op**（注释「无状态 JWT：前端丢弃 token 即可」），服务端无法吊销 token；
+> 同时 `/auth/refresh` 未校验用户状态，存在「登出后仍可 refresh」的漏洞。本版一并修掉。
 
 ### GET /user/me — 我的信息
 响应 `data`：同 login 的 `user` 结构。
@@ -795,4 +813,5 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.16 | 2026-09-13 | **B18 分层推送调度**：新增 `services/notice_scheduler.py` + Celery beat 定时任务（每日 `XJT_NOTICE_PUSH_HOUR`）——待办到期前 **D-7 / D-2**（可选 `D0`）主动生成 `notice_delivery`；`reminder` 与 `campus_notice.deadline`（B19 列，自动探测）双来源；幂等键为「待办 × 档位」（`target_grade=__push:...`），手动补跑不重复推送；`GET /life/notices` 显式过滤私密推送行（不泄漏给他人，本人经未读/信息流可见）；新增 `POST /admin/notices/dispatch`（触发，支持 `now` 时间基准与 `dry_run`）、`GET /admin/notices/pending`（到期一览）、`POST /admin/notices/purge-private`（回收） |
 | v1.17 | 2026-09-13 | **PR #60 审查修复（1×P0 + 2×P1）**：① **P0** `GET /life/notices` 私密行泄漏——`LifeDAO.page_notices` 的 SELECT 不含 `target_grade`，按字段过滤恒失效，改为按 **id 集合**剔除（`private_notice_ids()`，剔除后最多补拉 2 页）；② **P1** `POST /admin/knowledge/purge` 增加通配符护栏（`%`/`_`/`\` 转义为字面匹配、前缀 <3 字符拒绝、新增 `dry_run` 预览）；③ **P1** 移除恒真空断言：`/life/notices` 零泄漏改为「id 不在公共列表 + 公共列表非空 + 调度前后集合不变」三重验证，越权用例改用普通账号（`err_forbidden` = HTTP 403 + `2003`） |
 | v1.18 | 2026-09-13 | **B19 通知表结构扩展 + B20 字段契约**：新增 `db/sql/14_notice_extend.sql`（**幂等**、可回滚）为 `campus_notice` 增加 `deadline`/`materials`/`importance`（均允许 NULL，不动现有数据）+ `idx_deadline` 索引；B20 契约：`/life/notice-feed`、`/life/notices/unread`、`/life/notices` 自动返回这 3 个新字段（**列不存在时不 SELECT，行为与 v1.17 一致**，向后兼容）；`importance` 计入通知流得分（+0.2/级）与 B18 推送得分，推送正文追加材料清单 |
+| v1.19 | 2026-09-15 | **C22 学号唯一 + 限频 + token 版本号**：① `POST /auth/logout` 由 **no-op 变真登出**——`user.token_version` +1，已签发 token 全部失效（`deps.get_current_user` 比对 `tv` 声明）；② `/auth/refresh` 补 `tv` 校验，堵住「登出后仍可刷新」漏洞；③ 新 DAO `UserDAO.update_student_no`（含 `student_no_updated_at` 刷新）/ `student_no_change_remaining_days`（返回 0 可改 / >0 还需 N 天 / -1 用户不存在）/ `bump_token_version`；④ 学号唯一性由 `uk_student_no` 唯一索引兜底（B19 `17_`）；⑤ **向后兼容**：老 token 无 `tv` 按 0 处理，不误踢在线用户 |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
