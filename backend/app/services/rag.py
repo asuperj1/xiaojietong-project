@@ -250,6 +250,8 @@ async def index_doc(doc_id: int) -> dict:
         doc.get("content") or "",
         settings.rag_chunk_size,
         settings.rag_chunk_overlap,
+        # C15：切片策略可插拔（默认 fixed，与 C15 之前行为一致）
+        strategy=settings.rag_chunk_strategy,
     )
     if not chunks:
         # 无可分块文本：直接标记完成（避免卡在待向量化）
