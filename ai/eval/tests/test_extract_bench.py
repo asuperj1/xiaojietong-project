@@ -80,11 +80,15 @@ def test_dataset_contains_hard_cases():
 # ------------------------------------------------------------ 指标计算 ----
 
 def test_prf_hand_computed():
-    """手算对照：TP=3 FP=1 FN=2 → P=0.75 R=0.6 F1=0.6667。"""
+    """手算对照：TP=3 FP=1 FN=2 → P=0.75 R=0.6 F1=0.6667。
+
+    容差 1e-3：`prf` 会把结果 round 到 4 位小数（见其 docstring），
+    所以 0.66666... 变成 0.6667。
+    """
     m = eb.prf(tp=3, fp=1, fn=2)
     assert m["precision"] == pytest.approx(0.75)
     assert m["recall"] == pytest.approx(0.6)
-    assert m["f1"] == pytest.approx(0.6666666, abs=1e-6)
+    assert m["f1"] == pytest.approx(0.6667, abs=1e-3)
 
 
 def test_prf_no_samples_returns_none_not_zero():
@@ -258,18 +262,33 @@ def test_aggregate_all_wrong_is_zero():
 
 
 def test_aggregate_micro_differs_from_macro():
-    """构造"某个字段全错、其它全对"的场景，micro 与 macro 必须不同。
+    """micro 按样本数加权，macro 等权 —— 两者只在**各字段样本量不同**时才分得开。
 
-    如果两者永远相等，说明其中一个写错了（很可能 macro 只是抄了 micro）。
+    ⚠️ 这里有个我第一版就写错的点：若所有样本都带全部字段、且只有**一个字段**出错，
+    micro 和 macro 会**恰好相等**（都是 0.9667），断言 `!=` 直接失败。
+    所以必须构造成「一个字段样本量大且全对 + 另一个字段样本量小且全错」：
+      · category   24 条全对（22 条 big + 2 条 small，small 的 category 也答对）
+                   → TP=24 FP=0 FN=0 → F1 = 1.0
+      · importance  2 条全错（真值 5 → 预测 1，且只这 2 条带 importance）
+                   → TP=0 FP=2 FN=2 → F1 = 0.0
+      · macro = (1.0 + 0.0) / 2 = 0.5
+      · micro = 24/(24+2) = 0.9231（按样本加权，被 2 条拖不动那么多）
+    这也正是读报告时要看两个口径的原因：差距大 = 模型能力不均衡。
     """
-    exp = {"category": "奖学金", "importance": 5, "deadline": "2026-09-30", "entities": []}
-    good = dict(exp)
-    # entities 在 exp 里为空，所以只破坏 category
-    bad = dict(exp, category="错的")
-    rows = _rows_for([good] * 9 + [bad] * 1, exp)
+    big = {"category": "奖学金", "importance": None, "deadline": None, "entities": []}
+    small = {"category": "通知", "importance": 5, "deadline": None, "entities": []}
+
+    rows = [{"id": f"B{i}", "score": eb.score_case(dict(big), big)} for i in range(22)]
+    # importance 全错（真值 5 → 预测 1），category 仍答对
+    wrong_small = dict(small, importance=1)
+    rows += [{"id": f"S{i}", "score": eb.score_case(dict(wrong_small), small)} for i in range(2)]
+
     agg = eb.aggregate(rows)
-    assert agg["micro"]["f1"] is not None and agg["macro_f1"] is not None
-    assert agg["micro"]["f1"] != agg["macro_f1"]
+    assert agg["per_field"]["category"]["f1"] == 1.0
+    assert agg["per_field"]["importance"]["f1"] == 0.0
+    assert agg["macro_f1"] == pytest.approx(0.5, abs=1e-3)
+    assert agg["micro"]["f1"] == pytest.approx(0.9231, abs=1e-3)
+    assert agg["micro"]["f1"] != agg["macro_f1"], "两口径必须分得开，否则其中一个写错了"
 
 
 # ---------------------------------------------------------------- 对比 ----
@@ -332,16 +351,64 @@ def test_few_shot_prompt_differs():
     assert eb.build_prompt(text, "few-shot", ex) != eb.build_prompt(text, "zero-shot")
 
 
-def test_few_shot_examples_exclude_eval_cases():
-    """few-shot 示例绝不能取自本批评测样本。
+def test_few_shot_prompt_differs_with_real_fixture():
+    """用**真实示例文件**验证 prompt 确实变了。
 
-    否则是把答案直接喂进去，F1 会虚高 —— 这种"作弊"一问就穿帮。
+    上一个测试用的是手搓示例；这个用生产文件，防止"示例文件格式改了、
+    拼 prompt 时没读到"这类只能靠真实文件才暴露的问题。
     """
+    fs_path = EVAL_DIR / "fixtures" / "few_shot_examples.json"
+    examples = eb.load_few_shot_examples(fs_path, 3)
+    text = "关于选课系统开放的通知：9月26日至9月28日可选课。"
+    fs_prompt = eb.build_prompt(text, "few-shot", examples)
+    zs_prompt = eb.build_prompt(text, "zero-shot")
+    assert fs_prompt != zs_prompt
+    # 示例内容必须真的出现在 prompt 里（而不只是加了一句"以下是示例"）
+    assert examples[0]["text"] in fs_prompt
+
+
+def test_few_shot_examples_do_not_overlap_dataset():
+    """few-shot 示例与评测集**不能有 id 重合**。
+
+    历史教训：早期版本从评测集里抽示例（排除本次抽样 id），
+    在**全量评测**时排除集合等于全部 id ⇒ 示例池为空 ⇒ few-shot 静默退化成 zero-shot，
+    两个模式的 micro-F1 一模一样（0.3043）。
+    改成独立文件后，用这条测试锁死两者不重合。
+    """
+    fs_path = EVAL_DIR / "fixtures" / "few_shot_examples.json"
+    examples = eb.load_few_shot_examples(fs_path, 10)
+    assert examples, "示例文件不能为空"
+
     cases = json.loads(DATASET_PATH.read_text(encoding="utf-8"))["cases"]
-    eval_ids = {c["id"] for c in cases[:5]}
-    ex = eb.build_few_shot_examples(cases, 3, exclude_ids=eval_ids)
-    assert len(ex) == 3
-    assert not ({e["id"] for e in ex} & eval_ids)
+    case_ids = {c["id"] for c in cases}
+    assert not ({e["id"] for e in examples} & case_ids), "示例与评测集 id 重合 = 泄题"
+
+    # 文本也不能重复（换个 id 抄同样的话一样是泄题）
+    case_texts = {c["text"] for c in cases}
+    assert not ({e["text"] for e in examples} & case_texts)
+
+
+def test_few_shot_k_limits_count():
+    fs_path = EVAL_DIR / "fixtures" / "few_shot_examples.json"
+    assert len(eb.load_few_shot_examples(fs_path, 2)) == 2
+    assert eb.load_few_shot_examples(fs_path, 0) == []
+
+
+def test_few_shot_mode_with_empty_examples_raises():
+    """示例为空时必须**硬失败**，不能静默退化成 zero-shot。
+
+    静默退化比报错危险得多：报告会照常打出 "few-shot" 字样和数字，
+    读者无从得知这个对照是假的。
+    """
+    import argparse
+    cases = json.loads(DATASET_PATH.read_text(encoding="utf-8"))["cases"][:2]
+    args = argparse.Namespace(mode="few-shot", few_shot_k=3, temperature=0.0,
+                              dataset=Path("ds.json"), backend="scripted",
+                              scripted_answers="", few_shot_from="")
+    with pytest.raises(SystemExit) as exc:
+        eb.run_mode(args, {"cases": cases}, cases, eb.ScriptedBackend.__new__(eb.ScriptedBackend),
+                    few_shot_examples=[])
+    assert "few-shot" in str(exc.value)
 
 
 def test_stratified_sample_covers_multiple_categories():
@@ -479,4 +546,5 @@ def _make_args(tmp_path, mode: str, scripted: Path):
     return argparse.Namespace(
         mode=mode, few_shot_k=3, temperature=0.0, dataset=tmp_path / "ds.json",
         backend="scripted", scripted_answers=str(scripted),
+        few_shot_from=str(EVAL_DIR / "fixtures" / "few_shot_examples.json"),
     )

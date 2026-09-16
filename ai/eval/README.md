@@ -94,10 +94,44 @@ python ai/eval/extract_bench.py --backend ollama --model xjt-3b \
 | 相对时间表述 | 能否结合基准日推算 |
 | 一句话多个时间 | 抽的是"截止"还是别的活动时间 |
 
+### 实测结果（2026-09-16，本地 Ollama）
+
+评测集全 24 条，`temperature=0`：
+
+| 模式 | 模型 | micro-F1 | macro-F1 | 严格匹配 | 解析失败 | ΔF1 |
+|---|---|---|---|---|---|---|
+| zero-shot | `qwen2.5:3b` | 0.3043 | 0.2947 | 0.0 | 0 | 基线 |
+| **few-shot** | `qwen2.5:3b` | **0.4693** | 0.4489 | **0.0417** | 0 | **+16.5 pt** ✅ |
+| finetuned | `xjt-3b` | 0.2418 | 0.2423 | 0.0 | 0 | −6.25 pt ❌ |
+
+**两个结论，都必须如实说明：**
+
+**1）微调后的 `xjt-3b` 比基座更差（−6.25pt）。**
+因为它是**对话/QA 微调**（C12），不是信息抽取微调 —— 被训练成了客服口吻。
+这不是框架的问题，恰恰是 C33 要做专用微调的实证理由。
+
+**2）0.3043 这个低分主要反映 prompt 缺信息，而不是模型抽取能力差。**
+失败样例的分布很集中，三类反复出现：
+
+| 现象 | 例子 | 根因 |
+|---|---|---|
+| 年份猜成 2022 | 期望 `2026-10-20`，预测 `2022-10-20` | prompt 没给当前日期 |
+| importance 系统性偏低 | 期望 4/5，预测 2/3 | prompt 没给评分细则 |
+| category 出现组合值 | `"通知/竞赛"` | 没有受控词表 |
+
+⇒ 这三条属于 **C35（提示工程）** 的范围。**C34 故意不改 prompt** ——
+否则 C35 就没有"优化前"的真实对照了。
+
+> ⚠️ `+16.5pt` **不能全部算作"示例的功劳"**：`few_shot_examples.json` 里的示例
+> 隐含了上面缺的两条标准（用 `reference_date` 所在年份、importance 判定标准），
+> 而 zero-shot 的 prompt 里没写。所以这里对比的不只是"有没有给例子"。
+> 把标准写进 zero-shot prompt 后重跑，才是干净的对照 —— 那是 C35 的工作。
+> 该文件 `notes` 已如实标注这一点。
+
 ### 测试
 
 ```bash
-python -m pytest ai/eval/tests/test_extract_bench.py -q     # 37 passed
+python -m pytest ai/eval/tests/test_extract_bench.py -q     # 40 passed
 ```
 
 测试写得很"不信任自己"：**5 处显式反向对照**，即每个关键断言都配一条"证明它不是恒真的"：
@@ -108,13 +142,21 @@ python -m pytest ai/eval/tests/test_extract_bench.py -q     # 37 passed
 4. few-shot 的 prompt 必须真的与 zero-shot 不同（否则三种模式没区别）
 5. 答案错一半时 F1 必须明显下降，且 > 0
 
-另有 4 处起同等作用的断言：`micro ≠ macro`、解析失败只记 FN 不记 FP、
-未达标必须退出码 1、评测集必须含 `null`-deadline 难点样本。
+另有 5 处起同等作用的断言：`micro ≠ macro`、解析失败只记 FN 不记 FP、
+未达标必须退出码 1、评测集必须含 `null`-deadline 难点样本、
+few-shot 示例与评测集 id **及文本**均不重合、示例为空必须报错。
 
 并且用**变异测试**验证过这些断言不是空转：故意破坏评分函数 8 处
 （F1 恒为 1、FP/FN 对调、不做归一化、few-shot 失效、finetuned prompt 被改、
 解析永不失败、实体键退化为 text、strict 恒真），测试**全部报错**
 （`killed=8 survived=0 skipped=0`）。
+
+> 为什么要这么较真：如果评分函数本身写错了，"F1 提升 15 个百分点"这个验收结论就是假的，
+> 而且**没人会再回头验证它**。
+>
+> 这套较真也确实抓到了自己的 bug：第一次全量跑时 few-shot 与 zero-shot 的 F1 **完全相同**
+> （都是 0.3043）。两个"不同"的对照给出同一个数字 ⇒ 优先怀疑参数没生效 ⇒ 果然是
+> 示例池为空导致的静默退化（见 `fixtures/few_shot_examples.json` 的 `why_separate_file`）。
 
 > 为什么要这么较真：如果评分函数本身写错了，"F1 提升 15 个百分点"这个验收结论就是假的，
 > 而且**没人会再回头验证它**。

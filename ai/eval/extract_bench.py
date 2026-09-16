@@ -146,14 +146,24 @@ def stratified_sample(cases: list[dict], limit: int) -> list[dict]:
     return out
 
 
-def build_few_shot_examples(cases: list[dict], k: int, exclude_ids: set[str]) -> list[dict]:
-    """从评测集里挑 k 条**不在本次评测范围**的样本作为 few-shot 示例。
+DEFAULT_FEW_SHOT = EVAL_DIR / "fixtures" / "few_shot_examples.json"
 
-    ⚠️ 必须排除评测样本本身，否则是把答案直接喂给模型 —— F1 会虚高，
-    这种"作弊"在答辩时一问就穿帮。
+
+def load_few_shot_examples(path: Path, k: int) -> list[dict]:
+    """从**独立文件**读 few-shot 示例。
+
+    为什么不从评测集里抽：
+    早期版本用「从评测集排除本次抽样 id」的做法，在**全量评测**时排除集合等于全部 id，
+    示例池直接为空，few-shot **静默退化**成 zero-shot ——
+    两个模式的 micro-F1 一模一样（0.3043），这个 bug 就是这么被发现的。
+    就算不退化成空，从评测集抽示例也有把答案泄进 prompt 的风险。
+
+    现在示例与评测集彻底解耦，并由 `main()` 校验两者 id 不重合。
     """
-    pool = [c for c in cases if c["id"] not in exclude_ids]
-    return pool[:k] if k > 0 else []
+    if k <= 0:
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return (data.get("examples") or [])[:k]
 
 
 # ------------------------------------------------------------ 提示构建 ----
@@ -325,14 +335,20 @@ def score_case(pred: dict | None, expected: dict) -> dict:
 
 
 def prf(tp: int, fp: int, fn: int) -> dict:
-    """标准 P/R/F1；分母为 0 时返回 None（**不是 0** —— 无样本≠全错）。"""
+    """标准 P/R/F1；分母为 0 时返回 None（**不是 0** —— 无样本≠全错）。
+
+    统一 round 到 4 位：否则报告里会出现 `0.5882352941176471` 这种
+    和其它指标精度不一致的数字，写进论文/报告还得手改。
+    """
     precision = tp / (tp + fp) if (tp + fp) else None
     recall = tp / (tp + fn) if (tp + fn) else None
     if precision is None or recall is None or (precision + recall) == 0:
         f1 = 0.0 if (tp or fp or fn) else None
     else:
         f1 = 2 * precision * recall / (precision + recall)
-    return {"precision": precision, "recall": recall, "f1": f1, "tp": tp, "fp": fp, "fn": fn}
+    rnd = lambda v: None if v is None else round(v, 4)  # noqa: E731
+    return {"precision": rnd(precision), "recall": rnd(recall), "f1": rnd(f1),
+            "tp": tp, "fp": fp, "fn": fn}
 
 
 def aggregate(rows: list[dict]) -> dict:
@@ -482,14 +498,35 @@ class OllamaBackend:
             return f"模型 `{self.model}` 不在 Ollama 中。已安装：{names}"
         return ""
 
+    def unload(self) -> None:
+        """请求 keep_alive=0，让 Ollama 立即卸载该模型释放显存。
+
+        为何必须：16GB 显存下多个模型共存会触发性能雪崩 ——
+        `ai/finetune/eval_compare.py` 实测过：xjt-3b(6.4GB) 与 qwen2.5:3b(2.2GB)
+        同时在卡上时，单次推理从 1.45s 恶化到 20.96s（14 倍）。
+        本脚本要连续跑三个模式（含 6.2GB 的 xjt-3b），不卸载会让后面的模式慢十倍。
+        """
+        payload = json.dumps({"model": self.model, "keep_alive": 0}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/api/generate", data=payload,
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30):
+                pass
+        except Exception:  # noqa: BLE001
+            pass  # 卸载失败不阻断评测
+
 
 # ---------------------------------------------------------------- 主流程 ----
 
-def run_mode(args, dataset: dict, cases: list[dict], backend) -> dict:
+def run_mode(args, dataset: dict, cases: list[dict], backend,
+             few_shot_examples: list[dict] | None = None) -> dict:
     """跑一种模式，返回报告 dict。"""
-    exclude = {c["id"] for c in cases}
-    examples = build_few_shot_examples(dataset["cases"], args.few_shot_k, exclude) \
-        if args.mode == "few-shot" else None
+    examples = few_shot_examples if args.mode == "few-shot" else None
+    if args.mode == "few-shot" and not examples:
+        # 硬性失败而不是继续跑：静默退化成 zero-shot 会产出“假对照”，
+        # 两个模式数字一样却写进报告 —— 这比报错难发现得多。
+        raise SystemExit("❌ few-shot 模式要求示例非空（不允许静默退化为 zero-shot）")
 
     rows: list[dict] = []
     parse_errors = 0
@@ -533,6 +570,8 @@ def run_mode(args, dataset: dict, cases: list[dict], backend) -> dict:
         "dataset_total": len(dataset["cases"]),
         "temperature": args.temperature,
         "few_shot_k": args.few_shot_k if args.mode == "few-shot" else 0,
+        "few_shot_source": _rel(args.few_shot_from) if (args.mode == "few-shot" and examples) else None,
+        "few_shot_ids": [e["id"] for e in examples] if examples else [],
         "metrics": metrics,
         "parse_errors": parse_errors,
         "parse_error_rate": round(parse_errors / len(rows), 4) if rows else None,
@@ -575,6 +614,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--modes", default="zero-shot",
                     help="逗号分隔：zero-shot / few-shot / finetuned")
     ap.add_argument("--few-shot-k", type=int, default=3)
+    ap.add_argument("--few-shot-from", default=str(DEFAULT_FEW_SHOT),
+                    help="few-shot 示例来源文件（默认 ai/eval/fixtures/few_shot_examples.json）；"
+                         "示例不得与评测集 id 重合")
     ap.add_argument("--scripted-answers", default="",
                     help="scripted 后端的答案文件（answers: {case_id: 输出文本}）")
     ap.add_argument("--limit", type=int, default=0, help="0 = 全部")
@@ -609,6 +651,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.backend == "ollama" and "few-shot" not in modes and "finetuned" not in modes:
         print("[extract_bench] 提示：只跑 zero-shot 时不需要 few-shot 示例")
 
+    # few-shot 示例：从独立文件读，并做两道硬校验
+    few_shot_examples: list[dict] = []
+    if "few-shot" in modes:
+        fs_path = Path(args.few_shot_from)
+        if not fs_path.is_absolute():
+            fs_path = REPO_ROOT / fs_path
+        if not fs_path.exists():
+            print(f"❌ few-shot 示例文件不存在：{fs_path}")
+            return 2
+        few_shot_examples = load_few_shot_examples(fs_path, args.few_shot_k)
+        if not few_shot_examples:
+            print(f"❌ few-shot 模式的示例不能为空（{fs_path}）。"
+                  "静默退化成 zero-shot 会产出假对照，所以这里直接失败。")
+            return 2
+        overlap = {e["id"] for e in few_shot_examples} & {c["id"] for c in cases}
+        if overlap:
+            print(f"❌ few-shot 示例与评测集 id 重合：{sorted(overlap)}"
+                  " —— 等于把答案喂进 prompt，F1 会虚高")
+            return 2
+        print(f"[extract_bench] few-shot 示例 {len(few_shot_examples)} 条，"
+              f"来自 {_rel(fs_path)}：{[e['id'] for e in few_shot_examples]}")
+
     reports: list[dict] = []
     for mode in modes:
         args.mode = mode
@@ -622,11 +686,14 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         print(f"[extract_bench] 模式 `{mode}` → 后端 `{backend.name}`"
               f"{f' 模型 `{backend.model}`' if hasattr(backend, 'model') else ''}")
-        report = run_mode(args, dataset, cases, backend)
+        report = run_mode(args, dataset, cases, backend, few_shot_examples)
         m = report["metrics"]
         print(f"  micro-F1 = {m['micro']['f1']} · macro-F1 = {m['macro_f1']} "
               f"· 严格匹配 = {m['strict_accuracy']} · 解析失败 = {report['parse_errors']}")
         reports.append(report)
+        # 跑完就卸载：否则下个模式要和本模型抢显存，推理会慢十倍以上
+        if isinstance(backend, OllamaBackend):
+            backend.unload()
 
     # 对比（只对最后一个模式；多模式时按需自行比对）
     exit_code = 0
