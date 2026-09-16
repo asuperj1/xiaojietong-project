@@ -1,9 +1,6 @@
 // 统一 HTTP 请求封装（F1B：普通请求 + SSE 流式请求）
 // 依据：miniprogram/前端页面规格.md §0、docs/api.md §0、backend/app/routers/chat.py
 // - base URL: 由 config/env.js 的 getBaseUrl() 统一解析（开发默认本机后端，见该文件说明）
-//   ⚠️ 解析可能失败（release 未配置 `RELEASE_BASE_URL` 会 throw）。两个入口都已捕获，
-//   并转为各自的**异步**错误通道（request → reject，sseRequest → onError），
-//   严禁让它在 Promise 创建前同步逃逸（详见 request() 内注释）。
 // - 统一响应 {code, message, data}；code=0 成功
 // - 登录后请求头携带 Authorization: Bearer <token>
 // - SSE：POST /chat/send，事件 sources / chunk / done（error 为文档预留）
@@ -18,18 +15,6 @@ const TOKEN_KEY = 'token'
 // 小程序端只调用用户接口，因此 2003 同属登录态失效，需与 2001/2002 一并处理；
 // （get_current_admin 的「需要管理员权限」小程序不会触发）
 const AUTH_FAILURE_CODES = [2001, 2002, 2003]
-
-// ---------------------------------------------------------------- 环境地址 ----
-// 环境解析失败（典型：release 未配置 `RELEASE_BASE_URL`）时的统一提示。
-// 提示语对用户可读；真实原因（含 env.js 抛出的详细文案）打在 console 便于定位。
-const ENV_ERROR_TOAST = '接口地址未配置，请联系管理员'
-
-// 统一的环境错误对象（带 code，便于调用方区分「配置错误」与业务错误）
-function makeEnvError() {
-  const err = new Error(ENV_ERROR_TOAST)
-  err.code = 'ENV_BASE_URL_UNAVAILABLE'
-  return err
-}
 
 // 按错误码生成提示文案：2003 场景给出「账号已被禁用」的明确指引
 function authFailureMessage(code, message) {
@@ -70,20 +55,7 @@ function handleAuthFailure(code, message) {
  */
 function request(path, { method = 'GET', data = {} } = {}) {
   // 路径兼容：确保以 "/" 开头（每次请求解析，真机调试改 storage 后可立即生效）
-  //
-  // ⚠️ 必须 try/catch：`getBaseUrl()` 在 release 未配置正式地址时会 throw，
-  // 而此处位于 `return new Promise(...)` **之前** —— 异常会在 Promise 创建前
-  // 同步逃逸，调用方写的 `.catch()` 接不到（实测：仓内 47 处 .catch 全部无效），
-  // 表现为「按钮没反应 + 无任何提示」。故统一转为 rejected Promise，
-  // 把错误送回调用方本就应该走的错误通道。
-  let url
-  try {
-    url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
-  } catch (e) {
-    console.error('[env] API 地址解析失败：', e)
-    wx.showToast({ title: ENV_ERROR_TOAST, icon: 'none' })
-    return Promise.reject(makeEnvError())
-  }
+  const url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
 
   // 自动读取本地 token（无 token 则不注入 Authorization）
   const token = wx.getStorageSync(TOKEN_KEY) || ''
@@ -192,21 +164,7 @@ function decodeUtf8Partial(bytes) {
  */
 function sseRequest(path, data = {}, { onSources, onChunk, onDone, onError } = {}) {
   // 与 request() 使用同一套环境解析规则（getBaseUrl）
-  //
-  // ⚠️ 同 request()：环境解析失败必须走 onError。若直接同步抛出，
-  // ① onError 永远不会被调用；② 调用方拿不到 RequestTask。
-  // 而 chat.js 是「先 setData({sending:true}) 再调 sseRequest」的写法，
-  // onError 不回 => sending 永远为 true => 对话页永久 loading、AI 气泡空白。
-  let url
-  try {
-    url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
-  } catch (e) {
-    console.error('[env] API 地址解析失败：', e)
-    wx.showToast({ title: ENV_ERROR_TOAST, icon: 'none' })
-    if (typeof onError === 'function') onError(makeEnvError())
-    // 保持 RequestTask 形状，避免调用方 task.abort() 报错
-    return { abort() {} }
-  }
+  const url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
   const token = wx.getStorageSync(TOKEN_KEY) || ''
 
   let textBuffer = ''                 // 已解码、待按事件边界切分的文本
