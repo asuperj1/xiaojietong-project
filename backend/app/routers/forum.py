@@ -117,16 +117,11 @@ def my_topics(
 
 @router.get("/{topic_id}")
 def topic_detail(topic_id: int, user: dict = Depends(get_current_user)):
-    # 审计 DATA-01（同类缺陷）：原实现只靠 t.status=0，**未过滤 audit_status**，
-    # 导致待审（0）/被拒（2）的帖子仍可通过详情接口被他人直读。
-    # 列表侧 page_topics(audited_only=true) 已过滤，此处补齐；作者本人仍可查看自己
-    # 的帖子（与“我的帖子”返回 audit_status 的设计意图一致，见本文件 post_topic）。
     rows = cpp_bridge.query(
         "SELECT t.*, u.nickname AS author_name FROM topic t "
         "JOIN user u ON t.author_id = u.id "
-        "WHERE t.id = ? AND t.status = 0 AND t.is_deleted = 0 "
-        "  AND (t.audit_status = 1 OR t.author_id = ?)",
-        [topic_id, int(user["id"])],
+        "WHERE t.id = ? AND t.status = 0 AND t.is_deleted = 0",
+        [topic_id],
     )
     if not rows:
         raise BizError(1001, "帖子不存在")

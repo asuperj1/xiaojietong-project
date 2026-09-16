@@ -5,7 +5,7 @@
 - 检索置信度低时明确回答"未收录"，避免幻觉（相似度低于阈值即视为未命中）。
 - **已落地**（`backend/app/services/`）：
   - `embedder.py`：bge-m3 embedding 客户端（批量 + 缓存 + 30s 熔断）
-    - `chunker.py`：**可插拔切片策略**（`C15`）——默认 `fixed`（中文句子聚合分块 600 字符 / 重叠 100，**与旧行为逐字节一致**）；可选 `semantic`（优先按段落切、**不把段落从中间切开**）。接口 `ChunkStrategy` / 注册表 `register_strategy()`；用 `XJT_RAG_CHUNK_STRATEGY` 切换
+  - `chunker.py`：中文句子聚合分块（600 字符 / 重叠 100）
   - `vector_store.py`：ChromaDB 持久化，缺依赖自动降级 numpy 余弦（pickle 持久化）
   - `rag.py`：`build_index()/index_doc()` 建索引、`retrieve()/build_system_prompt()` 检索（向量优先，失败降级关键词分词匹配）
 - 命令运维脚本（本目录）：

@@ -7,16 +7,16 @@ Page({
     quickLoading: false, // 快捷指令请求中（防重复点击）
     // 10 个宫格入口：统一 data 数组渲染，避免写十份重复 WXML
     gridItems: [
-      { id: 1, name: 'AI 助手', icon: '/static/icons/chat-bubble-left-right.svg', url: '/pages/chat/chat', tab: true },
-      { id: 2, name: '图书馆预约', icon: '/static/icons/book-open.svg', url: '/pages/library/index', tab: false },
-      { id: 3, name: '查空教室', icon: '/static/icons/building-library.svg', url: '/pages/library/freeRoom', tab: false },
-      { id: 4, name: '二手集市', icon: '/static/icons/shopping-bag.svg', url: '/pages/secondhand/index', tab: false },
-      { id: 5, name: '兼职实习', icon: '/static/icons/briefcase.svg', url: '/pages/job/index', tab: false },
-      { id: 6, name: '校园地图', icon: '/static/icons/map.svg', url: '/pages/map/index', tab: false },
-      { id: 7, name: '外卖点餐', icon: '/static/icons/shopping-cart.svg', url: '/pages/life/index', tab: false },
-      { id: 8, name: '通知公告', icon: '/static/icons/bell.svg', url: '/pages/life/notices', tab: false },
-      { id: 9, name: '校园论坛', icon: '/static/icons/user-group.svg', url: '/pages/forum/forum', tab: true },
-      { id: 10, name: '任务中心', icon: '/static/icons/clipboard-document-list.svg', url: '/pages/agent/index', tab: false },
+      { id: 1, name: 'AI 助手', icon: '/static/icons/ai-assistant.png', url: '/pages/chat/chat', tab: true },
+      { id: 2, name: '图书馆预约', icon: '/static/icons/library.png', url: '/pages/library/index', tab: false },
+      { id: 3, name: '查空教室', icon: '/static/icons/free-room.png', url: '/pages/library/freeRoom', tab: false },
+      { id: 4, name: '二手集市', icon: '/static/icons/secondhand.png', url: '/pages/secondhand/index', tab: false },
+      { id: 5, name: '兼职实习', icon: '/static/icons/job.png', url: '/pages/job/index', tab: false },
+      { id: 6, name: '校园地图', icon: '/static/icons/map.png', url: '/pages/map/index', tab: false },
+      { id: 7, name: '外卖点餐', icon: '/static/icons/food.png', url: '/pages/life/index', tab: false },
+      { id: 8, name: '通知公告', icon: '/static/icons/notice.png', url: '/pages/life/notices', tab: false },
+      { id: 9, name: '校园论坛', icon: '/static/icons/forum.png', url: '/pages/forum/forum', tab: true },
+      { id: 10, name: '任务中心', icon: '/static/icons/task.png', url: '/pages/agent/index', tab: false },
     ],
     quickCommands: ['查空教室', '查校历', '预约图书馆'],
     hotTopics: [], // 首页热门帖子（F3 收尾：GET /topics/hot）
