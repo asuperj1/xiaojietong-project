@@ -38,6 +38,9 @@ _CACHE_TTL = 60.0      # 秒（有结果的缓存时长）
 _EMPTY_TTL = 15.0      # 秒（空结果用更短 TTL：知识刚入库时不应长时间查不到）
 _CACHE_MAX = 512       # 条目上限（超限时清掉前半，简单且零依赖）
 
+# C29：给前端列表卡片的「短摘要」长度（比 content 的 200 字更短）
+_SNIPPET_LIMIT = 120
+
 # 缓存击穿（single-flight）合并表：记录「正在回源中」的 key → Future。
 # 审计 CAC-02：缓存未命中或刚过期的瞬间，N 个并发相同提问会同时回源，
 # 每个都跑一次 embedding + 向量检索 + （降级时）LONGTEXT 全表扫。
@@ -97,13 +100,15 @@ async def _keyword_retrieve(question: str, top_k: int) -> list[dict]:
         return []
 
     cond = like_condition(term_list)
-    # WHERE 与 ORDER BY 里的 LIKE 占位符**不能复用同一个绑定值**，故各绑一遍
-    params: list[Any] = build_like_params(term_list) * 2
+    # SELECT / WHERE / ORDER BY 三处的 LIKE 占位符**不能复用同一个绑定值**，故各绑一遍
+    # （C29 把命中度表达式也 SELECT 出来，用于给出可比的 score）
+    params: list[Any] = build_like_params(term_list) * 3
     params.append(top_k)
 
     def _run() -> list[dict]:
         return cpp_bridge.query(
-            f"SELECT title, category, LEFT(content, 200) AS content, source_url "
+            f"SELECT id AS doc_id, title, category, LEFT(content, 200) AS content, "
+            f"source_url, ({match_score_expr(term_list)}) AS match_hits "
             f"FROM knowledge_doc WHERE status != 2 AND ({cond}) "
             f"ORDER BY ({match_score_expr(term_list)}) DESC, updated_at DESC "
             f"LIMIT ?",
@@ -111,18 +116,110 @@ async def _keyword_retrieve(question: str, top_k: int) -> list[dict]:
         )
 
     async with _KEYWORD_SEM:
-        return await asyncio.to_thread(_run)
+        rows = await asyncio.to_thread(_run)
+
+    return _format_keyword_rows(rows, max(1, len(term_list)))
+
+
+def _make_snippet(text: str, limit: int = _SNIPPET_LIMIT) -> str:
+    """生成卡片摘要：压平空白后截断；**被截断时补省略号**，让前端知道还有更多。
+
+    与 `content`（200 字正文，供模型/详情）区分：`snippet` 是列表卡片用的短摘要。
+    """
+    flat = summarize(text, limit + 1)          # 多取 1 个字符，用于判断是否被截断
+    if len(flat) <= limit:
+        return flat
+    return flat[:limit].rstrip() + "…"
+
+
+def _keyword_score(match_hits: Any, total_terms: int) -> float:
+    """关键词降级路径的 0~1 分数 = 命中词元数 / 总词元数（封顶 1.0）。"""
+    try:
+        hits = float(match_hits)
+    except (TypeError, ValueError):
+        hits = 0.0
+    if total_terms <= 0:
+        return 0.0
+    return round(min(1.0, hits / total_terms), 4)
+
+
+def _format_keyword_rows(rows: list[dict], total_terms: int) -> list[dict]:
+    """关键词降级命中的统一返回（与 `_format_hits` **同契约**，见 C29）。
+
+    与向量路径的两点差别：
+    1. 这里是**文档级**命中 —— 没有分块序号，故 `seq` / `chunk_id` 为 `None`；
+    2. `score` 换成「命中词元占比」，故 `retrieval` 标为 `keyword`，
+       前端可据此改用"知识库未命中，已用关键词兜底"的提示文案。
+    """
+    return [
+        {
+            "title": r.get("title", ""),
+            "category": r.get("category", ""),
+            "content": summarize(r.get("content", "")),
+            "snippet": _make_snippet(r.get("content", "")),
+            "source_url": r.get("source_url", ""),
+            "score": _keyword_score(r.get("match_hits", 0), total_terms),
+            "doc_id": int(r.get("doc_id") or 0),
+            "seq": None,
+            "chunk_id": None,
+            "retrieval": "keyword",
+        }
+        for r in rows
+    ]
+
+
+def _attach_chunk_ids(rows: list[dict]) -> list[dict]:
+    """用 `(doc_id, seq)` 批量回填 `knowledge_chunk.id`（C29）。
+
+    为什么回查而不写进向量 metadata：存量索引里没有 chunk_id，改 metadata 需
+    **全量重建索引**（27 篇 + embedding）才能生效；这里一次 IN 查询（≤ top_k 行）
+    即可，**无需重建**，新旧索引行为一致。查不到就保持 None —— 不臆造 id。
+    """
+    keys = {
+        (int(r["doc_id"]), int(r["seq"]))
+        for r in rows
+        if r.get("doc_id") and r.get("seq") is not None
+    }
+    if not keys:
+        return rows
+    doc_ids = sorted({k[0] for k in keys})
+    placeholders = ",".join("?" * len(doc_ids))
+    found = cpp_bridge.query(
+        f"SELECT id, doc_id, seq FROM knowledge_chunk WHERE doc_id IN ({placeholders})",
+        doc_ids,
+    )
+    index = {(int(r["doc_id"]), int(r["seq"])): int(r["id"]) for r in found}
+    for r in rows:
+        if r.get("doc_id") and r.get("seq") is not None:
+            r["chunk_id"] = index.get((int(r["doc_id"]), int(r["seq"])))
+    return rows
 
 
 def _format_hits(hits: list[dict]) -> list[dict]:
-    """把向量命中统一为返回契约：{title, category, content, source_url, score}。"""
+    """把向量命中统一为 **C29 来源契约**（旧字段全部保留，向后兼容）。
+
+    | 字段 | 说明 |
+    |---|---|
+    | `title` / `category` / `source_url` | 原有 |
+    | `content` | 原有：200 字正文（供模型与详情） |
+    | `snippet` | **新增**：120 字卡片摘要（截断补 `…`） |
+    | `score` | 向量相似度（0~1） |
+    | `doc_id` / `seq` | **新增**：文档 id 与分块序号（`seq` 用于定位） |
+    | `chunk_id` | **新增**：`knowledge_chunk.id`，由 `_attach_chunk_ids` 回填 |
+    | `retrieval` | **新增**：`vector` / `keyword`，说明 score 是哪把尺子 |
+    """
     return [
         {
             "title": h.get("title", ""),
             "category": h.get("category", ""),
             "content": summarize(h.get("content", "")),
+            "snippet": _make_snippet(h.get("content", "")),
             "source_url": h.get("source_url", ""),
-            "score": h.get("score", 0.0),
+            "score": float(h.get("score", 0.0) or 0.0),
+            "doc_id": int(h.get("doc_id", 0) or 0),
+            "seq": int(h["seq"]) if h.get("seq") is not None else None,
+            "chunk_id": None,          # 由 _attach_chunk_ids 回填
+            "retrieval": "vector",
         }
         for h in hits
     ]
@@ -154,6 +251,8 @@ async def _retrieve_uncached(question: str, top_k: int) -> list[dict]:
             )
             if hits:
                 result = _format_hits(hits)
+                # C29：回填 chunk_id（一次 IN 查询，见 _attach_chunk_ids 注释）
+                result = await asyncio.to_thread(_attach_chunk_ids, result)
         except Exception as exc:  # noqa: BLE001 - 向量库异常降级
             logger.warning("向量检索异常，降级关键词：%s", exc)
     if not result:
@@ -165,7 +264,11 @@ async def _retrieve_uncached(question: str, top_k: int) -> list[dict]:
 
 
 async def retrieve(question: str, top_k: Optional[int] = None) -> list[dict]:
-    """检索相关知识片段，返回 [{title, category, content, source_url, score?}]。
+    """检索相关知识片段，返回 **C29 来源契约**的字段列表。
+
+    每条含 `title` / `category` / `content` / `snippet` / `source_url` /
+    `score` / `doc_id` / `seq` / `chunk_id` / `retrieval`。
+    旧字段（`title`/`category`/`content`/`source_url`/`score`）**全部保留**，向后兼容。
 
     • 结果带进程内 TTL 缓存（CAC-04：热点问题不再重复回源；空值短 TTL）
     • **single-flight 合并**（CAC-02）：同一提问的并发请求只回源一次，
