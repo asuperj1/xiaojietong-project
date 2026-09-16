@@ -105,19 +105,29 @@ def test_attach_extended_fields_is_noop_before_ddl(monkeypatch):
     assert notice.attach_extended_fields(rows) == rows
 
 
-def test_life_notices_has_no_extended_keys_before_ddl(client, hdr_a):
-    """集成：当前库未导入 DDL ⇒ `/life/notices` 不得出现这 3 个字段。
+def test_life_notices_extended_keys_follow_ddl_state(client, hdr_a):
+    """集成：`/life/notices` 的扩展字段必须**跟着 DDL 状态走**。
 
-    **反向对照**：同时断言旧字段在 —— 否则「没有新字段」可能只是因为返回了空对象。
+    ⚠️ 原用例硬断言「库里没有这 3 列」——但那只是**某一台机器**的状态，不是契约。
+    `14_notice_extend.sql` 一旦导入（本机、以及 CI 的建库流程都会导），前提就不成立，
+    用例会在**正确的实现**上恒定失败。契约真正要求的是行为与 DDL 状态一致：
+
+    - 未导入 DDL（``notice_extended_columns()`` 为空）⇒ 这 3 个字段不得出现（向后兼容）；
+    - 已导入 ⇒ 必须出现（缺字段说明 DAO SELECT 没同步，或 jt_db 没重编译 —— B20）。
+    **反向对照**：两种情况都断言旧字段在，否则「有没有新字段」可能只是因为返回了空对象。
     """
     resp = client.get("/api/v1/life/notices?page=1&size=5", headers=hdr_a)
     assert resp.status_code == 200, resp.text
     items = resp.json()["data"]["items"]
     if not items:
-        pytest.skip("campus_notice 当前无可见行，无法做向后兼容集成断言")
+        pytest.skip("campus_notice 当前无可见行，无法做集成断言")
+    ddl_applied = bool(notice.notice_extended_columns())
     for it in items:
         for name in notice._EXTENDED_NAMES:
-            assert name not in it, f"未导入 DDL 却返回了 {name} —— 向后兼容被破坏"
+            if ddl_applied:
+                assert name in it, f"已导入 DDL 却缺 {name}（DAO SELECT 未同步 / jt_db 未重编译）"
+            else:
+                assert name not in it, f"未导入 DDL 却返回了 {name} —— 向后兼容被破坏"
         for base in _BASE_KEYS:
             assert base in it, f"旧字段 {base} 丢失（反向对照失败：不能是返回空对象）"
 
