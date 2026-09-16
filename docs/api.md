@@ -32,7 +32,7 @@ http://127.0.0.1:8000/api/v1           # 本地开发（uvicorn）
 | 1001~1099 | 参数错误 | 1001 参数缺失 / 1002 格式错误 |
 | 2001~2099 | 认证/权限 | 2001 未登录 / 2002 token 过期 / 2003 无权限 |
 | 3001~3099 | 业务冲突 | 3001 座位已被预约 / 3002 重复投递 / **3003 内容未通过审核** |
-| 5001~5099 | 服务端/DB | 5001 数据库错误 / 5002 模型服务不可用 |
+| 5001~5099 | 服务端/DB | 5001 数据库错误 / 5002 模型服务不可用 / **5003 语音转写失败**（B32） |
 
 ### 分页约定
 - 请求：`?page=1&size=20`（page≥1，size 1~100，默认 20）
@@ -656,6 +656,41 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 
 ---
 
+### POST /voice/transcribe —— 语音转文字（B32，v1.23 新增）
+
+`multipart/form-data`。语音属"辅助能力"，与本章管理端接口无关，因避免章节编号顺延（会连带改 12.1~12.3 的子编号）就近挂在本章末尾。
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `file` | ✅ | 音频文件。**按文件头魔数判定类型**（`Content-Type` 完全不可信，与上传接口同一口径 SEC-11）；支持 `wav / mp3 / m4a(aac) / ogg / webm / amr` |
+| `language` | | 语言代码，默认 `zh` |
+| `prompt` | | 可选热词，帮助识别专有名词（如「校捷通」「前卫南区」）；whisper 后端作为 `initial_prompt` |
+
+请求示例（微信小程序）：
+
+    wx.uploadFile({
+      url: `${BASE}/voice/transcribe`, filePath: tempFilePath, name: 'file',
+      formData: { language: 'zh', prompt: '校捷通 前卫南区' },
+      header: { Authorization: `Bearer ${token}` },
+    })
+
+响应 `data`：
+
+    { "text": "今天图书馆几点关门", "language": "zh",
+      "duration_ms": 4200, "backend": "http", "format": "wav" }
+
+**失败一律明确回码，不会静默**（B32 验收项）：
+
+| 场景 | code | HTTP |
+|---|---|---|
+| 格式不支持 / 文件过大 / 时长不在区间 | `1001` | 400（文案含具体原因与限制值） |
+| 未配置后端、可选依赖缺失、连不上 ASR 服务 | `5002` | 503（文案指出该配哪个变量 / 该装什么） |
+| 后端可用但本次转写失败（上游 4xx/5xx、非 JSON、音频损坏） | `5003` | 500 |
+
+- **后端由配置驱动**：`XJT_ASR_BACKEND` = `none`（默认，接口回 5002）/ `http`（转发外部服务，配 `XJT_ASR_HTTP_URL`）/ `whisper`（本机 `faster-whisper`，**可选依赖，不进 requirements**）。
+- **限制**：单文件 ≤ `XJT_ASR_MAX_BYTES`（默认 2MB）；时长 `XJT_ASR_MIN_SECONDS`~`XJT_ASR_MAX_SECONDS`（默认 3~10 秒）。WAV 可精确校验；mp3/m4a 等容器在不引入 ffprobe 的前提下算不出时长，按大小上限兜底。
+- 外部 ASR 服务的响应契约：**至少含 `text`**，可选 `language` / `duration_ms`。
+
 ## 12. 附：实现注意事项（前后端）
 
 1. **SSE 解析**：前端用 `wx.request` 无法流式，改用 `wx.request` 长连接 + 后端 `StreamingResponse`，或小程序 `EventSource` 适配（微信需 `enableChunked`）。
@@ -827,4 +862,5 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.18 | 2026-09-13 | **B19 通知表结构扩展 + B20 字段契约**：新增 `db/sql/14_notice_extend.sql`（**幂等**、可回滚）为 `campus_notice` 增加 `deadline`/`materials`/`importance`（均允许 NULL，不动现有数据）+ `idx_deadline` 索引；B20 契约：`/life/notice-feed`、`/life/notices/unread`、`/life/notices` 自动返回这 3 个新字段（**列不存在时不 SELECT，行为与 v1.17 一致**，向后兼容）；`importance` 计入通知流得分（+0.2/级）与 B18 推送得分，推送正文追加材料清单 |
 | v1.21 | 2026-09-16 | **B29 论坛关键词搜索**：`GET /topics` 新增 `keyword`（**标题 + 正文**全文检索，C26 的 FULLTEXT + ngram 索引 `ft_topic_search`），按相关度倒序并**多返回 `relevance`**；关键词净化（去 boolean 运算符 / 拆词 / 每词 `+` 成 AND / 词数与词长封顶）在 `ForumDAO.search_topics` 内完成，净化后无可用词时**自动退化为普通分页**；搜不到返回 `code=0` + 空列表；可见性与列表一致（待审 / 被拒 / 已删除**搜不出来**）；新增 `services/topic_search.py` 做索引探测，**缺索引时失败关闭**（500 + `5001`，不抛 MySQL 的 1191） |
 | v1.22 | 2026-09-16 | **B24 显式新建会话**：新增 `POST /chat/conversations`（请求体可省，默认标题「新对话」，返回 `conversation_id` 供前端「点新建」即刻使用；**空会话可直接对话**，无需先发消息）与 `PATCH /chat/conversations/{id}`（重命名；空/超长标题 `1001`、越权与不存在**同码 `1001`**）；`/chat/send` 与 `/chat/conversations/{id}/messages` 的归属校验收敛为 `_owned_conversation()` 单一实现（原两处重复 SQL）；**置顶未做**（表无 `is_pinned`/`sort` 列，需 DDL 批次） |
+| v1.23 | 2026-09-16 | **B32 语音转文字**：新增 `POST /voice/transcribe`（wav/mp3/m4a/ogg/webm/amr，**按文件头魔数判定类型**，不信 `Content-Type`）；ASR 后端**配置驱动可插拔**（`XJT_ASR_BACKEND` = `none` / `http` / `whisper`，whisper 为**可选依赖、不进 requirements**）；**失败一律明确回码不静默**——格式/大小/时长 `1001`、服务不可用 `5002`、转写失败 `5003`（本次新增）；单文件 ≤2MB、时长 3~10 秒（WAV 精确校验，其它容器按大小兜底） |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
