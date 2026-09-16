@@ -128,31 +128,8 @@ def test_notice_columns_includes_extended_when_ddl_applied(monkeypatch):
         assert f"n.{name}" in cols
     assert "n.id" in cols                     # 旧字段仍必须在
 
-
-def test_life_dao_select_declares_extended_columns():
-    """B20 ②：`/life/notices` 的字段由 **C++ DAO 直出** ⇒ DAO 源码必须 SELECT 这 3 列。
-
-    纯文本断言（不依赖已编译产物），挡住两种回退：DAO 漏列、以及再往 Python 侧加兜底补查。
-    """
-    import re
-    from pathlib import Path
-
-    dao = (
-        Path(__file__).resolve().parents[2]
-        / "db" / "cpp_driver" / "src" / "dao" / "life_dao.cpp"
-    )
-    if not dao.is_file():
-        pytest.skip(f"找不到 DAO 源码：{dao}")
-    src = dao.read_text(encoding="utf-8", errors="ignore")
-    match = re.search(r"page_notices\b.*?SELECT(.*?)FROM\s+campus_notice", src, re.DOTALL)
-    assert match, "life_dao.cpp 中未找到 page_notices 的 SELECT"
-    for name in notice._EXTENDED_NAMES:
-        assert name in match.group(1), f"LifeDAO::page_notices 的 SELECT 缺少 {name}（B20 ②）"
-
-
-def test_python_side_attach_helper_removed():
-    """B20 ③：Python 侧补查兜底已删除——扩展列统一由 DAO 直出，避免两套字段来源。"""
-    assert not hasattr(notice, "attach_extended_fields"), (
-        "attach_extended_fields 应已删除（B20 ③）：扩展列由 LifeDAO 直出，"
-        "再保留补查会出现两套真值来源，字段一致性无法保证"
-    )
+# 说明（B21/B22 分支）：本文件另有两处**断言未来状态**的用例 ——
+#   · test_life_dao_select_declares_extended_columns（要求 LifeDAO.page_notices 已含 3 列）
+#   · test_python_side_attach_helper_removed（要求 Python 侧补查已删除）
+# 它们断言的是 PR #60（feature/backend）尚未合并的改动，放在 dev-based 分支上必然失败，
+# 因此只保留在 PR #60 内；待该 PR 合入 dev 后，可把这两条一并带过来。
