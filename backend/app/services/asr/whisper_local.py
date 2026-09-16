@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 
 from .base import AsrFailure, AsrResult, AsrUnavailable
 
@@ -30,11 +31,19 @@ class WhisperLocalBackend:
         self._model = None
         self._engine = ""
         self._why = ""
+        # 惰性加载要防并发：两个请求同时进来会各加载一遍模型（双倍内存与时间）
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------ 加载 ----
 
     def _load(self):
-        if self._model is not None:
+        if self._model is not None:          # 快路径：已加载
+            return self._model
+        with self._lock:
+            return self._load_locked()
+
+    def _load_locked(self):
+        if self._model is not None:          # 双检：并发下只有第一个真正加载
             return self._model
         try:
             from faster_whisper import WhisperModel  # noqa: PLC0415 - 惰性、可选依赖
@@ -65,11 +74,28 @@ class WhisperLocalBackend:
         )
 
     def availability(self) -> tuple[bool, str]:
-        try:
-            self._load()
+        """**只做静态判断**（依赖能不能 import），**不加载模型**。
+
+        契约要求「无副作用、可反复调用」：加载 small 模型要数秒、首次还可能触发下载，
+        那是 `transcribe()` 的代价。把它藏在"轻量预检"里，会让路由的预检本身变成
+        一次重阻塞（也是 review 实测事件循环被堵住的一半原因）。
+        """
+        if self._model is not None:
             return True, ""
-        except AsrUnavailable as exc:
-            return False, str(exc)
+        try:
+            import faster_whisper  # noqa: F401,PLC0415 - 仅探测依赖是否存在
+            return True, ""
+        except ImportError:
+            pass
+        try:
+            import whisper  # noqa: F401,PLC0415 - 仅探测依赖是否存在
+            return True, ""
+        except ImportError:
+            return False, (
+                "faster-whisper 与 openai-whisper 均未安装。"
+                "请 `pip install faster-whisper`，"
+                "或把 XJT_ASR_BACKEND 改成 http 指向外部识别服务"
+            )
 
     # ------------------------------------------------------------ 转写 ----
 

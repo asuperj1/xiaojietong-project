@@ -18,8 +18,12 @@ from typing import Optional
 _MAGIC: tuple[tuple, ...] = (
     (lambda h: len(h) >= 12 and h[:4] == b"RIFF" and h[8:12] == b"WAVE", ".wav", "audio/wav"),
     (lambda h: h.startswith(b"ID3"), ".mp3", "audio/mpeg"),
-    (lambda h: len(h) >= 2 and h[0] == 0xFF and h[1] in (0xF2, 0xF3, 0xFB, 0xFA, 0xF1),
+    (lambda h: len(h) >= 2 and h[0] == 0xFF and h[1] in (0xF2, 0xF3, 0xFB, 0xFA),
      ".mp3", "audio/mpeg"),
+    # AAC 的 ADTS 同步字是 0xFFF1（MPEG-4）/ 0xFFF9（MPEG-2）—— 它们**不是** mp3。
+    # 之前 0xF1 被并进了 mp3 分支：响应里的 format 会报成 mp3，而 0xF9 直接 400，
+    # 与 SUPPORTED_HINT 里承诺的 aac 不符。
+    (lambda h: len(h) >= 2 and h[0] == 0xFF and h[1] in (0xF1, 0xF9), ".aac", "audio/aac"),
     (lambda h: len(h) >= 12 and h[4:8] == b"ftyp", ".m4a", "audio/mp4"),
     (lambda h: h.startswith(b"OggS"), ".ogg", "audio/ogg"),
     (lambda h: h.startswith(b"#!AMR"), ".amr", "audio/amr"),

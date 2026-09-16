@@ -40,6 +40,8 @@ def _reset_backend():
     (b"RIFF\x00\x00\x00\x00WAVEfmt ", ".wav"),
     (b"ID3\x04\x00\x00", ".mp3"),
     (b"\xff\xfb\x90\x00", ".mp3"),
+    (b"\xff\xf1\x50\x80", ".aac"),      # AAC ADTS（MPEG-4 同步字 0xFFF1）
+    (b"\xff\xf9\x50\x80", ".aac"),      # AAC ADTS（MPEG-2 同步字 0xFFF9）
     (b"\x00\x00\x00\x20ftypM4A ", ".m4a"),
     (b"OggS\x00\x02", ".ogg"),
     (b"#!AMR\x0a", ".amr"),
@@ -250,6 +252,43 @@ def test_route_backend_raises_unavailable_is_5002(client, hdr_a):
     asr.set_backend(FakeBackend(fail="unavailable"))
     body = _post(client, hdr_a, make_wav(5)).json()
     assert body["code"] == 5002
+
+
+def test_transcribe_runs_sync_backend_off_event_loop(client, hdr_a):
+    """B32 回归（review P1）：同步后端必须丢到**工作线程**执行。
+
+    路由是 `async def`，而 http / whisper 两个后端都是同步阻塞的
+    （httpx.post 最长 `asr_http_timeout`＝15s；whisper 本机 CPU 推理更久）。
+    直接在事件循环里调会把整个循环堵死 —— 期间 SSE、health 探活、其它用户请求全部排队。
+
+    `asyncio.to_thread` 会把调用派到线程池，线程名形如 `asyncio_0`，据此断言；
+    若退回同步调用，线程名会是事件循环所在线程，本用例即红。
+    """
+    import threading
+
+    seen: dict[str, str] = {}
+
+    class ThreadProbeBackend:
+        name = "probe"
+
+        def availability(self):
+            seen["avail"] = threading.current_thread().name
+            return True, ""
+
+        def transcribe(self, audio, *, filename="", language="zh", prompt=""):
+            seen["transcribe"] = threading.current_thread().name
+            return AsrResult(text="ok", backend="probe")
+
+    asr.set_backend(ThreadProbeBackend())
+    assert _post(client, hdr_a, make_wav(5)).json()["code"] == 0
+
+    assert seen["transcribe"].startswith("asyncio"), (
+        f"transcribe 应在工作线程执行，实际线程名 {seen['transcribe']!r}"
+        "（说明仍在事件循环里 —— 会堵死整个循环）"
+    )
+    assert seen["avail"].startswith("asyncio"), (
+        "availability 也是同步调用（whisper 会加载模型），同样必须丢线程"
+    )
 
 
 def test_get_backend_follows_config(client, monkeypatch):

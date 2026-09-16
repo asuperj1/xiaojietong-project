@@ -25,6 +25,8 @@ POST /api/v1/voice/transcribe        multipart/form-data
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.core.config import settings
@@ -85,14 +87,20 @@ async def transcribe(
             raise err_param(f"语音太长（{seconds:.1f} 秒），请录制 {lo:.0f}~{hi:.0f} 秒")
 
     backend = asr.get_backend()
-    usable, why = backend.availability()
+    # ⚠️ 下面两个调用都是**同步阻塞**的（httpx.post 最长 asr_http_timeout；whisper 是本机
+    # CPU 推理，更慢），而本路由是 async def —— 直接在事件循环里调会把循环堵死：
+    # 阻塞期间 /chat/send 的 SSE、health 探活、其它用户的请求全部排队（实测用 1s 阻塞
+    # 的假后端，50ms 心跳被整段卡住 1.00s）。故一律丢到工作线程执行 ——
+    # 与本仓库 services/rag.py 的做法一致。
+    usable, why = await asyncio.to_thread(backend.availability)
     if not usable:
         # 明确告诉运维"该配什么"，而不是回一个空字符串让前端以为识别失败
         raise BizError(CODE_ASR_UNAVAILABLE, f"语音转写服务不可用：{why}", http_status=503)
 
     try:
-        result = backend.transcribe(
-            data, filename=file.filename or f"audio{ext}",
+        result = await asyncio.to_thread(
+            backend.transcribe, data,
+            filename=file.filename or f"audio{ext}",
             language=(language or "zh").strip(), prompt=(prompt or "").strip(),
         )
     except AsrUnavailable as exc:
