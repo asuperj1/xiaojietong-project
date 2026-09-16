@@ -79,6 +79,31 @@ const svgFiles = fs.existsSync(ICON_DIR)
 
 check('miniprogram/static/icons/ 存在且含 SVG', svgFiles.length > 0, `找到 ${svgFiles.length} 个`)
 
+// F11 验收要求「`static/icons/*.svg` 数量正确」—— 数量真源是 README §2 的清单表，
+// 不是脚本里的魔数。锁「README 清单 == 磁盘实际」：漏交会失败，**多交一个野图标也会失败**
+// （新增图标必须同步 README，否则口径与资产会悄悄漂移）。
+{
+  const readmePath = path.join(ICON_DIR, 'README.md')
+  let listed = []
+  const lines = fs.existsSync(readmePath)
+    ? fs.readFileSync(readmePath, 'utf8').split(/\r?\n/)
+    : []
+  const start = lines.findIndex((l) => /^##\s*2\..*清单/.test(l))
+  if (start !== -1) {
+    for (let i = start + 1; i < lines.length && !/^##\s/.test(lines[i]); i += 1) {
+      const m = /^\|\s*`([^`]+\.svg)`\s*\|/.exec(lines[i])
+      if (m) listed.push(m[1])
+    }
+  }
+  listed = listed.sort()
+  const onDisk = svgFiles.slice()
+  check(
+    `README §2 图标清单与磁盘一致（数量 = ${listed.length}，F11 验收口径）`,
+    listed.length > 0 && listed.join('|') === onDisk.join('|'),
+    `README=[${listed.join(', ')}] 磁盘=[${onDisk.join(', ')}]`
+  )
+}
+
 for (const file of svgFiles) {
   const raw = fs.readFileSync(path.join(ICON_DIR, file), 'utf8')
   const missing = SVG_CONTRACT.filter(([, re]) => !re.test(raw)).map(([label]) => label)
