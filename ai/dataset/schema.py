@@ -38,6 +38,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -82,6 +83,19 @@ class Sample:
         return str(self.annotation.get("status", "raw"))
 
 
+def _stable_suffix(text: str) -> str:
+    """由正文得到**跨进程稳定**的 id 后缀。
+
+    为什么不用内置 `hash()`：Python 对 str 的 `hash()` 默认带随机化
+    （`PYTHONHASHSEED`），**同一段文本在不同进程会得到不同的值**。
+    而 `C32` 的标注一致性是**按 `id` 配对**的（`pair_by_id`）——
+    id 一飘，两个人的标注就配不上对，Kappa 直接失效。
+
+    用 sha256 前缀：跨进程稳定，且与 `collect._text_hash`（去重键）同族。
+    """
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
+
+
 def make_sample(
     text: str,
     *,
@@ -91,7 +105,7 @@ def make_sample(
     sample_id: str | None = None,
 ) -> Sample:
     """构造一条未标注样本（`id` 省略时按来源生成，保证可追溯）。"""
-    sid = sample_id or f"{source_type}-{ref or abs(hash(text)) % (10 ** 10)}"
+    sid = sample_id or f"{source_type}-{ref or _stable_suffix(text)}"
     return Sample(
         id=sid,
         text=(text or "").strip(),

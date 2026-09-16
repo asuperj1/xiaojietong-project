@@ -41,7 +41,12 @@ DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "out"
 
 
 def _report_validation(samples) -> int:
-    """返回不合规条数（供 CLI 决定退出码：有问题就非 0，便于脚本判断）。"""
+    """返回不合规条数（供 CLI 决定退出码：有问题就非 0，便于脚本判断）。
+
+    ⚠️ 调用点必须覆盖**每一个会改变 labels 的阶段**。
+    早先只在 `collect` 阶段校验（那时 labels 还都是空的，必然通过），
+    于是 `prelabel` 写进去的空字段一路流到了导出与训练目标而无人报警。
+    """
     bad = 0
     for s in samples:
         problems = validate_sample(s)
@@ -74,9 +79,12 @@ def cmd_prelabel(args: argparse.Namespace) -> int:
     out = prelabel_samples(samples, labeler)
     skipped = sum(1 for s in out if s.status in ("human", "reviewed"))
     print(f"[prelabel] labeler={args.labeler}，处理 {len(out)} 条（其中 {skipped} 条人工样本被跳过）")
+    # 预标注产物也要过校验：本阶段是**第一个往 labels 写值的环节**，
+    # 不在这里拦，坏数据会直接进导出与训练目标。
+    bad = _report_validation(out)
     n = write_jsonl(args.out, out)
     print(f"[prelabel] 已写出 {n} 条 -> {args.out}")
-    return 0
+    return 1 if bad else 0
 
 
 def cmd_export(args: argparse.Namespace) -> int:
@@ -94,7 +102,9 @@ def cmd_export(args: argparse.Namespace) -> int:
     print(f"[export] 统计报告   -> {out_dir / 'stats.md'}")
     if n_train == 0:
         print("[export] [!] 训练集为空：所有样本的 labels 都为空，先跑 prelabel 或人工标注")
-    return 0
+    # 导出前再校验一次（防御人工手改 intermediate 文件引入的脏数据）
+    bad = _report_validation(samples)
+    return 1 if bad else 0
 
 
 def cmd_stats(args: argparse.Namespace) -> int:

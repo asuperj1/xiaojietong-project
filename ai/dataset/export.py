@@ -40,13 +40,46 @@ SYSTEM_PROMPT = (
 TARGET_KEYS = ("deadline", "importance", "category", "entities")
 
 
+def _clean_entities(ents: Any) -> list[dict[str, Any]]:
+    """清理实体数组：丢弃残缺项，并且**只在有归一化值时才落 `norm` 键**。
+
+    为何必须再清一层：顶层的空值过滤（`_non_empty`）挡不住**嵌套**的 None。
+    `prelabel` 产出的实体形如 `{"type": "place", "text": "图书馆", "norm": None}`，
+    而 `entities` 是非空 list ⇒ 整体被保留 ⇒ 里面的 `norm: null` 一路进了训练目标，
+    等于**教模型输出 `"norm": null`** —— 恰恰是 `_non_empty` 想避免的事。
+    """
+    out: list[dict[str, Any]] = []
+    for e in ents if isinstance(ents, list) else []:
+        if not isinstance(e, dict) or not e.get("type") or not e.get("text"):
+            continue
+        item: dict[str, Any] = {"type": e["type"], "text": e["text"]}
+        if e.get("norm") not in (None, ""):
+            item["norm"] = e["norm"]
+        out.append(item)
+    return out
+
+
 def _non_empty(labels: dict[str, Any]) -> dict[str, Any]:
-    """只保留有效值：None / 空串 / 空列表都不进训练目标，避免模型学会输出空字段。"""
-    return {
-        k: labels[k]
-        for k in TARGET_KEYS
-        if k in labels and labels[k] not in (None, "", [], {})
-    }
+    """只保留有效值：None / 空串 / 空列表都不进训练目标，避免模型学会输出空字段。
+
+    `entities` 需要**再往里清一层**（见 `_clean_entities`）：
+    非空 list 会被整体保留，其中的空字段不会被上面的条件挡住。
+    """
+    out: dict[str, Any] = {}
+    for k in TARGET_KEYS:
+        if k not in labels:
+            continue
+        v = labels[k]
+        if v in (None, "", [], {}):
+            continue
+        if k == "entities":
+            cleaned = _clean_entities(v)
+            if not cleaned:
+                continue
+            out[k] = cleaned
+            continue
+        out[k] = v
+    return out
 
 
 def build_messages(sample: Sample) -> dict[str, Any]:
