@@ -1,0 +1,101 @@
+# ============================================================
+# 校捷通 · 学校适配器配置（C21）
+#
+# 接入一所新学校 = 复制本文件 → 改 school.code / name /
+# student_no.pattern / term_map / sources，**不用改代码**。
+#
+# 校验：python -m app.adapters --check
+# ============================================================
+version: 1
+
+# ---- 学校基本信息 ----
+school:
+  code: xiaojietong          # 唯一标识；与文件名、XJT_SCHOOL_CONFIG 保持一致
+  name: 校捷通大学
+  short_name: 校捷通
+  campuses:
+    - 主校区
+    - 东校区
+  departments:
+    - 图书馆
+    - 教务处
+    - 后勤处
+    - 校医院
+    - 学生工作处
+    - 就业指导中心
+
+# ---- 合法年级 ----
+# 用途：campus_notice.target_grade 的白名单（通知投递范围）。
+# 空字符串表示「全员」，不在本列表里（由代码侧约定）。
+grades:
+  - 2023级
+  - 2024级
+  - 2025级
+  - 2026级
+
+# ---- 学号规则 ----
+# ⚠️ 不同学校学号规则不同 → 一律由配置提供，**禁止在代码里写死正则**
+#    （产品方 2026-09-12 决策，见总表 §7.2）
+student_no:
+  pattern: '^\d{10}$'
+  hint: 10 位数字学号（见录取通知书右上角）
+  upper: true
+  strip: true
+
+# ---- 术语映射：本校叫法 → 标准术语 ----
+# 用途：① 检索归一化（学生说「饭卡」，知识库写「校园卡」）
+#       ② 抽取结果标准化（C27/C28）
+# 注意：长键优先匹配，所以「研讨间」不会被更短的键误伤
+term_map:
+  饭卡: 校园卡
+  一卡通: 校园卡
+  研讨间: 研讨室
+  热得快: 违章电器
+  电磁炉: 违章电器
+  挂科: 不及格
+  双选会: 校园招聘会
+  校车: 通勤班车
+
+# ---- 采集源（B27 配置驱动采集器读它；B26 负责 robots 与限速）----
+sources:
+  - key: library-notice
+    name: 图书馆通知
+    url: https://lib.xiaojietong.edu.cn/notice/
+    enabled: true
+    type: html_list
+    category: 图书馆
+    rate_limit_qps: 0.5
+    respect_robots: true
+    selectors:
+      list: 'ul.news-list li a'
+      title: 'h1.article-title'
+      content: 'div.article-content'
+      date: 'span.publish-date'
+    tags: [图书馆, 开放时间, 借阅]
+
+  - key: jwc-notice
+    name: 教务处通知
+    url: https://jwc.xiaojietong.edu.cn/tzgg/
+    enabled: true
+    type: html_list
+    category: 教务
+    rate_limit_qps: 0.5
+    respect_robots: true
+    selectors:
+      list: 'div.list-item a'
+      title: 'h2'
+      content: 'div.content'
+    tags: [选课, 考试, 成绩]
+
+  # 示例：先关着的源（等对方站点确认 robots 与页面结构后再开）
+  - key: xsc-notice
+    name: 学工处通知
+    url: https://xsc.xiaojietong.edu.cn/index/tzgg.htm
+    enabled: false
+    type: html_list
+    category: 通知
+    rate_limit_qps: 0.2
+    respect_robots: true
+    selectors:
+      list: 'ul.news li a'
+    tags: [奖助, 活动]
