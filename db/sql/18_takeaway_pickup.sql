@@ -154,6 +154,74 @@ SET @ddl := (
 );
 PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
+-- ================================================== PART 3B · 旧列清理（受控 DROP）
+-- 目的：让**所有环境**的 `pickup_point` 列集合完全一致 —— B19「统一全组结构」的硬要求。
+-- 前提：PART 3 已把 `open_time` → `business_hours`、`enabled` → `status` 回填完毕。
+-- 安全守卫：旧列若仍有"独有数据"就**保留并警告**，绝不静默丢数据。
+
+-- 3B.1 open_time：仅当没有"open_time 有值但 business_hours 为空"的行时才 DROP
+SET @has_open_time := (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'open_time'
+);
+SET @sql := IF(@has_open_time = 1,
+    'SELECT COUNT(*) INTO @orphan FROM `pickup_point` WHERE COALESCE(`open_time`, '''') <> '''' AND COALESCE(`business_hours`, '''') = ''''',
+    'SET @orphan := 0');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := IF(@has_open_time = 0,
+    'SELECT ''[skip] 无 open_time 旧列'' AS `收敛-清理`',
+    IF(@orphan = 0,
+        'ALTER TABLE `pickup_point` DROP COLUMN `open_time`',
+        'SELECT ''[warn] open_time 仍有独有数据，保留不删，请人工确认后再清理'' AS `收敛-清理`'));
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- 3B.2 enabled：其语义已被 `status` 完整接管（回填是**单向收紧**，`status=0` 比 `enabled=1` 更保守，
+--       不存在"只有 enabled 知道"的信息）⇒ 只要 `status` 在，就可以直接清理。
+SET @has_enabled := (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'enabled'
+);
+SET @has_status := (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'status'
+);
+SET @ddl := IF(@has_enabled = 0,
+    'SELECT ''[skip] 无 enabled 旧列'' AS `收敛-清理`',
+    IF(@has_status = 1,
+        'ALTER TABLE `pickup_point` DROP COLUMN `enabled`',
+        'SELECT ''[warn] status 缺失，保留 enabled 不删'' AS `收敛-清理`'));
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- 3B.3 campus：是漂移期**新增**的列，权威定义里没有对应字段 ⇒ 数据无处安放。
+--       因此**只有全空**才 DROP；一旦有人填过校区，就保留并警告（交人工决定去留）。
+SET @has_campus := (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'campus'
+);
+SET @sql := IF(@has_campus = 1,
+    'SELECT COUNT(*) INTO @orphan FROM `pickup_point` WHERE COALESCE(`campus`, '''') <> ''''',
+    'SET @orphan := 0');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := IF(@has_campus = 0,
+    'SELECT ''[skip] 无 campus 旧列'' AS `收敛-清理`',
+    IF(@orphan = 0,
+        'ALTER TABLE `pickup_point` DROP COLUMN `campus`',
+        'SELECT ''[warn] campus 有非空数据，保留不删（权威定义无此字段），请人工确认去留'' AS `收敛-清理`'));
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- 3B.4 漂移期建的非权威索引：`idx_enabled_sort`（enabled 已删，索引会一并消失）；
+--       若因故残留则显式清理，保证索引集合一致。
+SET @ddl := (
+    SELECT IF(COUNT(*) = 0,
+        'SELECT ''[skip] 无 idx_enabled_sort 残留'' AS `收敛-清理`',
+        'ALTER TABLE `pickup_point` DROP INDEX `idx_enabled_sort`')
+    FROM information_schema.statistics
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND index_name = 'idx_enabled_sort'
+);
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
 -- ================================================== PART 4 · 种子（幂等 · **空更新**）
 -- 固定主键 ⇒ 缺行会补上；`ON DUPLICATE KEY UPDATE id = id` 是**空更新** ⇒
 -- 已有行**一个字段都不改**，重跑无副作用，也不会覆盖运营已改的内容（规范 §5.2）。
