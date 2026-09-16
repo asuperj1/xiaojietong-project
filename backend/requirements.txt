@@ -37,10 +37,6 @@ chromadb>=1.5
 
 # ---- 工具 ----
 python-multipart>=0.0.9
-# C21 学校适配器配置：用 yaml.safe_load 读取 backend/app/adapters/configs/*.yml。
-# ⚠️ 此前缺失声明：开发机恰好装有 pyyaml，全新环境 `pip install -r requirements.txt`
-#    后 `python -m app.adapters --check` 会直接 ImportError（仅 .json 配置可用）。
-PyYAML>=6.0
 
 # ---- 测试（B12 工程化基线）----
 pytest>=8.0

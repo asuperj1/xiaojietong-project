@@ -71,18 +71,7 @@ flowchart LR
 
 ## 四、代码改造（今天就能做完，约 10 分钟）
 
-> ⚠️ **本节状态（2026-09-13 更新）**：本节最初是设计稿，**实际实现已在 `dev` 上完成**
-> （PR #53 ＋ 后续加固 `fix/frontend-base-url-guard`），落地文件与本节示例**不完全一致**：
->
-> | 本节旧写法 | 实际实现 |
-> |---|---|
-> | `miniprogram/config.js` | **`miniprogram/config/env.js`** |
-> | `module.exports = { BASE_URL: resolveBaseUrl() }` | **`module.exports = { getBaseUrl }`**（导出**函数**，**不再导出静态 `BASE_URL`**） |
-> | `const { BASE_URL } = require('../config.js')` | **`const { getBaseUrl } = require('../config/env')`** |
->
-> **照本节旧示例写会拿到 `undefined`**，请以实际代码为准；§4.2.1 补上了关键陷阱。
-
-### 4.1 新建 `miniprogram/config/env.js`（原方案名为 `config.js`，已被取代）
+### 4.1 新建 `miniprogram/config.js`
 
 把硬编码的 `BASE_URL` 抽出来，按**小程序运行环境自动切换**：
 
@@ -133,48 +122,10 @@ module.exports = {
 ```js
 // 原：const BASE_URL = 'http://127.0.0.1:8000/api/v1'
 // 改为：
-const { getBaseUrl } = require('../config/env')
+const { BASE_URL } = require('../config.js')
 ```
 
-### ⚠️ 4.2.1 关键陷阱：`getBaseUrl()` 会 throw，**不能让它同步逃逸**
-
-不要写成顶层的 `const BASE_URL = getBaseUrl()`（模块加载即抛错，且真机改 storage 后不能立即生效）。
-正确做法是**每次请求解析 ＋ 必须 try/catch**：
-
-```js
-function request(path, { method = 'GET', data = {} } = {}) {
-  let url
-  try {
-    url = getBaseUrl() + (path.startsWith('/') ? path : '/' + path)
-  } catch (e) {
-    // ⚠️ 此处位于 `return new Promise(...)` **之前**：
-    // 若直接让它抛，异常会在 Promise 创建前同步逃逸 —— 调用方的 .catch() 接不到！
-    console.error('[env] API 地址解析失败：', e)
-    wx.showToast({ title: '接口地址未配置，请联系管理员', icon: 'none' })
-    return Promise.reject(makeEnvError())
-  }
-  // ...以下不变
-}
-```
-
-`sseRequest()` 同理，但要走 `onError` 并返回一个可安全 `abort()` 的空 task：
-
-```js
-  } catch (e) {
-    console.error('[env] API 地址解析失败：', e)
-    wx.showToast({ title: '接口地址未配置，请联系管理员', icon: 'none' })
-    if (typeof onError === 'function') onError(makeEnvError())
-    return { abort() {} }
-  }
-```
-
-另在 `app.js` 的 `onLaunch` 里调一次 `checkApiEnv()` 做**启动期自检**，
-让配置错误在「第一次冷启动」就弹窗暴露，而不是等用户点到某个按钮才失败。
-
-> **为什么这条重要**：`getBaseUrl()` 若在 `new Promise(...)` 之前同步抛出，
-> `.catch()` 与 `sseRequest` 的 `onError` **都不会触发**，`request.js` 内 6 处
-> `wx.showToast` 也全都不会执行 —— 用户看到的是「点了没反应 / 永久 loading / 无任何提示」。
-> 可用 `node tools/verify_frontend_base_url_guard.js` 离线复现与回归（含反向对照用例）。
+其余代码**无需改动**（所有请求都通过 `BASE_URL` 拼接）。
 
 ### 4.3 顺手修掉「问题 1」（`2003` 未跳登录页）
 
