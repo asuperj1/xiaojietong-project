@@ -92,19 +92,33 @@ def cmd_export(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    n_train = export_training_jsonl(samples, out_dir / "train_extract.jsonl")
+    # ⚠️ 校验必须在**写盘之前**。原先它在导出之后，注释还写着“导出前”——
+    # 实测脏数据（importance: 99）照样落进了 train_extract.jsonl，
+    # 而消费方（C33 微调）只看文件、不看退出码，退出码 1 拦不住它。
+    bad = _report_validation(samples)
+
     n_csv = export_labeling_csv(samples, out_dir / "labeling.csv")
     report = stats_markdown(samples)
     (out_dir / "stats.md").write_text(report, encoding="utf-8")
 
+    if bad:
+        # 训练集**不写**：宁可暂缺，也不让脏样本进微调。
+        # 标注表与统计报告仍然写出 —— 人工修正数据正需要它们。
+        # 同时把旧文件清空，避免消费方读到上一次的产物。
+        (out_dir / "train_extract.jsonl").write_text("", encoding="utf-8")
+        print(f"[export] [!] 检出 {bad} 条不合规样本，**跳过训练集导出**"
+              "（标注表与统计报告已写出，修正后重跑）")
+        print(f"[export] 标注表 {n_csv} 条 -> {out_dir / 'labeling.csv'}")
+        print(f"[export] 统计报告   -> {out_dir / 'stats.md'}")
+        return 1
+
+    n_train = export_training_jsonl(samples, out_dir / "train_extract.jsonl")
     print(f"[export] 训练集 {n_train} 条 -> {out_dir / 'train_extract.jsonl'}")
     print(f"[export] 标注表 {n_csv} 条 -> {out_dir / 'labeling.csv'}")
     print(f"[export] 统计报告   -> {out_dir / 'stats.md'}")
     if n_train == 0:
         print("[export] [!] 训练集为空：所有样本的 labels 都为空，先跑 prelabel 或人工标注")
-    # 导出前再校验一次（防御人工手改 intermediate 文件引入的脏数据）
-    bad = _report_validation(samples)
-    return 1 if bad else 0
+    return 0
 
 
 def cmd_stats(args: argparse.Namespace) -> int:

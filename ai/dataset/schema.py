@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -63,6 +64,44 @@ STATUSES = ("raw", "prelabeled", "human", "reviewed")
 ENTITY_TYPES = ("time", "place", "org", "matter")
 
 MAX_TEXT_LEN = 20000          # 单条正文上限（超长多半是采集串了文件）
+
+# deadline 的存储格式（与 C34 的口径一致：`YYYY-MM-DD`）；`None` / `""` 表示“无截止”
+_DEADLINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _as_text(value: Any) -> str:
+    """把任意值转成字符串，但 **None → ""**（而不是 `str(None) == "None"`）。
+
+    为何不能直接用 `str()`：JSON 里的 `null` 经 `json.loads` 变成 `None`，
+    而 `obj.get("text", "")` 在**键存在、值为 null** 时返回的是 `None`（不是默认值），
+    `str(None)` 得到的是**看起来完全正常的字符串 `"None"`**。
+
+    后果有两层，第二层更隐蔽：
+
+    1. 训练样本的 user 侧变成 `【公告】\nNone` —— 模型被训练成“从 None 里抽取”；
+    2. `id` 同为 null 的两条样本会**双双变成 `"None"` 而互相撞上**，
+       而 `C32` 统计一致性是**按 id 配对**的 ⇒ 会算出一个漂亮但毫无意义的数字。
+       （这与“id 会飘”是同一后果的两个方向：不是飘，是**撞**。）
+
+    ⚠️ 这一类问题的共性是「None 在进入校验之前就变成了看起来正常的值」，
+    所以修复必须落在**读取边界**，而不是在校验里加特例 ——
+    校验拿到的已经是 `"None"`，非空、确实是 str，完全合法。
+    """
+    return "" if value is None else str(value)
+
+
+def _clean_source(raw: Any) -> dict[str, Any]:
+    """归一化 `source`：把其中为 null 的 `type`/`ref`/`url` 清成空串。
+
+    `{"ref": null}` 会原样进入 `meta.source`。它不进训练目标，危害比 `text`/`id` 小，
+    但既然是同一类问题（JSON null 被当成值），顺手清掉更省事。
+    保留其余未知键（不丢信息）。
+    """
+    src = dict(raw) if isinstance(raw, dict) else {}
+    for key in ("type", "ref", "url"):
+        if key in src:
+            src[key] = _as_text(src[key])
+    return src
 
 
 @dataclass
@@ -123,8 +162,15 @@ def validate_sample(sample: Sample) -> list[str]:
     problems: list[str] = []
     if not sample.id or not isinstance(sample.id, str):
         problems.append("id 必须是非空字符串")
+    elif sample.id == "None":
+        # `str(None)` 的产物：说明上游把 JSON null 当成了值。
+        # 两个 null id 都会变成 "None" 而互相撞上，C32 按 id 配对会算出
+        # 一个漂亮但毫无意义的 Kappa —— 必须在读取边界拦下（见 _as_text）。
+        problems.append("id 不能是字符串 'None'（通常来自把 JSON null 当成了值）")
     if not sample.text or not sample.text.strip():
         problems.append("text 不能为空")
+    elif sample.text.strip() == "None":
+        problems.append("text 不能是字符串 'None'（通常来自把 JSON null 当成了值）")
     elif len(sample.text) > MAX_TEXT_LEN:
         problems.append(f"text 过长（{len(sample.text)} > {MAX_TEXT_LEN}）")
 
@@ -143,6 +189,16 @@ def validate_sample(sample: Sample) -> list[str]:
         imp = labels["importance"]
         if not isinstance(imp, int) or not 1 <= imp <= 5:
             problems.append(f"labels.importance 必须是 1~5 的整数，当前 {imp!r}")
+    if "deadline" in labels:
+        # deadline 是 TARGET_KEYS 里唯一没有校验的字段，而它会进训练目标。
+        # 口径与 C34 一致：`YYYY-MM-DD`；`None` / `""` 表示“无截止”。
+        dl = labels["deadline"]
+        if dl is not None and dl != "" and not (
+            isinstance(dl, str) and _DEADLINE_RE.match(dl)
+        ):
+            problems.append(
+                f"labels.deadline 必须是 YYYY-MM-DD（或 null / 空串表示无截止），当前 {dl!r}"
+            )
     if "entities" in labels:
         ents = labels["entities"]
         if not isinstance(ents, list):
@@ -160,7 +216,12 @@ def validate_sample(sample: Sample) -> list[str]:
 
 
 def read_jsonl(path: str | Path) -> list[Sample]:
-    """读取 JSONL（跳过空行与 `#` 注释行）。"""
+    """读取 JSONL（跳过空行与 `#` 注释行）。
+
+    ⚠️ 所有字符串字段一律过 `_as_text()`：JSON 里的 `null` 是 `None`，
+    若直接 `str(None)` 会得到**看起来正常的 `"None"`**，而校验层拦不住它
+    （非空、确实是 str）。这类泄漏必须在**读取边界**堵住。
+    """
     samples: list[Sample] = []
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -169,9 +230,9 @@ def read_jsonl(path: str | Path) -> list[Sample]:
         obj = json.loads(line)
         samples.append(
             Sample(
-                id=str(obj.get("id", "")),
-                text=str(obj.get("text", "")),
-                source=obj.get("source") or {},
+                id=_as_text(obj.get("id")),
+                text=_as_text(obj.get("text")),
+                source=_clean_source(obj.get("source")),
                 labels=obj.get("labels") or {},
                 annotation=obj.get("annotation") or {"status": "raw"},
             )

@@ -14,6 +14,7 @@ python -m pytest ai/dataset/tests -q
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -34,6 +35,7 @@ from ai.dataset.export import (  # noqa: E402
 from ai.dataset.prelabel import KeywordTagger, NullLabeler, prelabel_samples, resolve_labeler  # noqa: E402
 from ai.dataset.schema import (  # noqa: E402
     Sample,
+    _as_text,
     make_sample,
     read_jsonl,
     validate_sample,
@@ -317,3 +319,117 @@ def test_export_skips_entities_field_when_all_cleaned() -> None:
     s.labels = {"category": "通知", "entities": [{"type": "", "text": "残缺"}]}
     payload = json.loads(build_messages(s)["messages"][2]["content"])
     assert payload == {"category": "通知"}, payload
+
+
+# ----------------------------- 回归锁：读取边界的 JSON null（PR #92 第二轮复查）
+#
+# 复查指出：同一个 bug 类（None 被当成值）还有第 4 处，而且**位置更靠前** —— 在读取边界：
+#   obj.get("text", "") 在「键存在、值为 null」时返回 None（不是默认值 ""）
+#   → str(None) → 字符串 "None" —— **看起来完全正常**。
+#
+# 这解释了为什么上一轮把校验铺到 prelabel/export 之后仍然漏：
+# **None 在进入校验之前就已经变成了合法值（非空、确实是 str）**，
+# 校验放在它后面，结构上就注定漏。所以修复必须落在**读入口**。
+#
+# 📌 又一条教训：**修完一个 bug 要问“同一模式还有几个入口”**，而不是只修被指出的那一处。
+
+
+def test_read_jsonl_does_not_turn_null_into_none_string(tmp_path: Path) -> None:
+    """JSON null 不得变成字符串 "None"。"""
+    p = tmp_path / "null.jsonl"
+    p.write_text(
+        json.dumps({"id": "N1", "text": None, "source": {"type": "file", "ref": "x.md"},
+                    "labels": {"importance": 3}, "annotation": {"status": "raw"}},
+                   ensure_ascii=False) + "\n"
+        + json.dumps({"id": None, "text": "正常正文",
+                      "source": {"type": "file", "ref": None, "url": None},
+                      "labels": {"importance": 3}, "annotation": {"status": "raw"}},
+                     ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    rows = read_jsonl(p)
+    assert rows[0].text == "", f"text:null 应读成空串，实际 {rows[0].text!r}"
+    assert rows[1].id == "", f"id:null 应读成空串，实际 {rows[1].id!r}"
+    # 核心断言：任何字段都不该出现字符串 "None"
+    for s in rows:
+        assert s.id != "None", "id 读成 'None' —— 两个 null id 会互相撞上，C32 配对失效"
+        assert s.text != "None", "text 读成 'None' —— 会被写进训练目标"
+    # source 里的 null 顺手清掉（它不进训练目标，但同一类问题）
+    assert rows[1].source["ref"] == ""
+    assert rows[1].source["url"] == ""
+
+
+def test_read_jsonl_null_rows_are_rejected_by_validation(tmp_path: Path) -> None:
+    """读取边界清完之后，空 id / 空 text 应被判为不合规（而不是静默通过）。"""
+    p = tmp_path / "null2.jsonl"
+    p.write_text(json.dumps({"id": None, "text": None, "source": {"type": "file"},
+                             "labels": {}, "annotation": {"status": "raw"}},
+                            ensure_ascii=False) + "\n", encoding="utf-8")
+    problems = validate_sample(read_jsonl(p)[0])
+    assert any("id" in x for x in problems), problems
+    assert any("text" in x for x in problems), problems
+
+
+def test_read_jsonl_keeps_normal_rows_unchanged(tmp_path: Path) -> None:
+    """反向对照：正常行读进来必须逐字不变（修复不能误伤好数据）。"""
+    p = tmp_path / "ok.jsonl"
+    p.write_text(json.dumps({"id": "K1", "text": "正常正文",
+                             "source": {"type": "notice", "ref": "7", "url": "http://x"},
+                             "labels": {"importance": 3}, "annotation": {"status": "raw"}},
+                            ensure_ascii=False) + "\n", encoding="utf-8")
+    s = read_jsonl(p)[0]
+    assert s.id == "K1"
+    assert s.text == "正常正文"
+    assert s.source == {"type": "notice", "ref": "7", "url": "http://x"}
+    assert validate_sample(s) == []
+
+
+def test_as_text_maps_none_to_empty_string() -> None:
+    assert _as_text(None) == ""
+    assert _as_text("x") == "x"
+    assert _as_text(0) == "0"          # 0 不是 None，必须保留
+    assert _as_text(False) == "False"  # 同理
+
+
+def test_validate_rejects_none_string_literals() -> None:
+    """上游若真的把 "None" 字面量喂进来，也必须被拦下 —— 同一 bug 类的最后一道闸。"""
+    assert any("None" in x for x in validate_sample(
+        Sample(id="None", text="正常", source={"type": "file"})))
+    assert any("None" in x for x in validate_sample(
+        Sample(id="a1", text="None", source={"type": "file"})))
+
+
+def test_validate_checks_deadline_format() -> None:
+    """deadline 是 TARGET_KEYS 里唯一没校验的字段，而它会进训练目标。"""
+    for bad in (12345, {"a": 1}, "不是日期", "2026/09/30", "2026-9-30"):
+        s = Sample(id="d1", text="正文", source={"type": "file"}, labels={"deadline": bad})
+        assert any("deadline" in x for x in validate_sample(s)), f"{bad!r} 应被拒"
+    for ok in ("2026-09-30", None, ""):
+        s = Sample(id="d1", text="正文", source={"type": "file"}, labels={"deadline": ok})
+        assert validate_sample(s) == [], f"{ok!r} 应被接受"
+
+
+def test_export_writes_nothing_when_samples_are_dirty(tmp_path: Path) -> None:
+    """校验必须在**写盘之前**：脏数据时不得产出训练集。
+
+    原先校验在导出之后 —— 文件已经躺在那儿，而消费方（C33 微调）只看文件、不看退出码，
+    退出码 1 拦不住它。
+    """
+    from ai.dataset import cli as cli_mod
+
+    p = tmp_path / "dirty.jsonl"
+    p.write_text(json.dumps({"id": "B1", "text": "正文", "source": {"type": "file"},
+                             "labels": {"importance": 99},
+                             "annotation": {"status": "raw"}}, ensure_ascii=False) + "\n",
+                 encoding="utf-8")
+    out = tmp_path / "out"
+    code = cli_mod.cmd_export(argparse.Namespace(infile=str(p), out_dir=str(out)))
+
+    assert code == 1, "脏数据必须返回退出码 1"
+    train = out / "train_extract.jsonl"
+    assert train.exists(), "应创建（并清空）该文件，避免消费方读到上一次的产物"
+    assert train.read_text(encoding="utf-8") == "", "脏数据不得进入训练集"
+    # 标注表与统计报告仍应产出 —— 人工修正数据正需要它们
+    assert (out / "labeling.csv").exists()
+    assert (out / "stats.md").exists()
