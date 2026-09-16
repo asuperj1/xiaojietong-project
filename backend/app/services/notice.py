@@ -53,6 +53,10 @@ def attach_extended_fields(rows: list[dict]) -> list[dict]:
     want = [c for c in _EXTENDED_NAMES if c in notice_extended_columns()]
     if not rows or not want:
         return rows
+    # B20：若行里已经带全扩展字段（说明是支持 include_extended 的 jt_db 直出的），
+    # 不必再补查一次。
+    if all(col in rows[0] for col in want):
+        return rows
     ids = [int(r["id"]) for r in rows if r.get("id") is not None]
     if not ids:
         return rows
@@ -101,6 +105,13 @@ def public_notice_page(
     - 有私密行且 ``span <= 100``：单次查询取前缀后切片；
     - 前缀过长（窗口落在 100 条之后，或私密行极多）：按 DAO 上限逐块累积，
       直到凑够 ``want`` 条公共行或数据取尽。
+
+    ## 与 B20 的接合
+
+    内部一律走 ``page_notices_rows()``（而不是直接 ``cpp_bridge.life_dao().page_notices``），
+    这样**每一次取数都顺带带出 B19 的扩展列**（jt_db 为新版本时），
+    不必再靠 ``attach_extended_fields`` 补查 —— 分页正确性（PR #95）与
+    「一次查询带全字段」（B20）叠加，才是最优路径。
     """
     if page < 1:
         page = 1
@@ -110,11 +121,11 @@ def public_notice_page(
     want = start + size
 
     if not private_ids:
-        return cpp_bridge.life_dao().page_notices(page, size, category, target_grade)
+        return page_notices_rows(page, size, category, target_grade)
 
     span = want + max(size, len(private_ids))
     if span <= _DAO_MAX_SIZE:
-        rows = cpp_bridge.life_dao().page_notices(1, span, category, target_grade)
+        rows = page_notices_rows(1, span, category, target_grade)
         public = [r for r in rows if int(r["id"]) not in private_ids]
         if len(rows) < span or len(public) >= want:
             return public[start:want]
@@ -123,7 +134,7 @@ def public_notice_page(
     public = []
     block = 1
     while block <= _MAX_PROBE_BLOCKS:
-        rows = cpp_bridge.life_dao().page_notices(block, _DAO_MAX_SIZE, category, target_grade)
+        rows = page_notices_rows(block, _DAO_MAX_SIZE, category, target_grade)
         if not rows:
             break
         public.extend(r for r in rows if int(r["id"]) not in private_ids)
@@ -131,6 +142,34 @@ def public_notice_page(
             break
         block += 1
     return public[start:want]
+def page_notices_rows(
+    page: int, size: int, category: str = "", target_grade: str = ""
+) -> list[dict]:
+    """取一页通知行，**优先让 C++ DAO 直出** B19 的扩展列（B20）。
+
+    `LifeDAO::page_notices` 的列清单原本是编译期写死的，拿不到
+    ``deadline``/``materials``/``importance``，只能在 Python 侧按 id 二次补查
+    （`attach_extended_fields`）。B20 给 DAO 加了 ``include_extended`` 形参后，
+    条件具备时一次查询就能带全字段，省掉每页一条额外 SQL。
+
+    三条路径，**结果都与旧版一致**：
+
+    1. 库里有扩展列 **且** jt_db 是 B20 之后的版本 → 直出（最优）；
+    2. jt_db 还是旧版本 → 多传的实参抛 `TypeError`，退回旧签名，
+       再由 `attach_extended_fields` 补查；
+    3. 库里没有扩展列（未导入 `14_notice_extend.sql`）→ 探测为空，
+       直接走旧签名，与旧版逐字节一致。
+    """
+    dao = cpp_bridge.life_dao()
+    if notice_extended_columns():
+        try:
+            return dao.page_notices(page, size, category, target_grade, True)
+        except TypeError as exc:
+            # pybind11 在**实参个数多于形参**时抛的是固定文案 "incompatible function arguments"，
+            # 只认这一条 —— 别把 C++ 层因其它原因抛出的 TypeError 也静默吞掉（review P3）。
+            if "incompatible function arguments" not in str(exc):
+                raise
+    return dao.page_notices(page, size, category, target_grade)
 
 
 def _user_tags(user_id: int) -> list[str]:
