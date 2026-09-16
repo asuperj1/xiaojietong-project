@@ -1,0 +1,70 @@
+/* ============================================================
+   F10 设计令牌（Design Tokens）
+   依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §1.1 / §1.3
+   说明：只定义语义化变量，不产生具体样式；页面用 var() 取用。
+   定义在 page 上供普通页面统一消费；
+   自定义组件需结合 styleIsolation / 独立 WXSS 处理。
+   ============================================================ */
+page {
+  /* ---- 主色 ---- */
+  --xj-color-primary: #4A90D9;
+  --xj-color-primary-strong: #3F82C7; /* 悬停/激活加深 ≈8% */
+  --xj-color-primary-soft: rgba(74, 144, 217, 0.12);
+
+  /* ---- 文字（主/次/禁用）---- */
+  --xj-text-primary: #1F2329;
+  --xj-text-secondary: #8A9099;
+  --xj-text-disabled: #C4C9D0;
+  --xj-text-inverse: #FFFFFF;
+
+  /* ---- 表面与背景 ---- */
+  --xj-surface: #FFFFFF; /* 实心表面（表格/降级态） */
+  --xj-bg-page: linear-gradient(160deg, #FDF6F8 0%, #F2F7FD 55%, #F6F4FC 100%);
+  --xj-border-hairline: rgba(31, 35, 41, 0.06); /* 1rpx 分隔线 */
+
+  /* ---- 间距（8rpx 梯度，克制）---- */
+  --xj-space-xs: 8rpx;
+  --xj-space-sm: 16rpx;
+  --xj-space-md: 24rpx;
+  --xj-space-lg: 32rpx;
+  --xj-space-xl: 48rpx;
+
+  /* ---- 圆角 ---- */
+  --xj-radius-sm: 12rpx;
+  --xj-radius-card: 24rpx; /* 卡片 20~28rpx */
+  --xj-radius-panel: 28rpx; /* 大面板/浮层 */
+  --xj-radius-input: 24rpx;
+  --xj-radius-pill: 999rpx; /* 胶囊按钮 */
+
+  /* ---- 阴影（柔和低对比，避免硬边投影）---- */
+  --xj-shadow-soft: 0 8px 24px rgba(31, 38, 135, 0.08);
+  --xj-shadow-highlight: inset 0 2rpx 0 rgba(255, 255, 255, 0.6); /* 顶部高光边 */
+
+  /* ---- 字体 ---- */
+  --xj-font-size-sm: 24rpx;
+  --xj-font-size-md: 28rpx;
+  --xj-font-size-lg: 32rpx;
+  --xj-font-size-title: 36rpx;
+  --xj-font-weight-semibold: 600;
+  --xj-line-height: 1.6;
+
+  /* ---- 透明度 ---- */
+  --xj-opacity-disabled: 0.4;
+
+  /* ---- 动效（iOS 缓动）---- */
+  --xj-ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1); /* 页面滑入 / 侧栏滑出 */
+  --xj-ease-overshoot: cubic-bezier(0.34, 1.2, 0.64, 1); /* 搜索框上拉置顶 */
+  --xj-ease-press: cubic-bezier(0.4, 0, 0.2, 1); /* 长按 / 按钮反馈 */
+  --xj-duration-fast: 150ms;
+  --xj-duration-base: 240ms;
+  --xj-duration-slow: 300ms;
+  --xj-duration-sheet: 320ms;
+
+  /* ---- 玻璃 ---- */
+  --xj-glass-bg: rgba(255, 255, 255, 0.62); /* 玻璃基础背景 */
+  --xj-glass-bg-strong: rgba(255, 255, 255, 0.82); /* 强玻璃（弹窗/浮层） */
+  --xj-glass-bg-reduced: rgba(255, 255, 255, 0.86); /* 减弱透明 / 无模糊降级 */
+  --xj-glass-bg-fallback: #FFFFFF; /* 运行时降级：实心底 */
+  --xj-glass-border: rgba(255, 255, 255, 0.55); /* 玻璃边框 */
+  --xj-glass-blur: blur(20px) saturate(180%);
+}
