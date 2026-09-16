@@ -243,7 +243,7 @@ def main() -> int:
             shapes_after[db] = sh
             missing = [c for c in BANNER_AUTHORITATIVE if c not in sh[0]]
             ok(not missing, f"{db}: home_banner 权威列齐全", f"缺 {missing}")
-            print(f"      遗留列 = {sorted(sh[1]) or '无'}")
+            ok(not sh[1], f"{db}: home_banner 无遗留列（旧列已受控清理）", f"残留 {sorted(sh[1])}")
 
         print("\n== 2. 三形状 × 跑一遍脚本（驿站） ==")
         pickup_after: dict[str, tuple[dict, set]] = {}
@@ -253,7 +253,7 @@ def main() -> int:
             pickup_after[db] = sh
             missing = [c for c in PICKUP_AUTHORITATIVE if c not in sh[0]]
             ok(not missing, f"{db}: pickup_point 权威列齐全", f"缺 {missing}")
-            print(f"      遗留列 = {sorted(sh[1]) or '无'}")
+            ok(not sh[1], f"{db}: pickup_point 无遗留列（旧列已受控清理）", f"残留 {sorted(sh[1])}")
 
         print("\n== 3. 核心断言：三个库的权威形状必须完全一致 ==")
         ref_b = shapes_after[TEST_DBS[0]][0]

@@ -135,7 +135,48 @@ INSERT INTO `home_banner` (`id`, `title`, `image`, `link_type`, `link_target`, `
     (3, '二手交易更放心',   '/static/images/banner-second.png', 'page', '/pages/second/index',   10, 1)
 ON DUPLICATE KEY UPDATE `id` = `id`;
 
--- ================================================== PART 5 · 自检
+-- ================================================== PART 5 · 旧列清理（受控 DROP）
+-- 目的：让**所有环境**的 `home_banner` 列集合完全一致 —— 这是 B19「统一全组结构」的硬要求，
+--       否则"收敛过的库"仍然比"全新库"多几列，结构依旧是两个版本。
+-- 前提：PART 3 已把 `image_url` / `link_url` 的数据回填到 `image` / `link_target`。
+-- 安全守卫：**只有当旧列已无"独有数据"时才 DROP**（旧列有值、权威列却为空的这类行必须为 0）；
+--       一旦发现独有数据就保留并打印警告，交由人工确认 —— 宁可留着，也不静默丢数据。
+
+-- 5.1 检查 image_url 是否还有独有数据（列不存在时 @orphan 记为 0）
+SET @has_img_url := (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'home_banner' AND column_name = 'image_url'
+);
+SET @sql := IF(@has_img_url = 1,
+    'SELECT COUNT(*) INTO @orphan FROM `home_banner` WHERE COALESCE(`image_url`, '''') <> '''' AND COALESCE(`image`, '''') = ''''',
+    'SET @orphan := 0');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := IF(@has_img_url = 0,
+    'SELECT ''[skip] 无 image_url 旧列'' AS `收敛-清理`',
+    IF(@orphan = 0,
+        'ALTER TABLE `home_banner` DROP COLUMN `image_url`',
+        'SELECT ''[warn] image_url 仍有独有数据，保留不删，请人工确认后再清理'' AS `收敛-清理`'));
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- 5.2 检查 link_url 是否还有独有数据
+SET @has_link_url := (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'home_banner' AND column_name = 'link_url'
+);
+SET @sql := IF(@has_link_url = 1,
+    'SELECT COUNT(*) INTO @orphan FROM `home_banner` WHERE COALESCE(`link_url`, '''') <> '''' AND COALESCE(`link_target`, '''') = ''''',
+    'SET @orphan := 0');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := IF(@has_link_url = 0,
+    'SELECT ''[skip] 无 link_url 旧列'' AS `收敛-清理`',
+    IF(@orphan = 0,
+        'ALTER TABLE `home_banner` DROP COLUMN `link_url`',
+        'SELECT ''[warn] link_url 仍有独有数据，保留不删，请人工确认后再清理'' AS `收敛-清理`'));
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- ================================================== PART 6 · 自检
 SELECT column_name AS `列`, column_type AS `类型`, is_nullable AS `可空`, column_comment AS `说明`
 FROM information_schema.columns
 WHERE table_schema = DATABASE() AND table_name = 'home_banner'
