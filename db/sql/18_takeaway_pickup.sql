@@ -8,54 +8,162 @@
 --   ③ 到件通知    → `takeaway_order.arrived_at` / `notified_at`
 -- 另：「历史代买订单**不删**，加 `biz_type` 区分」（同文档 L301 / L367），「代收**不计费**」（L304）
 --
+-- ★★ `pickup_point` 的唯一真源（Single Source of Truth）★★
+--   PART 1 的 `CREATE TABLE` 即**唯一权威定义**；旧环境形状不一致时用 PART 2/3 的
+--   「守卫式收敛」把物理表收敛到本定义，**不得**反向改定义。规范：`docs/db-migration-convention.md`（PR #86）。
+--
+-- 权威列（文档 §3.7.1 / DAO / 真实库三方对齐）：
+--   `id` `name` `address` `business_hours` `latitude` `longitude` `contact_phone`
+--   `sort` `status` `is_deleted` `created_at` `updated_at`
+--   索引：`PRIMARY`、`idx_status_sort (status, sort)`
+--
+-- ⚠️ 历史漂移（本次收敛的起因）
+--   commit `17240f3` 为迁就某台机器的旧库，把
+--     `business_hours` → `open_time`、`status` → `enabled`，**并删掉了 `latitude`**，
+--   还多加了 `campus` 列与 `idx_campus` 索引，种子也换成另一套（5 行）数据。
+--   后果：`latitude` 与 `longitude` 失配（地图定位成对字段缺一个）、
+--   与文档/真实库不一致、`status` 语义被换成 `enabled`。
+--   处置：**定义回到权威形状**；旧列用守卫式收敛兼容（回填数据、**不 DROP**），
+--   待观察一轮确认无代码引用后再单独清理。
+--
+-- ⚠️ `takeaway_order.biz_type` 回填的**顺序陷阱**：
+--   不能直接 `ADD COLUMN biz_type TINYINT NOT NULL DEFAULT 2`，
+--   否则历史"代买"行会被一并标成 2（代收）—— **历史数据被打错标**。
+--   正确做法是 STEP 1/2/3 三步：先加可空列 → 回填历史为 1 → 再收紧为 NOT NULL DEFAULT 2。
+--
 -- 实测事实（2026-09-14）：
 --   · 真实表名是 **`takeaway_order`**（`life_order` 不存在 —— 文档曾用错名）
---   · 现有列：id/user_id/merchant_id/items_json/total_amount/delivery_fee/pay_amount/
---             status/address/contact/contact_phone/remark/created_at/updated_at
---   · 现有索引：PRIMARY / idx_merchant / idx_user_status
---   · **只有 3 行数据** ⇒ 回填风险极低
+--   · 该表当前只有 **3 行**数据 ⇒ 回填风险极低
 --
--- ⚠️ `biz_type` 回填的**顺序陷阱**：不能直接 `ADD COLUMN biz_type TINYINT NOT NULL DEFAULT 2`，
---   否则 3 行历史"代买"会被一并标成 2（代收）—— **历史数据被打错标**。
---   正确做法是 STEP 2/3/4 三步：先加可空列 → 回填历史为 1 → 再改成 NOT NULL DEFAULT 2。
---
--- 幂等性：`CREATE TABLE IF NOT EXISTS` + 列/索引存在性守卫；回填用 `WHERE biz_type IS NULL`；
---         重复执行不报错、不丢数据、不重复打标。
+-- 幂等性：建表 `IF NOT EXISTS` + 列/索引存在性守卫 + 回填限定条件；重复执行不报错、不丢数据。
 --
 -- 回滚：见文件末尾。
 -- ============================================================
 USE xiaojietong;
 
--- ============================================== PART A · pickup_point 建表
+-- ================================================== PART 1 · pickup_point 建表（唯一真源）
 CREATE TABLE IF NOT EXISTS `pickup_point` (
     `id`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键',
     `name`           VARCHAR(128)    NOT NULL                COMMENT '驿站名（如 菜鸟驿站·一食堂店）',
     `address`        VARCHAR(255)    NOT NULL DEFAULT ''     COMMENT '地址 / 位置描述',
-    `open_time`    VARCHAR(64)     NOT NULL DEFAULT ''     COMMENT '营业时间（如 07:30-21:00）',
-    `campus`       VARCHAR(32)     NOT NULL DEFAULT ''     COMMENT '所属校区（空=全部）',
+    `business_hours` VARCHAR(64)     NOT NULL DEFAULT ''     COMMENT '营业时间',
+    `latitude`       DECIMAL(10,6)   NOT NULL DEFAULT 0      COMMENT '纬度',
     `longitude`      DECIMAL(10,6)   NOT NULL DEFAULT 0      COMMENT '经度',
     `contact_phone`  VARCHAR(32)     NOT NULL DEFAULT ''     COMMENT '联系电话',
     `sort`           INT             NOT NULL DEFAULT 0      COMMENT '排序，越大越靠前',
-    `enabled`      TINYINT         NOT NULL DEFAULT 1      COMMENT '0 停用 1 启用',
+    `status`         TINYINT         NOT NULL DEFAULT 1      COMMENT '1启用 0停用',
     `is_deleted`     TINYINT         NOT NULL DEFAULT 0      COMMENT '软删除 0否 1是',
     `created_at`     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `updated_at`     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    KEY `idx_enabled_sort` (`enabled`, `sort`),
-    KEY `idx_campus` (`campus`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='取件驿站（代收业务）';
+    KEY `idx_status_sort` (`status`, `sort`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='快递驿站 / 取件点';
 
--- 种子（**固定主键 + ON DUPLICATE KEY UPDATE**：可补齐缺行、可更新文案、不重复插入）
-INSERT INTO `pickup_point` (`id`, `name`, `address`, `open_time`, `campus`, `sort`, `enabled`) VALUES
-  (1, '三教快递柜',       '第三教学楼东侧一层',  '24 小时',     '',         50, 1),
-  (2, '中心馆驿站',       '中心图书馆北门旁',    '07:30-21:30', '',         40, 1),
-  (3, '行政楼快递站',     '行政楼 108 旁',       '08:30-18:00', '',         30, 1),
-  (4, '学生活动中心驿站', '学生活动中心西侧',    '08:00-20:00', '',         20, 1),
-  (5, '南区菜鸟驿站',     '南区生活区 3 号楼下', '07:00-22:00', '前卫南区', 10, 1)
-ON DUPLICATE KEY UPDATE `name`=VALUES(`name`), `address`=VALUES(`address`), `open_time`=VALUES(`open_time`),
-  `campus`=VALUES(`campus`), `sort`=VALUES(`sort`), `enabled`=VALUES(`enabled`);
+-- ================================================== PART 2 · 收敛：补权威列
+-- 表已存在（漂移形状）时建表语句被跳过 ⇒ 缺的列在这里补。
+-- ⚠️ `latitude` 是漂移中被**删掉**的列，旧形状里没有对应数据源，
+--    只能补列并置默认 0（经纬度成对；置 0 表示"未录入"，待运营补录真实坐标）。
 
--- ============================================== PART B · takeaway_order 改造
+SET @ddl := (
+    SELECT IF(COUNT(*) = 0,
+        'ALTER TABLE `pickup_point` ADD COLUMN `business_hours` VARCHAR(64) NOT NULL DEFAULT '''' COMMENT ''营业时间'' AFTER `address`',
+        'SELECT ''[skip] pickup_point.business_hours 已存在'' AS `收敛-补列`')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'business_hours'
+);
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := (
+    SELECT IF(COUNT(*) = 0,
+        'ALTER TABLE `pickup_point` ADD COLUMN `latitude` DECIMAL(10,6) NOT NULL DEFAULT 0 COMMENT ''纬度'' AFTER `business_hours`',
+        'SELECT ''[skip] pickup_point.latitude 已存在'' AS `收敛-补列`')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'latitude'
+);
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := (
+    SELECT IF(COUNT(*) = 0,
+        'ALTER TABLE `pickup_point` ADD COLUMN `longitude` DECIMAL(10,6) NOT NULL DEFAULT 0 COMMENT ''经度'' AFTER `latitude`',
+        'SELECT ''[skip] pickup_point.longitude 已存在'' AS `收敛-补列`')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'longitude'
+);
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := (
+    SELECT IF(COUNT(*) = 0,
+        'ALTER TABLE `pickup_point` ADD COLUMN `contact_phone` VARCHAR(32) NOT NULL DEFAULT '''' COMMENT ''联系电话'' AFTER `longitude`',
+        'SELECT ''[skip] pickup_point.contact_phone 已存在'' AS `收敛-补列`')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'contact_phone'
+);
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := (
+    SELECT IF(COUNT(*) = 0,
+        'ALTER TABLE `pickup_point` ADD COLUMN `status` TINYINT NOT NULL DEFAULT 1 COMMENT ''1启用 0停用'' AFTER `sort`',
+        'SELECT ''[skip] pickup_point.status 已存在'' AS `收敛-补列`')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'status'
+);
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @ddl := (
+    SELECT IF(COUNT(*) = 0,
+        'ALTER TABLE `pickup_point` ADD COLUMN `is_deleted` TINYINT NOT NULL DEFAULT 0 COMMENT ''软删除 0否 1是'' AFTER `status`',
+        'SELECT ''[skip] pickup_point.is_deleted 已存在'' AS `收敛-补列`')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'is_deleted'
+);
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- ================================================== PART 3 · 收敛：回填旧列数据
+-- 漂移形状的数据在 `open_time` / `enabled` 里，搬到权威列；**不 DROP 旧列**。
+-- 回填条件刻意保守，保证可重跑且不覆盖权威数据。
+
+-- 3.1 `open_time` → `business_hours`（仅当权威列为空时）
+SET @has := (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'open_time'
+);
+SET @sql := IF(@has = 1,
+    'UPDATE `pickup_point` SET `business_hours` = `open_time` WHERE (`business_hours` IS NULL OR `business_hours` = '''') AND COALESCE(`open_time`, '''') <> ''''',
+    'SELECT ''[skip] 无 open_time 旧列，无需回填'' AS `收敛-回填`');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- 3.2 `enabled` → `status`（**单向收紧**：旧列说"停用"才把权威列也置停用）
+--     方向刻意只做 1→0，绝不把 0 放宽成 1 —— 宁可少启用，不可错启用。
+SET @has := (
+    SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND column_name = 'enabled'
+);
+SET @sql := IF(@has = 1,
+    'UPDATE `pickup_point` SET `status` = 0 WHERE `status` = 1 AND `enabled` = 0',
+    'SELECT ''[skip] 无 enabled 旧列，无需回填'' AS `收敛-回填`');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- 3.3 权威索引守卫：漂移形状建的是 `idx_enabled_sort`，权威索引是 `idx_status_sort`。
+--     必须放在 PART 2 补列之后（否则 `status` 不存在会报错）。
+SET @ddl := (
+    SELECT IF(COUNT(*) = 0,
+        'ALTER TABLE `pickup_point` ADD KEY `idx_status_sort` (`status`, `sort`)',
+        'SELECT ''[skip] idx_status_sort 已存在'' AS `收敛-索引`')
+    FROM information_schema.statistics
+    WHERE table_schema = DATABASE() AND table_name = 'pickup_point' AND index_name = 'idx_status_sort'
+);
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- ================================================== PART 4 · 种子（幂等 · **空更新**）
+-- 固定主键 ⇒ 缺行会补上；`ON DUPLICATE KEY UPDATE id = id` 是**空更新** ⇒
+-- 已有行**一个字段都不改**，重跑无副作用，也不会覆盖运营已改的内容（规范 §5.2）。
+INSERT INTO `pickup_point` (`id`, `name`, `address`, `business_hours`, `sort`, `status`) VALUES
+    (1, '菜鸟驿站·一食堂店', '第一食堂东侧 10 米',       '08:00-20:00', 30, 1),
+    (2, '京东快递·图书馆店', '图书馆一层北门内',         '09:00-19:00', 20, 1),
+    (3, '顺丰驿站·三公寓店', '第三学生公寓 1 号楼门厅',   '08:30-20:30', 10, 1)
+ON DUPLICATE KEY UPDATE `id` = `id`;
+
+-- ================================================== PART 5 · takeaway_order 改造
 -- ---------------------------------------------- STEP 1/4 先加**可空** biz_type
 SET @ddl := (
     SELECT IF(COUNT(*) = 0,
@@ -97,7 +205,7 @@ SET @ddl := (
 );
 PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
--- 到件时间 / 到件通知时间
+-- 到件时间
 SET @ddl := (
     SELECT IF(COUNT(*) = 0,
         'ALTER TABLE `takeaway_order` ADD COLUMN `arrived_at` DATETIME NULL DEFAULT NULL COMMENT ''到件时间（驿站签收）'' AFTER `pickup_point_id`',
@@ -107,6 +215,7 @@ SET @ddl := (
 );
 PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
+-- 到件通知时间
 SET @ddl := (
     SELECT IF(COUNT(*) = 0,
         'ALTER TABLE `takeaway_order` ADD COLUMN `notified_at` DATETIME NULL DEFAULT NULL COMMENT ''到件通知发出时间（幂等：非空即不再重复通知）'' AFTER `arrived_at`',
@@ -116,7 +225,7 @@ SET @ddl := (
 );
 PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
--- ============================================== PART C · 索引
+-- ================================================== PART 6 · takeaway_order 索引
 -- 取件码回查（「取件码可生成与回查」是 C25 的验收口径）
 SET @ddl := (
     SELECT IF(COUNT(*) = 0,
@@ -137,7 +246,7 @@ SET @ddl := (
 );
 PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
--- ---------------------------------------------------------------- 自检
+-- ================================================== PART 7 · 自检
 SELECT column_name AS `列`, column_type AS `类型`, is_nullable AS `可空`, column_comment AS `说明`
 FROM information_schema.columns
 WHERE table_schema = DATABASE() AND table_name = 'takeaway_order'
@@ -148,10 +257,26 @@ SELECT CONCAT('历史代买存量 = ', SUM(`biz_type` = 1), ' 行，代收 = ', 
               ' 行，总行数 = ', COUNT(*)) AS `回填自检（历史行必须全是 biz_type=1）`
 FROM `takeaway_order`;
 
--- 驿站自检：真实表用的是 `enabled`（0 停用 / 1 启用），
--- 原写法引用 `status` 会报 ERROR 1054 Unknown column 'status'。
-SELECT CONCAT('pickup_point 行数 = ', COUNT(*), '，启用 = ', SUM(`enabled` = 1)) AS `驿站自检`
+SELECT CONCAT('pickup_point 行数 = ', COUNT(*), '，启用 = ', SUM(`status` = 1)) AS `驿站自检`
 FROM `pickup_point`;
+
+-- 收敛自检：应当只有权威列；若列出 `open_time`/`campus`/`enabled`，说明该库是漂移形状
+-- （数据已回填到权威列），旧列留待观察一轮后单独清理。
+SELECT IF(COUNT(*) = 0,
+          '✅ 无漂移遗留列，形状已统一',
+          CONCAT('⚠️ 存在漂移遗留列（数据已回填，待清理）：', GROUP_CONCAT(column_name))) AS `收敛自检-遗留列`
+FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'pickup_point'
+  AND column_name IN ('open_time', 'campus', 'enabled');
+
+-- 权威形状自检：12 列齐全才通过。
+SELECT IF(COUNT(*) = 12,
+          CONCAT('✅ pickup_point 权威列齐全（', COUNT(*), ' 列）'),
+          CONCAT('❌ 权威列缺失，仅有 ', COUNT(*), ' 列，请检查 PART 2 执行结果')) AS `收敛自检-权威列`
+FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'pickup_point'
+  AND column_name IN ('id','name','address','business_hours','latitude','longitude',
+                      'contact_phone','sort','status','is_deleted','created_at','updated_at');
 
 -- ============================================================
 -- 回滚（需要时手工执行；同样幂等）
@@ -164,4 +289,9 @@ FROM `pickup_point`;
 -- ALTER TABLE `takeaway_order` DROP COLUMN `pickup_code`;
 -- ALTER TABLE `takeaway_order` DROP COLUMN `biz_type`;
 -- DROP TABLE IF EXISTS `pickup_point`;
+--
+-- 若只想撤掉收敛补的三列（会丢这三列的数据）：
+-- ALTER TABLE `pickup_point` DROP COLUMN `status`;
+-- ALTER TABLE `pickup_point` DROP COLUMN `latitude`;
+-- ALTER TABLE `pickup_point` DROP COLUMN `business_hours`;
 -- ============================================================
