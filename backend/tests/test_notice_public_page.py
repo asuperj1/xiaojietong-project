@@ -44,12 +44,25 @@ class FakeDAO:
         self.rows = rows
         self.calls: list[tuple[int, int]] = []
 
-    def page_notices(self, page: int, size: int, category: str, target_grade: str) -> list[dict]:
+    def page_notices(self, page: int, size: int, category: str, target_grade: str,
+                     include_extended: bool = False) -> list[dict]:
+        """兼容 B20 的新签名（多一个 include_extended）。
+
+        `public_notice_page` 内部走 `page_notices_rows()`，因此在"库里有扩展列"的
+        环境下这里会收到 include_extended=True —— 与真实 jt_db（B20 之后）一致，
+        此时行里会多出 deadline/materials/importance 三列。
+        """
         if size > 100:
             size = 20          # C++ 侧是**重置**为 20，不是截断到 100
         self.calls.append((page, size))
         start = (page - 1) * size
-        return [dict(r) for r in self.rows[start:start + size]]
+        out = [dict(r) for r in self.rows[start:start + size]]
+        if include_extended:
+            for row in out:
+                row.setdefault("deadline", None)
+                row.setdefault("materials", None)
+                row.setdefault("importance", None)
+        return out
 
 
 @pytest.fixture
@@ -156,3 +169,27 @@ def test_private_ids_larger_than_dataset_returns_empty(fake_dao):
     dao = fake_dao(_dataset(n_private=10, n_public=0))
     assert notice_service.public_notice_page(_private_ids(), 1, 5) == []
     assert len(dao.calls) <= 3
+
+
+def test_public_page_carries_extended_columns_via_dao(fake_dao, monkeypatch):
+    """B20 接合：`public_notice_page` 内部改走 `page_notices_rows()`。
+
+    因此在"库里有扩展列"时，**分页的每一次取数都会带出** deadline/materials/
+    importance，不必再靠 `attach_extended_fields` 补查 —— 分页正确性（#95）与
+    「一次查询带全字段」（B20）叠加。
+    """
+    monkeypatch.setattr(notice_service, "notice_extended_columns",
+                        lambda: {"deadline", "materials", "importance"})
+    fake_dao(_dataset())
+    out = notice_service.public_notice_page(_private_ids(), 1, 3)
+    assert [r["id"] for r in out] == [PUBLIC_ID_BASE + i for i in range(3)]
+    assert all("deadline" in r and "importance" in r for r in out)
+
+
+def test_public_page_without_extended_columns_still_works(fake_dao, monkeypatch):
+    """反向对照：库里没有扩展列（未导入 14_notice_extend.sql）时分页照常正确。"""
+    monkeypatch.setattr(notice_service, "notice_extended_columns", lambda: set())
+    fake_dao(_dataset())
+    out = notice_service.public_notice_page(_private_ids(), 1, 3)
+    assert [r["id"] for r in out] == [PUBLIC_ID_BASE + i for i in range(3)]
+    assert not any("deadline" in r for r in out)

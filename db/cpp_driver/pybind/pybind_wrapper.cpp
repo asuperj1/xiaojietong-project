@@ -318,7 +318,10 @@ PYBIND11_MODULE(jt_db, m) {
     py::class_<LifeDAO>(m, "LifeDAO")
         .def(py::init<>())
         .def("page_notices", &LifeDAO::page_notices, py::arg("page"), py::arg("size"),
-             py::arg("category") = "", py::arg("target_grade") = "", "通知分页/精准推送")
+             py::arg("category") = "", py::arg("target_grade") = "",
+             py::arg("include_extended") = false,
+             "通知分页/精准推送；include_extended=true 时一并带出 B19 的 "
+             "deadline/materials/importance（需先导入 14_notice_extend.sql）")
         .def("mark_notice_read", &LifeDAO::mark_notice_read, py::arg("user_id"),
              py::arg("notice_id"), "标记通知已读")
         .def("page_merchants", &LifeDAO::page_merchants, py::arg("page"), py::arg("size"),
