@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.db import cpp_bridge
 from app.services.chunker import chunk_hash, chunk_text, summarize
 from app.services.embedder import embedder
+from app.services.rerank import resolve_reranker
 from app.services.vector_store import get_vector_store
 from app.services.zh_tokenizer import (
     build_like_params,
@@ -131,21 +132,35 @@ async def _retrieve_uncached(question: str, top_k: int) -> list[dict]:
     """实际回源逻辑（不读缓存）。
 
     优先向量检索；embedding/向量库不可用或未命中时降级关键词匹配。
+
+    `C16`：先按 `rag_rerank_candidates` **多召**候选，再用重排策略裁到 `top_k`。
+    重排放在**回源内部**而不是 `retrieve()` 外层 —— 否则缓存里存的是未重排的结果，
+    改了策略得等 TTL 过期才生效，且缓存命中时根本不会重排。
     """
+    reranker = resolve_reranker(settings.rag_rerank)
+    # 默认策略（none）不多召：不改变任何现有行为与开销
+    if reranker.name == "none":
+        cand_k = top_k
+    else:
+        cand_k = max(top_k, settings.rag_rerank_candidates)
+
     result: list[dict] = []
     emb = await embedder.embed_one(question)
     if emb is not None:
         try:
             store = get_vector_store()
             hits = await asyncio.to_thread(
-                store.search, emb, top_k, settings.rag_score_threshold
+                store.search, emb, cand_k, settings.rag_score_threshold
             )
             if hits:
                 result = _format_hits(hits)
         except Exception as exc:  # noqa: BLE001 - 向量库异常降级
             logger.warning("向量检索异常，降级关键词：%s", exc)
     if not result:
-        result = await _keyword_retrieve(question, top_k)
+        result = await _keyword_retrieve(question, cand_k)
+
+    if reranker.name != "none" and len(result) > 1:
+        result = reranker.rerank(question, result, top_k)
     return result
 
 
@@ -235,6 +250,8 @@ async def index_doc(doc_id: int) -> dict:
         doc.get("content") or "",
         settings.rag_chunk_size,
         settings.rag_chunk_overlap,
+        # C15：切片策略可插拔（默认 fixed，与 C15 之前行为一致）
+        strategy=settings.rag_chunk_strategy,
     )
     if not chunks:
         # 无可分块文本：直接标记完成（避免卡在待向量化）

@@ -53,6 +53,10 @@ def attach_extended_fields(rows: list[dict]) -> list[dict]:
     want = [c for c in _EXTENDED_NAMES if c in notice_extended_columns()]
     if not rows or not want:
         return rows
+    # B20：若行里已经带全扩展字段（说明是支持 include_extended 的 jt_db 直出的），
+    # 不必再补查一次。
+    if all(col in rows[0] for col in want):
+        return rows
     ids = [int(r["id"]) for r in rows if r.get("id") is not None]
     if not ids:
         return rows
@@ -67,6 +71,105 @@ def attach_extended_fields(rows: list[dict]) -> list[dict]:
         for col in want:
             row[col] = source.get(col)
     return rows
+
+
+# `LifeDAO::page_notices` 的 size 上限。注意 C++ 侧是 `size > 100 → size = 20`（**重置**，
+# 不是截到 100），所以一次最多只要 100 条，要多了反而只剩 20 条。
+_DAO_MAX_SIZE = 100
+
+# 逐块累积时的兜底上限（100 × 20 = 2000 条），防止异常数据下无限翻页。
+_MAX_PROBE_BLOCKS = 20
+
+
+def public_notice_page(
+    private_ids: set[int], page: int, size: int, category: str = "", target_grade: str = ""
+) -> list[dict]:
+    """`/life/notices` 的公共通知分页：剔除私密推送行，且**不破坏分页**。
+
+    ## 两个坑（都实测复现过）
+
+    **坑一：先取第 page 页、不够再向后补拉** —— 会把本页窗口整体前移，
+    第 N 页的尾部条目又出现在第 N+1 页（重复），真正属于第 N+1 页的条目被挤掉（漏项）。
+    分页窗口的定义是「按 ``publish_time DESC`` 的第 ``start..start+size`` 条」，
+    所以必须**先取到覆盖目标窗口的完整前缀、剔完私密行、再切片**。
+
+    **坑二：缓冲只放"一页"** —— 私密推送行（B18 分层推送）全部堆在时间轴顶端时，
+    窗口会被整体前移**私密行的条数**那么多位，而不是一页那么多。
+    实测：库里 10 条私密行占据最新的 10 个位置时，``size=1`` 与 ``size=3``
+    的一页缓冲（``span = want + size``）根本够不到公共行，接口**返回空列表**。
+    因此缓冲取 ``want + max(size, len(private_ids))``。
+
+    ## 开销
+
+    - 无私密行：单次查询，与旧版完全一致（零额外代价）；
+    - 有私密行且 ``span <= 100``：单次查询取前缀后切片；
+    - 前缀过长（窗口落在 100 条之后，或私密行极多）：按 DAO 上限逐块累积，
+      直到凑够 ``want`` 条公共行或数据取尽。
+
+    ## 与 B20 的接合
+
+    内部一律走 ``page_notices_rows()``（而不是直接 ``cpp_bridge.life_dao().page_notices``），
+    这样**每一次取数都顺带带出 B19 的扩展列**（jt_db 为新版本时），
+    不必再靠 ``attach_extended_fields`` 补查 —— 分页正确性（PR #95）与
+    「一次查询带全字段」（B20）叠加，才是最优路径。
+    """
+    if page < 1:
+        page = 1
+    if size < 1:
+        size = 1
+    start = (page - 1) * size
+    want = start + size
+
+    if not private_ids:
+        return page_notices_rows(page, size, category, target_grade)
+
+    span = want + max(size, len(private_ids))
+    if span <= _DAO_MAX_SIZE:
+        rows = page_notices_rows(1, span, category, target_grade)
+        public = [r for r in rows if int(r["id"]) not in private_ids]
+        if len(rows) < span or len(public) >= want:
+            return public[start:want]
+
+    # 退化路径：一次拿不了那么多，就按 DAO 上限逐块取，直到凑够 want 条公共行。
+    public = []
+    block = 1
+    while block <= _MAX_PROBE_BLOCKS:
+        rows = page_notices_rows(block, _DAO_MAX_SIZE, category, target_grade)
+        if not rows:
+            break
+        public.extend(r for r in rows if int(r["id"]) not in private_ids)
+        if len(public) >= want or len(rows) < _DAO_MAX_SIZE:
+            break
+        block += 1
+    return public[start:want]
+def page_notices_rows(
+    page: int, size: int, category: str = "", target_grade: str = ""
+) -> list[dict]:
+    """取一页通知行，**优先让 C++ DAO 直出** B19 的扩展列（B20）。
+
+    `LifeDAO::page_notices` 的列清单原本是编译期写死的，拿不到
+    ``deadline``/``materials``/``importance``，只能在 Python 侧按 id 二次补查
+    （`attach_extended_fields`）。B20 给 DAO 加了 ``include_extended`` 形参后，
+    条件具备时一次查询就能带全字段，省掉每页一条额外 SQL。
+
+    三条路径，**结果都与旧版一致**：
+
+    1. 库里有扩展列 **且** jt_db 是 B20 之后的版本 → 直出（最优）；
+    2. jt_db 还是旧版本 → 多传的实参抛 `TypeError`，退回旧签名，
+       再由 `attach_extended_fields` 补查；
+    3. 库里没有扩展列（未导入 `14_notice_extend.sql`）→ 探测为空，
+       直接走旧签名，与旧版逐字节一致。
+    """
+    dao = cpp_bridge.life_dao()
+    if notice_extended_columns():
+        try:
+            return dao.page_notices(page, size, category, target_grade, True)
+        except TypeError as exc:
+            # pybind11 在**实参个数多于形参**时抛的是固定文案 "incompatible function arguments"，
+            # 只认这一条 —— 别把 C++ 层因其它原因抛出的 TypeError 也静默吞掉（review P3）。
+            if "incompatible function arguments" not in str(exc):
+                raise
+    return dao.page_notices(page, size, category, target_grade)
 
 
 def _user_tags(user_id: int) -> list[str]:

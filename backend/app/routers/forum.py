@@ -14,7 +14,7 @@ from app.core.deps import get_current_user
 from app.core.response import BizError, err_audit, err_param, ok, paged
 from app.core.view_counter import view_counter
 from app.db import cpp_bridge
-from app.services import recommend
+from app.services import recommend, topic_search
 from app.services.audit import audit_content, status_of
 
 router = APIRouter(prefix="/topics", tags=["forum"])
@@ -23,11 +23,25 @@ router = APIRouter(prefix="/topics", tags=["forum"])
 @router.get("")
 def list_topics(
     category: str = "",
+    keyword: str = "",
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user),
 ):
-    items = cpp_bridge.forum_dao().page_topics(page, size, category, audited_only=True)
+    """帖子列表 / 关键词搜索（B29）。
+
+    - 不带 `keyword`：按更新时间倒序分页（`category` 可选，空串 = 全部）。
+    - 带 `keyword`：**标题 + 正文**全文检索（C26 的 FULLTEXT + ngram），按相关度倒序，
+      每条额外带 `relevance`；关键词净化后无可用词（如 `+++` / 纯空白）时
+      **自动退化为普通分页**，不返回空表。
+    - 待审（`audit_status=0`）与被拒（`=2`）的帖子**既不在列表里、也搜不出来**（DAO 统一过滤）。
+    - `total` 为**当前页条数**（与既有分页接口口径一致；真实 COUNT 需 DAO 返回，
+      见 `docs/api.md` §8 的备注）。
+    """
+    if keyword.strip():
+        items = topic_search.search(keyword.strip(), page, size, category)
+    else:
+        items = cpp_bridge.forum_dao().page_topics(page, size, category, audited_only=True)
     return ok(paged(items, len(items), page, size))
 
 
@@ -117,11 +131,16 @@ def my_topics(
 
 @router.get("/{topic_id}")
 def topic_detail(topic_id: int, user: dict = Depends(get_current_user)):
+    # 审计 DATA-01（同类缺陷）：原实现只靠 t.status=0，**未过滤 audit_status**，
+    # 导致待审（0）/被拒（2）的帖子仍可通过详情接口被他人直读。
+    # 列表侧 page_topics(audited_only=true) 已过滤，此处补齐；作者本人仍可查看自己
+    # 的帖子（与“我的帖子”返回 audit_status 的设计意图一致，见本文件 post_topic）。
     rows = cpp_bridge.query(
         "SELECT t.*, u.nickname AS author_name FROM topic t "
         "JOIN user u ON t.author_id = u.id "
-        "WHERE t.id = ? AND t.status = 0 AND t.is_deleted = 0",
-        [topic_id],
+        "WHERE t.id = ? AND t.status = 0 AND t.is_deleted = 0 "
+        "  AND (t.audit_status = 1 OR t.author_id = ?)",
+        [topic_id, int(user["id"])],
     )
     if not rows:
         raise BizError(1001, "帖子不存在")
