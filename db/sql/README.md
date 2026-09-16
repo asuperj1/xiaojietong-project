@@ -7,6 +7,28 @@
 其中 `11~13` 为 2026-09-10 新增（内容安全治理 / 通知投递 / 索引优化），
 均为**幂等脚本**（可重复执行，不会丢数据）。
 
+`14~19` 为 2026-09-14 新增（**二阶段 W1**）；同样全部**幂等可重跑**，
+且**每个脚本自带 `information_schema` 守卫 + 自检 SELECT + 回滚脚本**（回滚在文件末尾注释里）。
+
+> ⚠️ **`14~18` 是给后端/**C46（原 `B19`）**用的结构变更，不是首次建库脚本**：
+> 它们会在**线上被重复执行**，所以统一用 `CREATE TABLE IF NOT EXISTS` / 列存在性守卫，
+> **绝不用 `DROP TABLE IF EXISTS`**（那是 `01~10` 那种首次建库脚本的写法，重跑会**丢数据**）。
+
+> ★ **唯一真源（Single Source of Truth）**
+> `15_home_banner.sql` 与 `18_takeaway_pickup.sql` 的 `CREATE TABLE` 即对应表的**唯一权威定义**。
+> 旧环境形状不一致时，脚本内的**「守卫式收敛」**（`information_schema` 判存在性 + `PREPARE` 动态 SQL）
+> 会把物理表收敛到该定义：**补列 → 回填旧列数据 → 不 DROP 旧列**（旧列留待观察一轮后单独清理）。
+>
+> ⛔ **禁止**用「改 `CREATE TABLE` 去迁就本机旧库」的方式修脚本 —— 那会让「真源」越改越小，
+> 并且在其它机器上必报 `ERROR 1054`。旧环境不一致时应**加收敛段**，不是改定义。
+>
+> · 规范：`docs/db-migration-convention.md`
+> · 验证：`python tools/verify_ddl_convergence.py`（三种起点收敛 + 幂等）
+>   ｜ `python tools/verify_ddl_convergence.py --real`（证明对已收敛的真实库零副作用）
+> · 历史成因：`17240f3` 曾把 `image`/`link_type`/`link_target` 改成 `image_url`/`link_url`，
+>   把 `business_hours`/`status` 改成 `open_time`/`enabled` 并删掉 `latitude`，种子也换了一套 —— 
+>   现已按权威定义收敛回来（种子改为**空更新**，不再覆盖运营已改数据）。
+
 | 文件 | 模块 | 表 |
 |---|---|---|
 | `00_database.sql` | 建库（utf8mb4） | — |
@@ -23,7 +45,12 @@
 | **`11_audit.sql`** | **M9 内容安全治理（C7）** | **audit_word（敏感词库，19 词种子）/ audit_log（审核留痕）** |
 | **`12_notice_delivery.sql`** | **M8 扩展（C7）** | **notice_delivery（投递/曝光/得分/已读明细）** |
 | **`13_index_optimize.sql`** | **性能优化（C7）** | 11 个复合索引（见下） |
-| **`14_notice_extend.sql`** | **B19 通知表扩展（二阶段 W1）** | **campus_notice + deadlines/materials/importance（抽取结果存储位，均允许 NULL）+ idx_deadline** |
+| **`14_notice_extend.sql`** | **二阶段 W1 · B20 通知表扩展** | `campus_notice` +3 列（`deadline`/`materials`/`importance`，均可空）+ `idx_deadline` |
+| **`15_home_banner.sql`** | **二阶段 W1 · C46（原 `B19`）/C24 首页轮播** | **`home_banner`（新表，11 列）** + `idx_enabled_sort` + 3 条轮播种子；**含 `image_url`/`link_url` 漂移形状的守卫式收敛** |
+| **`16_search_history.sql`** | **二阶段 W1 · C46（原 `B19`）/C23 搜索历史** | **`user_search_history`（新表）** + `uk_user_keyword`（去重）+ `idx_user_created` |
+| **`17_user_student_no.sql`** | **二阶段 W1 · C46（原 `B19`）/C22 学号可写** | `user.student_no` 改**可空** + 清洗空串（实测 **64 行**）+ `uk_student_no` 唯一 + `student_no_updated_at` / `token_version` |
+| **`18_takeaway_pickup.sql`** | **二阶段 W1 · C46（原 `B19`）/C25 代收闭环** | **`pickup_point`（新表，12 列 + 3 驿站种子）** + `takeaway_order` +5 列（`biz_type`/`pickup_code`/`pickup_point_id`/`arrived_at`/`notified_at`）+ 历史回填 + 2 索引；**含 `open_time`/`campus`/`enabled` 漂移形状的守卫式收敛（含补回 `latitude`）** |
+| `19_topic_fulltext.sql` | 二阶段 W1 · C26 话题搜索 | `topic` 的 `FULLTEXT` + ngram 分词（幂等，PREPARE 分支） |
 | `99_init_data.sql` | 种子数据 | 演示用最小数据集 |
 | `99b_knowledge_faq.sql` | 增量 | 知识库 FAQ 追加 |
 | `99c_agent_tool_schema.sql` | 增量 | agent_tool 工具 schema 修正 |
@@ -69,7 +96,16 @@ mysql xiaojietong < 99_init_data.sql
 mysql xiaojietong < 99b_knowledge_faq.sql
 mysql xiaojietong < 99c_agent_tool_schema.sql
 mysql xiaojietong < 99d_knowledge_more.sql
+
+# 二阶段 W1 结构变更（14~19，均幂等可重跑；建议按序执行）
+for f in 14_notice_extend 15_home_banner 16_search_history 17_user_student_no 18_takeaway_pickup 19_topic_fulltext; do
+  mysql xiaojietong < "$f.sql"
+done
 ```
+
+> ⚠️ `14_notice_extend.sql` 仅存在于 **PR #60 分支**（`feature/backend`），合并后才会出现在 `dev`；
+> `15~18` 由 **C46（原 `B19`）** 独立 PR 交付。
+> ⚠️ `17_user_student_no.sql` **必须先跑**（它改 `user` 表），再部署依赖学号唯一/限频的后端代码。
 
 > Windows PowerShell 可用 `mysql -e "source <绝对路径>/11_audit.sql"` 方式执行
 > （`13_index_optimize.sql` 含 `DELIMITER`，必须用 `source` 或重定向，不能用 `-e "语句"`）。
