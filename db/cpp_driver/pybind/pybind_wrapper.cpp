@@ -273,14 +273,18 @@ PYBIND11_MODULE(jt_db, m) {
              py::arg("target_type"), py::arg("target_id"), "点赞/取消，返回当前是否已赞")
         .def("pending_audit", &ForumDAO::pending_audit, py::arg("limit") = 50,
              "待 AI 审核帖子")
-        .def("hot_topics", &ForumDAO::hot_topics, py::arg("limit") = 20, "热点帖子");
+        .def("hot_topics", &ForumDAO::hot_topics, py::arg("limit") = 20, "热点帖子")
+        .def("search_topics", &ForumDAO::search_topics, py::arg("page"), py::arg("size"),
+             py::arg("keyword"), py::arg("category") = "", py::arg("audited_only") = true,
+             "C26 关键词搜索（FULLTEXT ngram；keyword 净化后为空则退化为 page_topics）");
 
     // ---- 二手 ----
     py::class_<SecondhandDAO>(m, "SecondhandDAO")
         .def(py::init<>())
         .def("page_items", &SecondhandDAO::page_items, py::arg("page"), py::arg("size"),
              py::arg("category") = "", py::arg("keyword") = "",
-             py::arg("on_sale_only") = true, "闲置物品分页/搜索")
+             py::arg("on_sale_only") = true, py::arg("audited_only") = true,
+             "闲置物品分页/搜索（audited_only=false 仅供管理端；审计 DATA-01）")
         .def("publish", &SecondhandDAO::publish, py::arg("user_id"), py::arg("title"),
              py::arg("description"), py::arg("category"), py::arg("price"),
              "发布闲置，返回物品 id（失败 -1）")
