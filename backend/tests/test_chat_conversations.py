@@ -59,17 +59,33 @@ def test_create_without_body_returns_id_and_default_title(client, hdr_a, convs):
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
     cid = int(data["conversation_id"])
-    assert cid > 0
-    assert data["title"] == "新对话"
-
-    assert _titles_of(client, hdr_a).get(cid) == "新对话", "新建会话应出现在列表里"
-    client.delete(f"/api/v1/chat/conversations/{cid}", headers=hdr_a)
+    try:
+        assert cid > 0
+        assert data["title"] == "新对话"
+        assert _titles_of(client, hdr_a).get(cid) == "新对话", "新建会话应出现在列表里"
+    finally:
+        # 清理必须放 finally：任一条断言失败都要删掉，否则留下垃圾会话。
+        # 这里刻意**不**改用 convs() 工厂 —— 契约要求「无 body 或 {} 都行」，
+        # 工厂发的是 json={}，本用例测的是**完全不带 body**，是两条不同路径。
+        client.delete(f"/api/v1/chat/conversations/{cid}", headers=hdr_a)
 
 
 def test_create_with_custom_title(client, hdr_a, convs):
     """自定义标题原样保留（前端可先建会话再填标题）。"""
     cid = convs(f"{_PREFIX}自定义标题")
     assert _titles_of(client, hdr_a)[cid] == f"{_PREFIX}自定义标题"
+
+
+def test_create_rejects_too_long_title(client, hdr_a, convs):
+    """create 与 rename 共用 `_clean_title`，但 create 走的是 `allow_default=True` 分支：
+    空标题回落「新对话」，**超长仍必须拒绝**（101 精确压列宽 100）。
+    """
+    resp = client.post("/api/v1/chat/conversations", headers=hdr_a,
+                       json={"title": "长" * 101})
+    assert resp.json()["code"] == 1001, "超长标题必须拒绝"
+
+    # 反向对照：正好 100 字必须成功 —— 证明 101 被拒不是因为"长"本身
+    assert convs("长" * 100) > 0
 
 
 def test_create_requires_auth(client):
@@ -122,6 +138,17 @@ def test_empty_conversation_can_chat(client, hdr_a, convs, monkeypatch):
 
 
 # ------------------------------------------------------------------ 重命名 ----
+
+def test_rename_without_body_is_rejected(client, hdr_a, convs):
+    """重命名不带请求体 → 1001（按空标题处理，**不静默复位**成「新对话」）。
+
+    契约里声明了这条路径（"请求体缺省 ⇒ 空标题 ⇒ 1001"），此前没有用例覆盖。
+    """
+    cid = convs("原标题")
+    resp = client.patch(f"/api/v1/chat/conversations/{cid}", headers=hdr_a)
+    assert resp.json()["code"] == 1001, "不带 body 的重命名应被拒绝"
+    assert _titles_of(client, hdr_a).get(cid) == "原标题", "被拒的重命名不得改库"
+
 
 def test_rename_conversation(client, hdr_a, convs):
     """重命名生效，并体现在会话列表里。"""
