@@ -148,6 +148,14 @@ def prelabel_samples(samples: Iterable[Sample], labeler: Labeler | None = None) 
         produced = tagger(s) or {}
         merged = dict(s.labels or {})
         for k, v in produced.items():
+            # 空值不落键。`KeywordTagger` 会返回
+            # `{"importance": None, "category": None}` 表示“这两项不归我管”，
+            # 若原样写进 labels：
+            #   ① 样本会通不过 `validate_sample`（importance 必须是 1~5 的整数）；
+            #   ② 训练目标里会多出空字段（与 export._non_empty 的口径相互矛盾）。
+            # 空值判据与 `export._non_empty` 保持一致，四处口径统一。
+            if v in (None, "", [], {}):
+                continue
             # 只填空位：不覆盖已有值（人工或上一轮已填）
             if merged.get(k) in (None, "", [], {}):
                 merged[k] = v

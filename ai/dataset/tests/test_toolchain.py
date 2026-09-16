@@ -15,6 +15,8 @@ python -m pytest ai/dataset/tests -q
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -194,3 +196,124 @@ def test_stats_markdown_has_required_sections() -> None:
 def test_stats_handles_empty_input() -> None:
     md = stats_markdown([])
     assert "0" in md        # 空数据集不得抛异常（CLI 会先跑 collect）
+
+
+# ------------------------------- 回归锁：None 泄漏与 id 稳定性（PR #92 审查）
+#
+# 下面几条是 PR #92 审查（2026-09-16）指出的缺陷的回归锁。
+# 它们当初全部逃过了本文件的 15 个测试，原因不是"测得少"，而是**选材恰好避开触发条件**：
+#   · test_prelabel_fills_only_empty_slots 用的是 NullLabeler（返回 {}），
+#     而真正会写 None 的是 KeywordTagger ⇒ 「只填空位」逻辑在危险输入下从未被执行；
+#   · test_build_messages_shape_and_drops_empty_fields 传的是 entities=[]，
+#     而缺陷出现在 entities=[{"norm": None}]。
+# 📌 教训：**测试要喂最危险的输入，而不是最干净的输入。**
+
+
+def test_prelabel_output_passes_own_validation() -> None:
+    """端到端闭环：预标注产物必须能通过自己的校验。
+
+    这条断言曾真实失败过 —— `KeywordTagger` 返回
+    `{"importance": None, "category": None}`，被"只填空位"逻辑写进了 labels，
+    于是 `validate_sample` 报 "importance 必须是 1~5 的整数，当前 None"。
+    """
+    s = make_sample("请于9月30日前到教务处办理选课，逾期不再受理。",
+                    source_type="notice", ref="1")
+    out = prelabel_samples([s], KeywordTagger())[0]
+    assert validate_sample(out) == [], validate_sample(out)
+
+
+def test_prelabel_does_not_write_none_keys() -> None:
+    """空值不落键：importance/category 由 C28 与人工负责，不该留 None 占位。
+
+    ⚠️ 必须用 `KeywordTagger`（而非 `NullLabeler`）—— 前者才会返回 None，
+    后者返回 `{}`，根本压不到这条路径。
+    """
+    s = make_sample("9月30日截止", source_type="notice", ref="1")
+    out = prelabel_samples([s], KeywordTagger())[0]
+    assert out.labels.get("entities"), "候选实体仍应被写入"
+    # ⚠️ 断言必须是「键不存在」，不能写成 `out.labels.get(key) is None` ——
+    # 后者在缺陷版本下**也会通过**（键存在、值恰好是 None），属恒真空断言。
+    # 本仓库已多次栽在"断言依赖的事实并不存在"上（'' 学号、$null -like、"39" == 39）。
+    for key in ("importance", "category"):
+        assert key not in out.labels, \
+            f"{key} 不该被写进 labels（当前值 {out.labels.get(key)!r}）"
+
+
+def test_make_sample_id_is_stable_across_processes() -> None:
+    """无 ref 时 id 也必须确定 —— 否则 C32 按 id 配对会失败。
+
+    ⚠️ 必须用**子进程**验证：内置 `hash()` 的随机化只在进程间显现，
+    同一进程内两次调用结果相同（这正是该缺陷躲过原有单测的原因）。
+    """
+    code = (
+        "import sys; sys.path.insert(0, r'{repo}');"
+        "from ai.dataset.schema import make_sample;"
+        "print(make_sample('\\u540c\\u4e00\\u6bb5\\u6587\\u672c').id)"
+    ).format(repo=REPO)
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    seen = set()
+    for _ in range(3):
+        cp = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", env=env)
+        assert cp.returncode == 0, cp.stderr
+        seen.add(cp.stdout.strip())
+    assert len(seen) == 1, f"跨进程 id 不稳定：{seen}"
+
+    # 反向对照：同一进程内也必须稳定
+    assert make_sample("同一段文本").id == make_sample("同一段文本").id
+
+
+def test_make_sample_id_is_stable_with_and_without_ref() -> None:
+    """有 ref 时用 ref、无 ref 时用正文哈希，两条路径都必须确定。"""
+    assert make_sample("x", source_type="notice", ref="42").id == "notice-42"
+    a = make_sample("同样的正文")
+    b = make_sample("同样的正文")
+    assert a.id == b.id
+    assert a.id.startswith("file-"), a.id
+    assert make_sample("不同正文").id != a.id, "不同正文必须得到不同 id"
+
+
+def test_training_target_has_no_nested_none() -> None:
+    """训练目标里不得出现 `norm: null`（会教模型输出空字段）。"""
+    s = make_sample("到图书馆办理", source_type="notice", ref="1")
+    s.labels = {"entities": [{"type": "place", "text": "图书馆", "norm": None}]}
+    payload = json.loads(build_messages(s)["messages"][2]["content"])
+    assert all("norm" not in e for e in payload["entities"]), payload
+
+
+def test_entity_norm_kept_when_present() -> None:
+    """反向对照：**有**归一化值时必须保留 `norm`，别把该留的一起清掉。"""
+    s = make_sample("9月30日截止", source_type="notice", ref="1")
+    s.labels = {"entities": [{"type": "time", "text": "9月30日", "norm": "2026-09-30"}]}
+    payload = json.loads(build_messages(s)["messages"][2]["content"])
+    assert payload["entities"] == [
+        {"type": "time", "text": "9月30日", "norm": "2026-09-30"}
+    ], payload
+
+
+def test_entity_cleanup_drops_broken_items_only() -> None:
+    """残缺实体（缺 type/text、非对象）不得进训练目标，但不得连累同批其它项。"""
+    s = make_sample("混合实体", source_type="notice", ref="1")
+    s.labels = {"entities": [
+        {"type": "place", "text": "图书馆"},
+        {"type": "", "text": "缺类型"},
+        {"type": "matter", "text": ""},
+        "not-a-dict",
+        {"type": "org", "text": "教务处", "norm": None},
+    ]}
+    payload = json.loads(build_messages(s)["messages"][2]["content"])
+    assert payload["entities"] == [
+        {"type": "place", "text": "图书馆"},
+        {"type": "org", "text": "教务处"},
+    ], payload
+
+
+def test_export_skips_entities_field_when_all_cleaned() -> None:
+    """实体全被清空时，该字段应整体不出现。
+
+    否则会训练模型对"没有实体"的样本也吐出 `{"entities": []}`。
+    """
+    s = make_sample("没有可用实体", source_type="notice", ref="1")
+    s.labels = {"category": "通知", "entities": [{"type": "", "text": "残缺"}]}
+    payload = json.loads(build_messages(s)["messages"][2]["content"])
+    assert payload == {"category": "通知"}, payload
