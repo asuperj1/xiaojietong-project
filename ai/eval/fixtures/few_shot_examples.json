@@ -1,0 +1,76 @@
+{
+  "version": "1.0",
+  "created": "2026-09-16",
+  "purpose": "few-shot 示例（C34 的 few-shot 模式专用）",
+  "why_separate_file": [
+    "few-shot 示例**绝不能取自本批评测样本**，否则是把答案喂进 prompt，F1 会虚高。",
+    "早期版本的 extract_bench.py 从评测集里抽示例并排除本次抽样的 id ——",
+    "结果在**全量评测**时排除集合等于全部 id，示例池为空，few-shot 静默退化成 zero-shot",
+    "（两个模式的 F1 完全相同：0.3043，就是那次 bug 的指纹）。",
+    "改成独立文件后，示例与评测集彻底解耦，全量/抽样都一样可用。"
+  ],
+  "reference_date": "2026-09-16",
+  "notes": [
+    "这 4 条是我自己编写的示例文本，与 ai/eval/extract_cases.json 的 24 条**无一重复**",
+    "示例刻意示范了两件 baseline 做得不好的事（见 ai/eval/out/extract_base.md 的失败样例）：",
+    "  ① 年份按 reference_date 所在年份填（baseline 会猜成 2022）",
+    "  ② importance 的判定标准：报名/放假/考试类硬期限 = 5，需行动的活动 = 4，信息通报 = 3",
+    "⚠️ 这里示范 importance 标准是**为了让 few-shot 公平**：如果 zero-shot 的 prompt 里没有标准，",
+    "   而 few-shot 示例里隐含了标准，那对比的就不是「有没有示例」而是「有没有给标准」。",
+    "   所以 C35 提示工程需要做的是把这个标准**写进 zero-shot prompt**，然后重跑对照。",
+    "   在此之前，few-shot 的这个优势必须如实标注，不能算作「示例的功劳」。"
+  ],
+  "examples": [
+    {
+      "id": "FS01",
+      "category": "奖学金",
+      "text": "关于开展校级优秀学生奖学金评选的通知：申请材料须于11月5日前报送学院，逾期不予受理。",
+      "expected": {
+        "category": "奖学金",
+        "importance": 5,
+        "deadline": "2026-11-05",
+        "entities": [
+          {"type": "time", "text": "11月5日前", "norm": "2026-11-05"}
+        ]
+      }
+    },
+    {
+      "id": "FS02",
+      "category": "活动",
+      "text": "校园歌手大赛决赛将于12月3日19:00在礼堂举行，观众需凭票入场。",
+      "expected": {
+        "category": "活动",
+        "importance": 3,
+        "deadline": "2026-12-03",
+        "entities": [
+          {"type": "time", "text": "12月3日19:00", "norm": "2026-12-03"}
+        ]
+      }
+    },
+    {
+      "id": "FS03",
+      "category": "通知",
+      "text": "关于寒假放假安排的通知：1月15日开始放假，2月23日返校报到，共40天。",
+      "expected": {
+        "category": "通知",
+        "importance": 5,
+        "deadline": "2027-01-15",
+        "entities": [
+          {"type": "time", "text": "1月15日", "norm": "2027-01-15"},
+          {"type": "time", "text": "2月23日", "norm": "2027-02-23"}
+        ]
+      }
+    },
+    {
+      "id": "FS04",
+      "category": "通知",
+      "text": "实验室安全自查情况通报：本次共检查房间86间，发现隐患12处，已全部整改完毕。",
+      "expected": {
+        "category": "通知",
+        "importance": 3,
+        "deadline": null,
+        "entities": []
+      }
+    }
+  ]
+}
