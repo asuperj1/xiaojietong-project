@@ -138,6 +138,25 @@ class Settings(BaseSettings):
     kb_import_state_file: str = "data/kb_import_state.json"   # 断点续传状态文件（相对 backend/）
     kb_import_batch_size: int = 200       # 单批入库篇数（配合 --batch-size 覆盖）
 
+    # ---------- 语音转文字（B32）----------
+    # none    = 未配置：接口会**明确回 5002**（服务不可用 + 该配哪个变量），
+    #           而不是回一个空字符串让前端以为"识别失败"；
+    # http    = 转发给外部 ASR 服务（自建 whisper-server / 内网 GPU 机 / 云厂商一句话识别）；
+    # whisper = 本机 faster-whisper 或 openai-whisper（**可选依赖，不进 requirements**，
+    #           未安装时回 5002 并说明 pip install 什么）。
+    asr_backend: str = "none"
+    asr_http_url: str = ""                # 外部 ASR 地址，约定返回 {"text": "...", ...}
+    asr_http_timeout: float = 15.0
+    asr_http_api_key: str = ""            # 可选，作为 Authorization: Bearer 发送
+    asr_whisper_model: str = "small"      # 3~10 秒中文短语音够用，且不依赖 GPU
+    asr_whisper_device: str = "cpu"
+    asr_whisper_compute: str = "int8"
+    # 音频体检：格式白名单走文件头魔数（不信 Content-Type）；时长只对 WAV 能精确校验，
+    # 其它容器算不出就放行，靠大小上限兜底。
+    asr_max_bytes: int = 2 * 1024 * 1024  # 2MB（10 秒 mp3 约 160KB）
+    asr_min_seconds: float = 3.0
+    asr_max_seconds: float = 10.0
+
     # ---------- 派生属性 ----------
 
     @property

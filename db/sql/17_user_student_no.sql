@@ -1,5 +1,11 @@
 -- ============================================================
--- B19 · 学号可写 + 唯一 + 限频 + token 失效（对应 `C22` / `B23`）
+-- C46 · 学号可写 + 唯一 + 限频 + token 失效（原 `B19`；对应 `C22` / `B23`）
+--
+-- ★ 唯一真源：`user` 表在本需求下的形状（`student_no` 可空 + 唯一索引 `uk_student_no`
+--   + `student_no_updated_at` + `token_version`）以本脚本为准；
+--   本文件的列定义与 `C22` 的 DAO（`user_dao.cpp`：`update_student_no` /
+--   `student_no_change_remaining_days` / `bump_token_version`）严格一致，
+--   由 `tools/verify_ddl_dao_contract.py` 把关。规范：`docs/db-migration-convention.md`。
 --
 -- 目标：让 `/user/me` 可绑定学号，并支持
 --   · 学号唯一（重复学号被拒）
