@@ -350,3 +350,61 @@ def test_http_logout_without_token_still_ok(client):
     data = resp.json()["data"]
     assert data["ok"] is True
     assert "token_version" in data and data["token_version"] is None
+
+
+def test_http_logout_with_stale_token_does_not_bump_again(client, probe):
+    """陈旧 token 重复登出**不得**再自增 `token_version`。
+
+    否则任何拿到该用户**历史 token** 的一方都能无限次 +1 把账号顶下线
+    （token 泄露后的持久 DoS），而「幂等」也只剩 HTTP 状态码幂等。
+    """
+    token = probe["token"]
+    v0 = _token_version(probe["uid"])
+
+    first = client.post("/api/v1/auth/logout", headers=_hdr(token)).json()["data"]
+    assert first["token_version"] == v0 + 1
+    assert _token_version(probe["uid"]) == v0 + 1
+
+    # 同一个 token 此刻已失效（它的 tv 落后于库内），再调两次
+    for i in range(2):
+        again = client.post("/api/v1/auth/logout", headers=_hdr(token)).json()["data"]
+        assert again["ok"] is True, f"第 {i + 2} 次仍应返回成功（幂等）"
+        assert again["token_version"] is None, f"第 {i + 2} 次不应再自增"
+    assert _token_version(probe["uid"]) == v0 + 1, "库内版本号必须保持不变"
+
+
+def test_http_logout_with_valid_token_bumps_each_time(client, probe):
+    """反向对照：每次都拿一个**当前有效**的新 token，则每次都应自增。
+
+    没有这条，上面那条「不再自增」无法区分是闸门生效、还是自增功能整体坏了。
+    """
+    v0 = _token_version(probe["uid"])
+    for i in (1, 2):
+        fresh = _jwt(probe["uid"], tv=_token_version(probe["uid"]))
+        data = client.post("/api/v1/auth/logout", headers=_hdr(fresh)).json()["data"]
+        assert data["token_version"] == v0 + i, f"第 {i} 次应自增到 {v0 + i}，实际 {data}"
+    assert _token_version(probe["uid"]) == v0 + 2
+
+
+def test_http_refresh_rejects_access_token(client, probe):
+    """拿 **access** token 当 refresh 用必须被拒。
+
+    `auth.py` 有 `payload.get("type") != "refresh"` 这道闸，但此前**没有任何用例**
+    守着它 —— 变异实测：删掉该检查，全部用例仍然全绿。
+    """
+    access = _jwt(probe["uid"], tv=_token_version(probe["uid"]), kind="access")
+    resp = client.post("/api/v1/auth/refresh", json={"refresh_token": access})
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["code"] == 2002, resp.text
+
+
+def test_http_refresh_accepts_refresh_token(client, probe):
+    """反向对照：真 refresh token 必须能用。
+
+    证明上一条拒绝的原因是「类型不对」，而不是「这个接口把什么都拒了」。
+    """
+    refresh = _jwt(probe["uid"], tv=_token_version(probe["uid"]), kind="refresh")
+    resp = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["token"] and data["refresh_token"]

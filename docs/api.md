@@ -105,12 +105,15 @@ refresh_token 载荷同样带 `tv`；老 refresh_token 无 `tv` 时按 0 处理�
 
 请求头**可选** `Authorization: Bearer <token>`：
 
-| 情况 | 行为 |
-|---|---|
-| **带头** | 该用户 `token_version` +1 ⇒ **已签发的全部 access/refresh token 立即失效**；旧 token 再访问任何鉴权接口返回 `2001`，`/auth/refresh` 也拒绝 |
-| **不带头** | 无副作用，仍返回 `ok`（幂等，前端可无条件调用） |
+| 情况 | 行为 | 响应 `token_version` |
+|---|---|---|
+| **带头，且 token 仍然有效**（`tv` == 库内当前值） | 该用户 `token_version` **+1** ⇒ 已签发的全部 access/refresh token 立即失效；旧 token 再访问任何鉴权接口返回 `2001`，`/auth/refresh` 也拒绝 | **新版本号**（整数） |
+| **带头，但 token 已失效**（`tv` ≠ 库内值，即已登出过） | **不自增**（只对有副作用的有效 token 生效），仍返回 `ok` | `null` |
+| **不带头 / token 损坏 / 用户不存在** | 无副作用，仍返回 `ok`（幂等，前端可无条件调用） | `null` |
 
-响应 `data`：`{ "ok": true, "token_version": <新版本号> }`
+响应 `data`：`{ "ok": true, "token_version": <新版本号或 null> }`
+
+> `token_version` 的读法：**`null` ⟺ 本次没有产生新版本号**；非 null ⟺ 确实自增到了该值。
 
 > **实现**：依赖 `user.token_version` 列（B19 `db/sql/17_user_student_no.sql`，默认 0）。
 > JWT 载荷新增 `tv` 声明；`deps.get_current_user` 比对 `payload.tv == user.token_version`，不一致 ⇒ `2001`。
