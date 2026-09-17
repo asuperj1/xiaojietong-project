@@ -1,0 +1,136 @@
+name: CI
+
+# 校捷通 CI（B34）—— 回归门禁。
+#
+# 设计原则：**宁可红灯，不要假绿**。
+# 本仓库的集成用例在环境缺失时会 `pytest.skip`（见 backend/tests/conftest.py），
+# 这在本地很友好，但会让流水线在"一个用例都没跑"的情况下也变绿。
+# 所以这里统一通过 `tools/ci_gate.py` 收口，并且：
+#   · pytest 走 `--junitxml` 取精确计数，`skipped > 0` 在 --strict 下直接红灯；
+#   · rag_bench 走 `--strict`，hit@3 < 80% / 向量检索未生效 / 题目集为空 都红灯；
+#   · preflight 拿"阻塞项：N 个"，N > 0 红灯；后端没起则明确记为 SKIP（未验证），
+#     在 --strict 下同样红灯 —— "没跑"永远不会伪装成"跑过了"。
+#
+# 两个 job：
+#   1) backend-tests —— GitHub 托管 Ubuntu：起 MySQL service、现场编译 jt_db、跑 G1。
+#      （pytest 不依赖 Ollama，已在无 Ollama 环境实测 72 passed。）
+#   2) full-gate —— 仅手动触发且勾选 full_gate 时，在 self-hosted runner 上跑 G1+G2+G3。
+
+on:
+  push:
+    branches: [dev, main, "feat/**", "fix/**"]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+    inputs:
+      full_gate:
+        description: "在 self-hosted runner 上跑全量门禁 G1+G2+G3（需 Ollama 与运行中的后端）"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================ G1 · pytest ===
+  backend-tests:
+    name: G1 · pytest（后端）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: xjt_ci_root
+          MYSQL_DATABASE: xiaojietong
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxjt_ci_root"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    env:
+      XJT_DB_HOST: 127.0.0.1
+      XJT_DB_PORT: "3306"
+      XJT_DB_USER: root
+      XJT_DB_PASSWORD: xjt_ci_root
+      XJT_DB_NAME: xiaojietong
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: 系统依赖（C++ 扩展编译 + MySQL 客户端）
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake g++ libmysqlclient-dev mysql-client
+
+      - name: Python 依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          python -m pip install pybind11
+
+      - name: 编译 jt_db C++ 扩展
+        run: bash db/cpp_driver/scripts/build.sh
+
+      - name: 导入建库脚本与种子数据
+        run: |
+          MYSQL="mysql -h127.0.0.1 -uroot -pxjt_ci_root --default-character-set=utf8mb4"
+          $MYSQL < db/sql/00_database.sql
+          for f in 01_user 02_ai_chat 03_agent 04_library 05_secondhand 06_job \
+                   07_forum 08_map 09_life 10_ai_train 11_audit 12_notice_delivery \
+                   14_notice_extend 13_index_optimize 99_init_data \
+                   99b_knowledge_faq 99c_agent_tool_schema 99d_knowledge_more; do
+            echo "—— 导入 db/sql/$f.sql"
+            $MYSQL xiaojietong < "db/sql/$f.sql"
+          done
+
+      - name: 门禁 G1 · pytest（--strict：skip 即红灯）
+        run: python tools/ci_gate.py --only pytest --strict --json ci_gate_g1.json
+
+      - name: 上传门禁报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-gate-g1
+          path: ci_gate_g1.json
+          if-no-files-found: warn
+
+  # ==================================================== 全量门禁（可选）===
+  full-gate:
+    name: 全量门禁 G1+G2+G3（self-hosted）
+    if: github.event_name == 'workflow_dispatch' && inputs.full_gate
+    runs-on: [self-hosted, xjt]
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 全量门禁（任何 SKIP 都算红灯）
+        run: python tools/ci_gate.py --strict --json ci_gate_report.json
+
+      - name: 上传门禁报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-gate-full
+          path: ci_gate_report.json
+          if-no-files-found: warn

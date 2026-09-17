@@ -27,7 +27,13 @@ C15（切片策略可插拔）/ C16（检索重排）的**效果基准** ——
     # 3) 与基线对比（C15/C16 改完后用）
     ... ai/eval/rag_bench.py --compare ai/eval/out/rag_baseline.json
 
-退出码：`hit@3` 低于 `--threshold`（默认 0.80，对应方案验收标准）时返回 1，可用于 CI 门禁。
+    # 4) CI 门禁（B34）：严格模式
+    ... ai/eval/rag_bench.py --strict
+
+退出码：
+- 默认：`hit@3` 低于 `--threshold`（默认 0.80，对应方案验收标准）时返回 1；
+- `--strict`：在阈值之外，**题目数为 0 / 单题检索抛异常 / 向量检索完全未生效**
+  也返回 1 —— 这三种情况都会让指标"看起来还行但没验证到东西"，CI 必须拦住。
 """
 
 from __future__ import annotations
@@ -331,6 +337,11 @@ def main() -> int:
     parser.add_argument("--compare", default="", help="与历史基线 JSON 对比")
     parser.add_argument("--threshold", type=float, default=0.80, help="hit@3 门禁阈值（默认 0.80）")
     parser.add_argument("--no-clear-cache", action="store_true", help="不清空 RAG 结果缓存")
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="严格模式（B34 CI 门禁）：题目数为 0 / 单题检索抛异常 / "
+             "向量检索完全未生效，一律返回退出码 1，杜绝「假绿」",
+    )
     args = parser.parse_args()
 
     bootstrap_backend()
@@ -359,6 +370,28 @@ def main() -> int:
         md = out.with_suffix(".md")
         md.write_text(render_markdown(dataset, summary, cats, rows), encoding="utf-8")
         print(f"  报告已落盘：{out} ｜ {md}")
+
+    # ---- 严格模式（B34 CI 门禁）：拒绝「看着跑过了、其实没验证到东西」 ----
+    if args.strict:
+        problems: list[str] = []
+        if not rows:
+            problems.append("题目数为 0 —— 恒真空，没有任何检索被验证")
+        errs = [r for r in rows if r.get("error")]
+        if errs:
+            problems.append(
+                f"{len(errs)} 题检索抛异常（如 {errs[0]['id']}: {errs[0]['error'][:70]}）"
+            )
+        if summary["n_positive"] == 0:
+            problems.append("可命中题目数为 0 —— hit@3 恒为 0，指标无意义")
+        if summary["vector_hit_rows"] == 0:
+            problems.append(
+                "向量检索完全未生效（全部走关键词降级）—— "
+                "bge-m3 / Ollama 可能不可用，指标不具参考性"
+            )
+        if problems:
+            for p in problems:
+                print(f"❌ 严格模式：{p}")
+            return 1
 
     if summary["hit@3"] < args.threshold:
         print(f"❌ hit@3 = {summary['hit@3']:.1%} 低于阈值 {args.threshold:.0%}")
