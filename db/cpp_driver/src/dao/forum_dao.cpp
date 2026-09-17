@@ -80,7 +80,9 @@ QueryResult ForumDAO::page_topics(int page, int size, const std::string& categor
         "WHERE t.status = 0 AND t.is_deleted = 0 "
         "  AND (? = '' OR t.category = ?) ";
     if (audited_only) sql += " AND t.audit_status = 1 ";
-    sql += "ORDER BY t.updated_at DESC LIMIT ? OFFSET ?";
+    // 排序必须带唯一 tie-break：
+    // updated_at 相同的行顺序未定义，LIMIT/OFFSET 分页会重复或漏行。
+    sql += "ORDER BY t.updated_at DESC, t.id DESC LIMIT ? OFFSET ?";
 
     return DbSession::current()->query(sql, {std::string(category), std::string(category),
                                              limit, offset});
@@ -170,7 +172,8 @@ QueryResult ForumDAO::search_topics(int page, int size, const std::string& keywo
         "  AND MATCH(t.title, t.content) AGAINST (? IN BOOLEAN MODE) "
         "  AND (? = '' OR t.category = ?) ";
     if (audited_only) sql += " AND t.audit_status = 1 ";
-    sql += "ORDER BY relevance DESC, t.updated_at DESC LIMIT ? OFFSET ?";
+    // 同 page_topics：末尾补唯一 tie-break，保证分页稳定。
+    sql += "ORDER BY relevance DESC, t.updated_at DESC, t.id DESC LIMIT ? OFFSET ?";
 
     return DbSession::current()->query(
         sql, {boolean_query, boolean_query, std::string(category), std::string(category),
