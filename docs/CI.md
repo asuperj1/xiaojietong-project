@@ -1,5 +1,33 @@
 # CI 与回归门禁（B34）
 
+> **2026-09-17 修订（真因已由 CI 原始日志定位，勿再猜）**
+>
+> **真因**：`db/cpp_driver/CMakeLists.txt` 的静态库 `jt_db_core` **缺 PIC**。链接
+> `jt_db.so` 时 ld 报：
+> `relocation R_X86_64_TPOFF32 against '__tls_guard' can not be used when making a
+> shared object; recompile with -fPIC`
+> 来源是 `src/db_session.cpp:9` 的 `thread_local std::shared_ptr<MysqlConnection>
+> DbSession::txn_;` —— 带动态初始化的 thread_local 在 gcc 下会生成 TLS 守卫
+> `__tls_guard`，该重定位在共享库 / PIE 中非法。**MSVC 无 PIC 概念，所以本地
+> （Windows）永远编得过** —— 这就是「本地绿、CI 红」的全部原因。
+> 修法：`set_target_properties(jt_db_core PROPERTIES POSITION_INDEPENDENT_CODE ON)`，
+> 且必须设在**静态库**上（`jt_db_test` 也链它，而 Ubuntu 的 gcc 默认生成 PIE）。
+>
+> **以下是顺带加固，均非病因**（原始日志已逐条证伪；保留是因为它们本身更正确）：
+> 1. 系统依赖补 `python3-dev`、CMake 收窄为 `Development.Module` —— 原始日志显示连最宽的
+>    `Development`（含 Embed）在 runner 上都被标记为 found，配置期本来就是成功的；
+> 2. `set(PYBIND11_FINDPYTHON ON)` —— 对「只编模块」是更正确的写法，但同样不是病因；
+> 3. 触发范围收敛（`on.push` 只留 dev/main）—— 省额度、降噪音，与失败无关；
+> 4. **编译/链接失败可诊断** —— 这条是前三轮里**唯一真正推动问题的改动**。原步骤只给一个
+>    `exit code 2`，22 次全红都没人看到 ld 那一行；拆成「体检 / configure / 编译」三步后，
+>    第一次运行就把失败位置钉到了链接期。**失败信息本身就是给别人看的文档。**
+>
+> ⚠️ 教训（写给下一个改 CI 的人）：
+> - **CI 类改动必须先在作者分支上跑绿、把运行链接贴进 PR 再请人合** —— 这次先合进 dev
+>   才第一次运行，于是 22 次全红，没保护到任何人，还把「红灯」稀释成了噪音；
+> - **更要紧的**：那 22 次里没有任何人去看失败日志，前三轮的「高概率根因」全是猜的，
+>   直到有人把日志拉下来才定住。**持续红灯时先拉日志，别先猜。**
+
 > 目标：**宁可红灯，不要假绿**。
 > 本仓库的集成用例在环境缺失时会 `pytest.skip`（见 `backend/tests/conftest.py`），
 > 这在本地开发很友好，但在流水线上会退化成"一个用例都没跑，却显示全绿"。
