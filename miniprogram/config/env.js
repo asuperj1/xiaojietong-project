@@ -59,18 +59,7 @@ function getBaseUrl() {
   }
 
   // release：只用配置项，不读 storage、不伪造域名、不回退开发地址
-  if (RELEASE_BASE_URL) {
-    const url = normalizeBaseUrl(RELEASE_BASE_URL)
-    // 微信正式版强制 https。不提前拦，真机上只会得到很难懂的
-    // `url not in domain list` 类报错；顺带拦住 normalizeBaseUrl('https://')
-    // 会产出 "https:" 这种非法值的情况。
-    if (!/^https:\/\/[^/]/i.test(url)) {
-      throw new Error(
-        '[env] RELEASE_BASE_URL 必须是 https:// 开头的已备案域名，当前值：' + url
-      )
-    }
-    return url
-  }
+  if (RELEASE_BASE_URL) return normalizeBaseUrl(RELEASE_BASE_URL)
 
   // fail fast：正式包缺少生产地址属发布配置错误，直接抛错，
   // 避免静默连上 127.0.0.1（真机必然失败）或空地址造成更难排查的问题
