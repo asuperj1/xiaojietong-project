@@ -32,15 +32,19 @@
 >>> score_importance("国家奖学金申请材料提交提醒",
 ...                  "请符合条件的同学于 9 月 30 日前提交，逾期不再受理。").score
 5
->>> r = score_importance("图书馆新书推荐")
+>>> r = score_importance("校历已发布")
 >>> r.score, r.reasons
 (1, ('无强信号：信息性通知',))
+
+⚠️ 本 docstring 里的示例由 `tests/test_notice_importance.py::test_module_doctests_pass`
+   实际执行 —— 改评分逻辑时改坏了这里，测试会红（此前这个示例是错的且无人发现，
+   因为仓库没开 `--doctest-modules`）。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 __all__ = ["ImportanceResult", "score_importance", "DEFAULT_SCORE"]
 
@@ -66,6 +70,16 @@ _CATEGORY_MINOR = (
     "活动", "讲座", "比赛", "社团", "展览", "演出", "新书", "推荐书目", "读书",
     "沙龙", "分享会", "开放日", "预告", "花絮", "征稿", "摄影", "运动会",
 )
+# ⚠️ **词表重叠（已知，未改）**：类别判定是「critical → major → minor，命中即 `break`」，
+#    所以**短词会遮住同族的长词**。实测本表的 `"推荐书目"` 被 `_CATEGORY_MAJOR` 的
+#    `"推荐"` 完全遮住 —— 任何含 `"推荐书目"` 的文本必然也含 `"推荐"`，
+#    于是这条**永远不可能命中**（已加测试 `test_shadowed_minor_entry_never_fires` 钉住现状）。
+#
+#    这是**语义问题而非笔误**：`"推荐"` 在校园语境里歧义很大 ——
+#    「新书推荐 / 推荐书目」是信息性的（该判 minor），而「推荐免试研究生」是重要事务。
+#    把它放 MAJOR 会系统性抬高书单类通知的分。**改它会影响打分结果，属产品决策**，
+#    故本轮只记录不改；若要修，建议把 `"推荐"` 从词表撤掉、改用更具体的词
+#    （如 `"推免"/"推荐免试"` 归 MAJOR，`"推荐书目"/"新书推荐"` 归 MINOR）。
 
 # 后果强度：写明了「不照做会怎样」的通知，重要度显著更高
 _CONSEQUENCE_STRONG = (
@@ -106,12 +120,45 @@ def _first_hit(text: str, words: tuple[str, ...]) -> str | None:
     return None
 
 
-def _urgency_from_deadline(deadline: datetime | None, now: datetime | None) -> int:
-    """按「距截止还有多久」给紧迫分（0~2）。"""
-    if deadline is None:
+def _as_naive_datetime(value) -> datetime | None:
+    """把 `deadline` / `now` 归一到**本地 naive datetime**，避免相减时炸。
+
+    为何要这一步：`(deadline - ref).total_seconds()` 对下列输入会抛 `TypeError`，
+    而调用方（`notice_extract` / 上游 DAO）拿到的形态并不统一：
+
+        tz-aware deadline + naive now  -> TypeError: can't subtract offset-naive and offset-aware
+        date 对象（非 datetime）        -> TypeError: unsupported operand type(s) for -
+        ISO 字符串                     -> TypeError: unsupported operand type(s) for -
+
+    本模块的定位是「打分」，不该因为上游多给了一个 `tzinfo` 就整个挂掉 ——
+    所以在这里统一收口：aware 转本地再去 tz；`date` 补成当天零点；字符串按 ISO 解析。
+    仍解析不了的直接返回 `None`（等同于"没有截止时间"），**不抛异常**。
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone().replace(tzinfo=None) if value.tzinfo else value
+    if isinstance(value, date):                      # datetime 是 date 子类，前面已拦
+        return datetime(value.year, value.month, value.day)
+    if isinstance(value, str):
+        try:
+            return _as_naive_datetime(datetime.fromisoformat(value.strip()))
+        except ValueError:
+            return None
+    return None
+
+
+def _urgency_from_deadline(deadline, now) -> int:
+    """按「距截止还有多久」给紧迫分（0~2）。
+
+    接受 `datetime` / `date` / ISO 字符串（见 `_as_naive_datetime`）；
+    一律归一后再相减，故 tz-aware 与 naive 混用不会再抛 `TypeError`。
+    """
+    dl = _as_naive_datetime(deadline)
+    if dl is None:
         return 0
-    ref = now or datetime.now()
-    days = (deadline - ref).total_seconds() / 86400.0
+    ref = _as_naive_datetime(now) or datetime.now()
+    days = (dl - ref).total_seconds() / 86400.0
     if days < 0:
         return 0          # 已过期不再计入紧迫（不该让它刷高分）
     if days <= 1:
