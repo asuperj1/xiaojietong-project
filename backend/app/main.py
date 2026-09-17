@@ -27,6 +27,7 @@ from app.routers import (
     secondhand,
     upload,
     user,
+    voice,
 )
 
 
@@ -117,7 +118,7 @@ for r in (
     auth.router, user.router, chat.router, agent.router,
     library.router, secondhand.router, job.router, forum.router,
     map_api.router, life.router, admin.router, upload.router, health.router,
-    favorite.router,
+    favorite.router, voice.router,
 ):
     app.include_router(r, prefix=_api)
 

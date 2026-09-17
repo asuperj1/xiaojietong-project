@@ -32,7 +32,7 @@ http://127.0.0.1:8000/api/v1           # 本地开发（uvicorn）
 | 1001~1099 | 参数错误 | 1001 参数缺失 / 1002 格式错误 |
 | 2001~2099 | 认证/权限 | 2001 未登录 / 2002 token 过期 / 2003 无权限 |
 | 3001~3099 | 业务冲突 | 3001 座位已被预约 / 3002 重复投递 / **3003 内容未通过审核** |
-| 5001~5099 | 服务端/DB | 5001 数据库错误 / 5002 模型服务不可用 |
+| 5001~5099 | 服务端/DB | 5001 数据库错误 / 5002 模型服务不可用 / **5003 语音转写失败**（B32） |
 
 ### 分页约定
 - 请求：`?page=1&size=20`（page≥1，size 1~100，默认 20）
@@ -129,8 +129,22 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 ### POST /chat/quick — 快捷指令（非流式）
 请求 `{ "keyword": "查空教室" }` → 响应 `data`：`{ "conversation_id": 13, "answer": "今天第3节空闲教室：101、201...", "action": {"type":"library","params":{}} }`
 
+### POST /chat/conversations — 新建会话（显式）
+请求体**可省略**（无 body 或 `{}`），也可给标题：`{ "title": "自定义标题" }`（不传 → 默认「新对话」）。
+响应 `data`：`{ "conversation_id": 13, "title": "新对话", "created_at": "2026-09-16 12:00:00" }`
+
+- 用途：AI 助手侧边栏「点新建」**即刻拿到 `conversation_id`**（前端 F14）。
+- **空会话可以直接对话**：把该 id 交给 `POST /chat/send` 即可，无需先随便发一条消息。
+- 标题最长 100 字（`ai_conversation.title` 列宽），超长返回 `1001`。
+
 ### GET /chat/conversations — 会话列表
 响应 `data`：`{ "items": [{"id":12,"title":"图书馆几点关门？","updated_at":"..."}] }`
+
+### PATCH /chat/conversations/{id} — 重命名会话
+请求 `{ "title": "新标题" }` → 响应 `data`：`{ "conversation_id": 13, "title": "新标题" }`
+- 空 / 纯空白 / 超长（>100 字）标题均返回 `1001`（**不静默复位**成「新对话」）。
+- 越权、已删除、不存在**同码 `1001 会话不存在`**（SEC-03 口径：不泄漏他人会话是否存在）。
+> ⚠️ **置顶未实现**：`ai_conversation` 没有 `is_pinned`/`sort` 列，需随 `db/sql` 迁移批次加列。
 
 ### GET /chat/conversations/{id}/messages — 历史消息
 响应 `data`：`{ "items": [{"id":1,"role":"user","content":"...","created_at":"..."}] }`
@@ -344,14 +358,30 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 
 ## 8. 论坛
 
-### GET /topics — 帖子列表（仅已审核）
-查询参数：`?category=学习&page=1&size=20`
+### GET /topics — 帖子列表 / 关键词搜索（仅已审核）
+查询参数：`?category=学习&page=1&size=20`；**搜索再加 `&keyword=图书馆`（B29）**
 响应 `data.items[]`：
 ```json
 { "id":1, "title":"期末复习互助", "category":"学习", "like_count":12, "comment_count":3,
   "view_count":100, "ai_summary":"期末复习资料共享...", "is_hot":0,
   "author_name":"测试用户A", "created_at":"2026-08-24 09:00" }
 ```
+
+**关键词搜索（`keyword` 非空时，B29）**：
+- 检索范围：**标题 + 正文**；引擎为 MySQL **FULLTEXT + ngram parser**（索引 `ft_topic_search`，
+  见 `db/sql/19_topic_fulltext.sql`，切分口径与 `services/zh_tokenizer.py` 的 2-gram 一致）。
+- 排序：按相关度倒序（同分再按 `updated_at` 倒序）；**每条会多返回一个 `relevance`** 字段。
+- 关键词处理（在 `ForumDAO.search_topics` 内完成，调用方**不需转义**）：去掉 boolean 运算符
+  （`+ - > < ( ) ~ * " @`）、按空白拆词、每词前缀 `+`（= **这些词都要出现**）、最多 8 词 /
+  单词 64 字节；**净化后无可用词**（如 `+++`、纯空白）→ **自动退化为普通分页**（不返回空表）。
+- 搜不到 → `code=0` + 空列表（**不报错**）。
+- 可见性与列表**完全一致**：`status=0 AND is_deleted=0 AND audit_status=1` ——
+  待审 / 被拒 / 已删除的帖子既不在列表里、也**搜不出来**。
+- ⚠️ **部署前置**：`db/sql/19_topic_fulltext.sql` 已执行 **且 C++ 已重编译**
+  （`search_topics` 是 C26 新增方法）。缺索引时返回 **500 + `5001`**（失败关闭），
+  而不是把 MySQL 的 `ERROR 1191` 抛给前端。
+- ⚠️ `total` = **当前页条数**（沿用既有分页接口口径）；真实命中总数需 DAO 返回 COUNT，
+  与审计 DATA-06 同类，列入后续。
 
 ### POST /topics — 发帖
 请求 `{ "title":"求高数资料","content":"...","category":"学习" }`
@@ -626,6 +656,41 @@ event: error    data: {"code":5002,"message":"模型不可用"}
 
 ---
 
+### POST /voice/transcribe —— 语音转文字（B32，v1.23 新增）
+
+`multipart/form-data`。语音属"辅助能力"，与本章管理端接口无关，因避免章节编号顺延（会连带改 12.1~12.3 的子编号）就近挂在本章末尾。
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `file` | ✅ | 音频文件。**按文件头魔数判定类型**（`Content-Type` 完全不可信，与上传接口同一口径 SEC-11）；支持 `wav / mp3 / m4a(aac) / ogg / webm / amr` |
+| `language` | | 语言代码，默认 `zh` |
+| `prompt` | | 可选热词，帮助识别专有名词（如「校捷通」「前卫南区」）；whisper 后端作为 `initial_prompt` |
+
+请求示例（微信小程序）：
+
+    wx.uploadFile({
+      url: `${BASE}/voice/transcribe`, filePath: tempFilePath, name: 'file',
+      formData: { language: 'zh', prompt: '校捷通 前卫南区' },
+      header: { Authorization: `Bearer ${token}` },
+    })
+
+响应 `data`：
+
+    { "text": "今天图书馆几点关门", "language": "zh",
+      "duration_ms": 4200, "backend": "http", "format": "wav" }
+
+**失败一律明确回码，不会静默**（B32 验收项）：
+
+| 场景 | code | HTTP |
+|---|---|---|
+| 格式不支持 / 文件过大 / 时长不在区间 | `1001` | 400（文案含具体原因与限制值） |
+| 未配置后端、可选依赖缺失、连不上 ASR 服务 | `5002` | 503（文案指出该配哪个变量 / 该装什么） |
+| 后端可用但本次转写失败（上游 4xx/5xx、非 JSON、音频损坏） | `5003` | 500 |
+
+- **后端由配置驱动**：`XJT_ASR_BACKEND` = `none`（默认，接口回 5002）/ `http`（转发外部服务，配 `XJT_ASR_HTTP_URL`）/ `whisper`（本机 `faster-whisper`，**可选依赖，不进 requirements**）。
+- **限制**：单文件 ≤ `XJT_ASR_MAX_BYTES`（默认 2MB）；时长 `XJT_ASR_MIN_SECONDS`~`XJT_ASR_MAX_SECONDS`（默认 3~10 秒）。WAV 可精确校验；mp3/m4a 等容器在不引入 ffprobe 的前提下算不出时长，按大小上限兜底。
+- 外部 ASR 服务的响应契约：**至少含 `text`**，可选 `language` / `duration_ms`。
+
 ## 12. 附：实现注意事项（前后端）
 
 1. **SSE 解析**：前端用 `wx.request` 无法流式，改用 `wx.request` 长连接 + 后端 `StreamingResponse`，或小程序 `EventSource` 适配（微信需 `enableChunked`）。
@@ -795,4 +860,7 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.16 | 2026-09-13 | **B18 分层推送调度**：新增 `services/notice_scheduler.py` + Celery beat 定时任务（每日 `XJT_NOTICE_PUSH_HOUR`）——待办到期前 **D-7 / D-2**（可选 `D0`）主动生成 `notice_delivery`；`reminder` 与 `campus_notice.deadline`（B19 列，自动探测）双来源；幂等键为「待办 × 档位」（`target_grade=__push:...`），手动补跑不重复推送；`GET /life/notices` 显式过滤私密推送行（不泄漏给他人，本人经未读/信息流可见）；新增 `POST /admin/notices/dispatch`（触发，支持 `now` 时间基准与 `dry_run`）、`GET /admin/notices/pending`（到期一览）、`POST /admin/notices/purge-private`（回收） |
 | v1.17 | 2026-09-13 | **PR #60 审查修复（1×P0 + 2×P1）**：① **P0** `GET /life/notices` 私密行泄漏——`LifeDAO.page_notices` 的 SELECT 不含 `target_grade`，按字段过滤恒失效，改为按 **id 集合**剔除（`private_notice_ids()`，剔除后最多补拉 2 页）；② **P1** `POST /admin/knowledge/purge` 增加通配符护栏（`%`/`_`/`\` 转义为字面匹配、前缀 <3 字符拒绝、新增 `dry_run` 预览）；③ **P1** 移除恒真空断言：`/life/notices` 零泄漏改为「id 不在公共列表 + 公共列表非空 + 调度前后集合不变」三重验证，越权用例改用普通账号（`err_forbidden` = HTTP 403 + `2003`） |
 | v1.18 | 2026-09-13 | **B19 通知表结构扩展 + B20 字段契约**：新增 `db/sql/14_notice_extend.sql`（**幂等**、可回滚）为 `campus_notice` 增加 `deadline`/`materials`/`importance`（均允许 NULL，不动现有数据）+ `idx_deadline` 索引；B20 契约：`/life/notice-feed`、`/life/notices/unread`、`/life/notices` 自动返回这 3 个新字段（**列不存在时不 SELECT，行为与 v1.17 一致**，向后兼容）；`importance` 计入通知流得分（+0.2/级）与 B18 推送得分，推送正文追加材料清单 |
+| v1.21 | 2026-09-16 | **B29 论坛关键词搜索**：`GET /topics` 新增 `keyword`（**标题 + 正文**全文检索，C26 的 FULLTEXT + ngram 索引 `ft_topic_search`），按相关度倒序并**多返回 `relevance`**；关键词净化（去 boolean 运算符 / 拆词 / 每词 `+` 成 AND / 词数与词长封顶）在 `ForumDAO.search_topics` 内完成，净化后无可用词时**自动退化为普通分页**；搜不到返回 `code=0` + 空列表；可见性与列表一致（待审 / 被拒 / 已删除**搜不出来**）；新增 `services/topic_search.py` 做索引探测，**缺索引时失败关闭**（500 + `5001`，不抛 MySQL 的 1191） |
+| v1.22 | 2026-09-16 | **B24 显式新建会话**：新增 `POST /chat/conversations`（请求体可省，默认标题「新对话」，返回 `conversation_id` 供前端「点新建」即刻使用；**空会话可直接对话**，无需先发消息）与 `PATCH /chat/conversations/{id}`（重命名；空/超长标题 `1001`、越权与不存在**同码 `1001`**）；`/chat/send` 与 `/chat/conversations/{id}/messages` 的归属校验收敛为 `_owned_conversation()` 单一实现（原两处重复 SQL）；**置顶未做**（表无 `is_pinned`/`sort` 列，需 DDL 批次） |
+| v1.23 | 2026-09-16 | **B32 语音转文字**：新增 `POST /voice/transcribe`（wav/mp3/m4a/ogg/webm/amr，**按文件头魔数判定类型**，不信 `Content-Type`）；ASR 后端**配置驱动可插拔**（`XJT_ASR_BACKEND` = `none` / `http` / `whisper`，whisper 为**可选依赖、不进 requirements**）；**失败一律明确回码不静默**——格式/大小/时长 `1001`、服务不可用 `5002`、转写失败 `5003`（本次新增）；单文件 ≤2MB、时长 3~10 秒（WAV 精确校验，其它容器按大小兜底） |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
