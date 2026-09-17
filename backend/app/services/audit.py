@@ -30,6 +30,7 @@ from typing import Any, Optional
 import httpx
 
 from app.core.config import settings
+from app.core.net import proxy_bypass_kwargs
 from app.db import cpp_bridge
 
 _MODEL_TIMEOUT = 30.0
@@ -148,8 +149,12 @@ async def _model_verdict(text: str) -> Optional[dict]:
         "options": {"temperature": 0.1},
     }
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(_MODEL_TIMEOUT), trust_env=False) as client:
-            resp = await client.post(f"{settings.ollama_base_url}/api/chat", json=payload)
+        url = f"{settings.ollama_base_url}/api/chat"
+        # 代理口径统一走 core/net.py：只对**回环**地址绕过系统代理
+        # （写成一律 trust_env=False 会让"必须经代理访问外部模型"的部署静默失效）
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_MODEL_TIMEOUT),
+                                     **proxy_bypass_kwargs(url)) as client:
+            resp = await client.post(url, json=payload)
         if resp.status_code != 200:
             return None
         data = json.loads(resp.json().get("message", {}).get("content", ""))

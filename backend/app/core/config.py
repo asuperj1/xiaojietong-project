@@ -86,6 +86,23 @@ class Settings(BaseSettings):
     # 部署方式见 docs/模型分发与部署.md（一键脚本 ai/finetune/deploy_ollama.ps1）。
     ollama_model: str = "xjt-3b"
 
+    # 结构化抽取模型（C36）—— 与对话模型**隔离**
+    # 为什么不共用 ollama_model：抽取是"批量、短输出、要确定性"的负载，
+    # 与对话（长输出、流式、占并发）混在同一模型/同一实例上会互相挤（显存与队列），
+    # 且换抽取模型不该影响线上对话。因此这里给一组独立开关：
+    # 留空 = 沿用上面的 ollama_*（**默认零行为变化**），填了就完全走各自的一套。
+    # ⚠️ 注意：**改 extract_model 但 extract_base_url 仍留空 = 没隔离**（同一台 Ollama 上
+    #    两个模型照样共享显存与队列）；真隔离要换地址。/health/detail 的 extract.isolation 会如实报告。
+    extract_backend: str = "ollama"      # ollama（本机/内网 Ollama）| http（自建抽取服务）| none（明确关闭）
+    extract_base_url: str = ""           # 空 → ollama_base_url（填另一台机器的 11434 才是真隔离）
+    extract_model: str = ""              # 空 → ollama_model
+    extract_timeout: float = 60.0        # 默认与改造前的 secondhand_ai 超时一致；抽取是短输出，可调小
+    extract_http_url: str = ""           # backend=http 时的服务地址
+    extract_http_api_key: str = ""       # 可选；作为 Authorization: Bearer 发出
+    extract_max_chars: int = 4000        # 输入截断上限（按字符）；截断会在结果里标记，不静默
+    extract_max_concurrency: int = 2     # 同时在飞的抽取请求上限（0 = 不限）；防批量抽取挤占对话模型与显存
+    extract_keep_alive: str = ""         # 传给 Ollama 的 keep_alive（如 "5m"、0=用完即卸）；空 = Ollama 默认
+
     # RAG 检索增强
     rag_embed_model: str = "bge-m3"      # 向量化模型（Ollama /api/embed）
     rag_embed_dim: int = 1024            # bge-m3 输出维度（用于向量库一致性校验）
