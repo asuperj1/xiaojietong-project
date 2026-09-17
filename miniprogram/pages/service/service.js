@@ -1,7 +1,9 @@
 // 服务页（Tab）—— 需求 7 / F15：顶部「路线维保中心」吸顶卡 + 8 功能 2×4 玻璃宫格
-// 依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §2.3（视觉规范 §1.1~§1.3）
+// 依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §2.3（视觉规范 §1.1~§1.3、§1.5）
 // 说明：gridItems 的条目名 / 跳转 url / tab 标志是业务契约，由
 //      tools/verify_f11_icon_set.js D 段逐条锁定 —— 本次只改视觉，不动业务。
+// ⚠️ 交接（不在本任务范围）：§2.3 备注「『外卖点餐』入口文案需改为『快递代收』」与 §2.7（外卖裁剪）
+//    联动，属 F19；届时需同时改本文件、pages/index/index.js 与上述校验脚本 D 段的 EXPECTED。
 Page({
   data: {
     // F10 运行时降级：能力探测判定不支持毛玻璃时置 true → 根节点挂 .is-glass-fallback
@@ -25,11 +27,6 @@ Page({
     this.setData({
       glassFallback: !(app && app.globalData && app.globalData.glassSupported),
     })
-  },
-
-  // 路线维保中心：暂无后端接口与目标页，给出明确反馈而不是静默无响应
-  onMaintTap() {
-    wx.showToast({ title: '路线维保中心建设中', icon: 'none' })
   },
 
   onGridTap(e) {

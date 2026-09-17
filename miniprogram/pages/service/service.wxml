@@ -1,26 +1,17 @@
 <!-- 服务页（需求 7 / F15）：顶部「路线维保中心」吸顶卡 + 8 功能 2×4 玻璃宫格 -->
 <view class="svc-page xj-page-bg {{glassFallback ? 'is-glass-fallback' : ''}}">
-  <!-- 顶部置顶：通栏长玻璃卡片，position: sticky 吸顶（见 service.wxss .svc-sticky） -->
+  <!-- 顶部置顶：通栏长玻璃卡片，position: sticky 吸顶（见 service.wxss .svc-sticky）
+       方案 §2.3 只规定「顶部置顶 = 路线维保中心 · 通栏长玻璃卡片」，未给跳转目标，
+       仓库内也不存在维保页面/接口 → 本卡按纯展示模块实现（不挂 bindtap、不假跳转）。 -->
   <view class="svc-sticky">
-    <view
-      class="svc-maint xj-glass-card"
-      hover-class="svc-maint--pressed"
-      hover-start-time="20"
-      hover-stay-time="140"
-      bindtap="onMaintTap"
-    >
-      <view class="svc-maint-icon">
-        <image class="svc-maint-icon-img" src="/static/icons/map.svg" mode="aspectFit"></image>
-      </view>
-      <view class="svc-maint-main">
-        <view class="svc-maint-title">路线维保中心</view>
-        <view class="svc-maint-sub">校园路线维保与巡检服务</view>
-      </view>
-      <view class="svc-maint-arrow"></view>
+    <view class="svc-maint xj-glass-card">
+      <text class="svc-maint-title">路线维保中心</text>
+      <text class="svc-maint-sub">校园路线维保与巡检服务</text>
     </view>
   </view>
 
-  <!-- 8 个功能入口：圆角方形玻璃卡片，2 行 × 4 列（每行 25% × 4） -->
+  <!-- 8 个功能入口：圆角方形玻璃卡片，2 行 × 4 列（每行 25% × 4）
+       注：`.grid-icon` / `.grid-name` 的类名由 F11 校验 D 段（tools/verify_f11_icon_set.js）锁定，勿改名。 -->
   <view class="svc-grid">
     <view
       class="svc-tile"
@@ -35,7 +26,7 @@
     >
       <view class="svc-tile-card xj-glass-card">
         <image class="grid-icon" src="{{item.icon}}" mode="aspectFit"></image>
-        <view class="grid-name">{{item.name}}</view>
+        <text class="grid-name">{{item.name}}</text>
       </view>
     </view>
   </view>
