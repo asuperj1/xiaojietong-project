@@ -48,6 +48,45 @@ uvicorn app.main:app --reload --port 8000
 | 管理 | `routers/admin.py` | ✅ 指标/知识库/论坛审核/语料 |
 | 上传 | `routers/upload.py` | ✅ 图片上传(本地 uploads/) |
 
+## 结构化抽取模型（C36：统一入口 + 与对话模型隔离）
+
+改造前后端有**三处**各自手写 Ollama `/api/chat` 调用（`model_client.py` 对话、
+`agent_executor.py` 工具规划、`secondhand_ai.py` 描述抽取），共用同一套
+`ollama_base_url` / `ollama_model`。C36 把**抽取**这一路收成一个入口
+`app/services/extract_model.py`，并给了一组独立开关：
+
+| 配置 | 作用 |
+|---|---|
+| `XJT_EXTRACT_BACKEND` | `ollama`（默认）/ `http`（自建抽取服务）/ `none`（明确关闭） |
+| `XJT_EXTRACT_BASE_URL` | 留空沿用 `ollama_base_url`；**可指向另一台 Ollama** |
+| `XJT_EXTRACT_MODEL` | 留空沿用 `ollama_model`；**可换抽取专用小模型** |
+| `XJT_EXTRACT_HTTP_URL` | `http` 模式的服务地址（契约见下） |
+
+隔离的意义：抽取是「批量、短输出、要确定性」的负载，与对话（长输出、流式、
+占并发）放在同一模型/同一实例上会互相挤显存与队列，且换抽取模型不该影响线上对话。
+
+```python
+from app.services.extract_model import extract_json, ExtractFailure, ExtractUnavailable
+
+result = await extract_json(text, instruction="抽取时间与地点，只输出 JSON",
+                            schema_hint='{"time": str, "place": str}')
+result.data          # dict
+result.truncated     # 输入被截断过吗（不静默丢内容）
+```
+
+**失败语义（不静默降级）**：只可能拿到 `ExtractResult`，或抛 `ExtractUnavailable`（用不了）
+/ `ExtractFailure`（这次抽失败）—— **绝不**返回 `{}` 冒充抽取成功。
+调用方若愿意降级（如 `secondhand_ai` 回退模板文案 + 统计定价），由调用方**显式**决定，
+并在响应里把 `source` 标出来，降级对用户可见。
+
+`http` 模式契约：`POST` JSON `{"text", "instruction", "schema"}` → 响应 JSON **对象**
+（顶层即结果，或 `{"data": {...}}` 包一层）。回环地址会自动绕过系统代理
+（见 `app/core/net.py`：Windows 注册表代理会把 `127.0.0.1:11434` 也接走并回 502）。
+
+> 验证：`tests/test_extract_model.py`（35 例，不需 DB、不需真 Ollama）真起 uvicorn 桩服务走真 HTTP，
+> 并带**反向对照**：对话模型换成另一个时抽取请求里必须出现抽取模型名；非回环地址不得关闭代理；
+> 坏输出必须报错而不能返回 `{}`。
+
 ## 冒烟测试
 
 ```bash

@@ -6,7 +6,7 @@
 3. 全库也无样本 → 分类通用区间（并明示"样本不足"）。
    按成色（condition_level 1-10）折算系数 0.5 + 0.05×level，输出 ±20% 区间。
 
-**描述生成**：模型（Ollama /api/chat，JSON 模式）输入
+**描述生成**：走 C36 统一抽取入口（``services/extract_model.py``，Ollama /api/chat JSON 模式）输入
 标题 / 分类 / 成色 / 用户备注 + **统计定价参考**，输出结构化
 ``{title, description, selling_points[], suggested_price, price_min, price_max, reason}``；
 模型不可用/超时/输出异常 → 模板化文案 + 统计定价（``source=stat``），不阻塞发布。
@@ -16,14 +16,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
-import httpx
-
-from app.core.config import settings
 from app.db import cpp_bridge
+from app.services.extract_model import extract_json
 
-_MODEL_TIMEOUT = 60.0
+logger = logging.getLogger(__name__)
 
 # 无样本时的分类通用参考区间（元）
 _FALLBACK_RANGE: dict[str, tuple[float, float]] = {
@@ -118,25 +117,24 @@ def suggest_price(category: str, condition_level: int = 8) -> dict:
 
 
 async def _model_describe(info: dict) -> Optional[dict]:
-    """模型生成描述与定价建议（JSON 模式）；不可用/异常返回 None。"""
-    payload = {
-        "model": settings.ollama_model,
-        "messages": [
-            {"role": "system", "content": _MODEL_PROMPT},
-            {"role": "user", "content": json.dumps(info, ensure_ascii=False)},
-        ],
-        "stream": False,
-        "format": "json",
-        "options": {"temperature": 0.4},
-    }
+    """模型生成描述与定价建议（JSON 模式）；不可用/异常返回 None。
+
+    改走 C36 统一抽取入口（``services/extract_model.py``）：模型 / 地址 / 超时由
+    ``XJT_EXTRACT_*`` 控制，因此**抽取可以与对话模型隔离**（默认留空即沿用 ``ollama_*``，
+    与改造前的行为一致），回环地址的代理绕过也一并由那层统一处理。
+
+    这里**故意保留**"失败就返回 None"：调用方会回退到模板文案 + 统计定价，并在响应里把
+    ``source`` 标成非 model —— 降级对用户可见，且模型抖动不该阻塞发布。
+    """
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(_MODEL_TIMEOUT)) as client:
-            resp = await client.post(f"{settings.ollama_base_url}/api/chat", json=payload)
-        if resp.status_code != 200:
-            return None
-        data = json.loads(resp.json().get("message", {}).get("content", ""))
-        return data if isinstance(data, dict) else None
-    except Exception:  # noqa: BLE001 - 降级为模板文案 + 统计定价
+        result = await extract_json(
+            json.dumps(info, ensure_ascii=False),
+            instruction=_MODEL_PROMPT,
+            temperature=0.4,
+        )
+        return result.data
+    except Exception as exc:  # noqa: BLE001 - 降级为模板文案 + 统计定价
+        logger.warning("二手描述抽取失败，降级为模板文案：%s: %s", type(exc).__name__, exc)
         return None
 
 
