@@ -105,12 +105,15 @@ refresh_token 载荷同样带 `tv`；老 refresh_token 无 `tv` 时按 0 处理�
 
 请求头**可选** `Authorization: Bearer <token>`：
 
-| 情况 | 行为 |
-|---|---|
-| **带头** | 该用户 `token_version` +1 ⇒ **已签发的全部 access/refresh token 立即失效**；旧 token 再访问任何鉴权接口返回 `2001`，`/auth/refresh` 也拒绝 |
-| **不带头** | 无副作用，仍返回 `ok`（幂等，前端可无条件调用） |
+| 情况 | 行为 | 响应 `token_version` |
+|---|---|---|
+| **带头，且 token 仍然有效**（`tv` == 库内当前值） | 该用户 `token_version` **+1** ⇒ 已签发的全部 access/refresh token 立即失效；旧 token 再访问任何鉴权接口返回 `2001`，`/auth/refresh` 也拒绝 | **新版本号**（整数） |
+| **带头，但 token 已失效**（`tv` ≠ 库内值，即已登出过） | **不自增**（只对有副作用的有效 token 生效），仍返回 `ok` | `null` |
+| **不带头 / token 损坏 / 用户不存在** | 无副作用，仍返回 `ok`（幂等，前端可无条件调用） | `null` |
 
-响应 `data`：`{ "ok": true, "token_version": <新版本号> }`
+响应 `data`：`{ "ok": true, "token_version": <新版本号或 null> }`
+
+> `token_version` 的读法：**`null` ⟺ 本次没有产生新版本号**；非 null ⟺ 确实自增到了该值。
 
 > **实现**：依赖 `user.token_version` 列（B19 `db/sql/17_user_student_no.sql`，默认 0）。
 > JWT 载荷新增 `tv` 声明；`deps.get_current_user` 比对 `payload.tv == user.token_version`，不一致 ⇒ `2001`。
@@ -124,9 +127,23 @@ refresh_token 载荷同样带 `tv`；老 refresh_token 无 `tv` 时按 0 处理�
 ### PUT /user/me — 更新资料
 请求：
 ```json
-{ "nickname": "新昵称", "avatar": "https://...", "major": "软件工程", "grade": "2024级", "campus": "前卫南区" }
+{ "nickname": "新昵称", "avatar": "https://...", "major": "软件工程", "grade": "2024级", "campus": "前卫南区", "student_no": "20240001" }
 ```
 响应 `data`：更新后的 `user`。
+
+**`student_no`（学号）单独一组规则**（C22，与其余字段不同）：
+
+| 情况 | 结果 |
+|---|---|
+| 首次绑定 / 距上次修改 **≥ 7 天** | `code=0`，同时刷新 `student_no_updated_at` 作为下次限频依据 |
+| **7 天内**再次修改 | `code=3001`，`message` 说明还需等待几天；**库内保持原值** |
+| 学号已被**其他账号**绑定 | `code=3001`（唯一索引 `uk_student_no` 冲突，**不返回 500**） |
+| `student_no` 为空 / 纯空白 | `code=1001`（拒绝，不写库） |
+| 不传 `student_no`（`null`/缺省） | 不改动学号 |
+
+> ⚠️ **不支持「清空学号」**：`''` 在唯一索引下会被当成同一个学号，写入会让
+> 第二个清空的用户撞库。解绑学号需另立接口（且需 C++ 侧支持绑定 NULL）。
+> 其余字段（`major`/`grade`/`campus`/`nickname`/`avatar`）仍是「传了才改、限频无关」。
 
 ### GET /user/tags ｜ PUT /user/tags
 - GET 响应：`{ "tags": ["学习","求职"] }`
@@ -878,7 +895,7 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.16 | 2026-09-13 | **B18 分层推送调度**：新增 `services/notice_scheduler.py` + Celery beat 定时任务（每日 `XJT_NOTICE_PUSH_HOUR`）——待办到期前 **D-7 / D-2**（可选 `D0`）主动生成 `notice_delivery`；`reminder` 与 `campus_notice.deadline`（B19 列，自动探测）双来源；幂等键为「待办 × 档位」（`target_grade=__push:...`），手动补跑不重复推送；`GET /life/notices` 显式过滤私密推送行（不泄漏给他人，本人经未读/信息流可见）；新增 `POST /admin/notices/dispatch`（触发，支持 `now` 时间基准与 `dry_run`）、`GET /admin/notices/pending`（到期一览）、`POST /admin/notices/purge-private`（回收） |
 | v1.17 | 2026-09-13 | **PR #60 审查修复（1×P0 + 2×P1）**：① **P0** `GET /life/notices` 私密行泄漏——`LifeDAO.page_notices` 的 SELECT 不含 `target_grade`，按字段过滤恒失效，改为按 **id 集合**剔除（`private_notice_ids()`，剔除后最多补拉 2 页）；② **P1** `POST /admin/knowledge/purge` 增加通配符护栏（`%`/`_`/`\` 转义为字面匹配、前缀 <3 字符拒绝、新增 `dry_run` 预览）；③ **P1** 移除恒真空断言：`/life/notices` 零泄漏改为「id 不在公共列表 + 公共列表非空 + 调度前后集合不变」三重验证，越权用例改用普通账号（`err_forbidden` = HTTP 403 + `2003`） |
 | v1.18 | 2026-09-13 | **B19 通知表结构扩展 + B20 字段契约**：新增 `db/sql/14_notice_extend.sql`（**幂等**、可回滚）为 `campus_notice` 增加 `deadline`/`materials`/`importance`（均允许 NULL，不动现有数据）+ `idx_deadline` 索引；B20 契约：`/life/notice-feed`、`/life/notices/unread`、`/life/notices` 自动返回这 3 个新字段（**列不存在时不 SELECT，行为与 v1.17 一致**，向后兼容）；`importance` 计入通知流得分（+0.2/级）与 B18 推送得分，推送正文追加材料清单 |
-| v1.19 | 2026-09-15 | **C22 学号唯一 + 限频 + token 版本号**：① `POST /auth/logout` 由 **no-op 变真登出**——`user.token_version` +1，已签发 token 全部失效（`deps.get_current_user` 比对 `tv` 声明）；② `/auth/refresh` 补 `tv` 校验，堵住「登出后仍可刷新」漏洞；③ 新 DAO `UserDAO.update_student_no`（含 `student_no_updated_at` 刷新）/ `student_no_change_remaining_days`（返回 0 可改 / >0 还需 N 天 / -1 用户不存在）/ `bump_token_version`；④ 学号唯一性由 `uk_student_no` 唯一索引兜底（B19 `17_`）；⑤ **向后兼容**：老 token 无 `tv` 按 0 处理，不误踢在线用户 |
+| v1.19 | 2026-09-15 | **C22 学号唯一 + 限频 + token 版本号**：① `POST /auth/logout` 由 **no-op 变真登出**——`user.token_version` +1，已签发 token 全部失效（`deps.get_current_user` 比对 `tv` 声明）；② `/auth/refresh` 补 `tv` 校验，堵住「登出后仍可刷新」漏洞；③ 新 DAO `UserDAO.update_student_no`（含 `student_no_updated_at` 刷新）/ `student_no_change_remaining_days`（返回 0 可改 / >0 还需 N 天 / -1 用户不存在）/ `bump_token_version`；④ 学号唯一性由 `uk_student_no` 唯一索引兜底（B19 `17_`）；⑤ **向后兼容**：老 token 无 `tv` 按 0 处理，不误踢在线用户；⑥ **`PUT /user/me` 的 `student_no` 改走 DAO**（原先混在通用 UPDATE 里 ⇒ 限频无判定依据、唯一索引冲突直接 500、空串撞库 500），错误码见 §2；⑦ `logout` 响应按契约回 `{ok, token_version}` |
 | v1.21 | 2026-09-16 | **B29 论坛关键词搜索**：`GET /topics` 新增 `keyword`（**标题 + 正文**全文检索，C26 的 FULLTEXT + ngram 索引 `ft_topic_search`），按相关度倒序并**多返回 `relevance`**；关键词净化（去 boolean 运算符 / 拆词 / 每词 `+` 成 AND / 词数与词长封顶）在 `ForumDAO.search_topics` 内完成，净化后无可用词时**自动退化为普通分页**；搜不到返回 `code=0` + 空列表；可见性与列表一致（待审 / 被拒 / 已删除**搜不出来**）；新增 `services/topic_search.py` 做索引探测，**缺索引时失败关闭**（500 + `5001`，不抛 MySQL 的 1191） |
 | v1.22 | 2026-09-16 | **B24 显式新建会话**：新增 `POST /chat/conversations`（请求体可省，默认标题「新对话」，返回 `conversation_id` 供前端「点新建」即刻使用；**空会话可直接对话**，无需先发消息）与 `PATCH /chat/conversations/{id}`（重命名；空/超长标题 `1001`、越权与不存在**同码 `1001`**）；`/chat/send` 与 `/chat/conversations/{id}/messages` 的归属校验收敛为 `_owned_conversation()` 单一实现（原两处重复 SQL）；**置顶未做**（表无 `is_pinned`/`sort` 列，需 DDL 批次） |
 | v1.23 | 2026-09-16 | **B32 语音转文字**：新增 `POST /voice/transcribe`（wav/mp3/m4a/ogg/webm/amr，**按文件头魔数判定类型**，不信 `Content-Type`）；ASR 后端**配置驱动可插拔**（`XJT_ASR_BACKEND` = `none` / `http` / `whisper`，whisper 为**可选依赖、不进 requirements**）；**失败一律明确回码不静默**——格式/大小/时长 `1001`、服务不可用 `5002`、转写失败 `5003`（本次新增）；单文件 ≤2MB、时长 3~10 秒（WAV 精确校验，其它容器按大小兜底） |
