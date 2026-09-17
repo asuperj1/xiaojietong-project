@@ -11,11 +11,16 @@ namespace jt_db {
 //   · backend/app/core/deps.py 的「账号已禁用」校验永远拿不到 status → 死代码；
 //   · user.py 的 _view() 与 life.py 的按年级推送永远拿到空值。
 // 另：find_by_id 额外过滤 is_deleted = 0，使软删用户的既有 token 立即失效。
+//
+// C22 追加：鉴权路径必须带上 `token_version` 与 `student_no_updated_at`，否则：
+//   · deps.py 的 token_version 校验恒为 0 → 登出后旧 token 仍能用（失效功能成死代码）；
+//   · user.py 的「学号 1 次/7 天」限频拿不到上次修改时间 → 限频失效。
+//   这两列由 db/sql/17_user_student_no.sql 提供，部署前必须先执行该脚本。
 
 std::optional<Row> UserDAO::find_by_openid(const std::string& openid) {
     auto rows = DbSession::current()->query(
         "SELECT id, openid, nickname, avatar, phone, role, status, is_deleted, "
-        "student_no, major, grade, campus FROM `user` "
+        "student_no, student_no_updated_at, major, grade, campus, token_version FROM `user` "
         "WHERE openid = ?",
         {std::string(openid)});
     if (rows.empty()) return std::nullopt;
@@ -25,7 +30,7 @@ std::optional<Row> UserDAO::find_by_openid(const std::string& openid) {
 std::optional<Row> UserDAO::find_by_id(long long id) {
     auto rows = DbSession::current()->query(
         "SELECT id, openid, nickname, avatar, phone, role, status, is_deleted, "
-        "student_no, major, grade, campus FROM `user` "
+        "student_no, student_no_updated_at, major, grade, campus, token_version FROM `user` "
         "WHERE id = ? AND is_deleted = 0",
         {id});
     if (rows.empty()) return std::nullopt;
@@ -80,6 +85,44 @@ bool UserDAO::remove(long long id) {
     auto [affected, _] = DbSession::current()->execute(
         "DELETE FROM `user` WHERE id = ?", {id});
     return affected > 0;
+}
+
+// ------------------------------------------------------------------ C22
+
+bool UserDAO::update_student_no(long long id, const std::string& student_no) {
+    auto [affected, _] = DbSession::current()->execute(
+        "UPDATE `user` SET student_no = ?, student_no_updated_at = NOW() "
+        "WHERE id = ? AND is_deleted = 0",
+        {std::string(student_no), id});
+    return affected > 0;
+}
+
+long long UserDAO::student_no_change_remaining_days(long long id,
+                                                    long long interval_days) {
+    if (interval_days < 0) interval_days = 0;
+    auto rows = DbSession::current()->query(
+        "SELECT IF(student_no_updated_at IS NULL, 0, "
+        "          GREATEST(0, CEIL(TIMESTAMPDIFF(SECOND, NOW(), "
+        "                   student_no_updated_at + INTERVAL ? DAY) / 86400))) AS remaining_days "
+        "FROM `user` WHERE id = ? AND is_deleted = 0",
+        {interval_days, id});
+    if (rows.empty()) return -1;
+    const auto it = rows.front().find("remaining_days");
+    if (it == rows.front().end() || it->second.empty()) return 0;
+    return std::stoll(it->second);
+}
+
+long long UserDAO::bump_token_version(long long id) {
+    auto [affected, _] = DbSession::current()->execute(
+        "UPDATE `user` SET token_version = token_version + 1 WHERE id = ?",
+        {id});
+    if (affected <= 0) return -1;
+    auto rows = DbSession::current()->query(
+        "SELECT token_version FROM `user` WHERE id = ?", {id});
+    if (rows.empty()) return -1;
+    const auto it = rows.front().find("token_version");
+    if (it == rows.front().end() || it->second.empty()) return -1;
+    return std::stoll(it->second);
 }
 
 long long UserDAO::count() {
