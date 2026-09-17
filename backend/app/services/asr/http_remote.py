@@ -15,14 +15,44 @@
 - **上游 4xx/5xx、返回非 JSON、缺 text** → `AsrFailure` → 5003（转写失败）
 
 注意 `post` 可注入：单测不需要真的起一个 ASR 服务。
+
+**回环地址必须绕过代理**（C30 实测踩到）：`httpx` 默认 `trust_env=True`，会读环境变量
+**以及 Windows 注册表里的系统代理**（`urllib.request.getproxies()` 的返回值）。若机器上
+配了代理，发往 `http://127.0.0.1:9001/transcribe` 的请求会被**代理**接走并回 502，
+本服务明明活着却报「转写失败 5003」—— 而"网络受限所以本机自建识别服务"恰恰就是
+配了代理的场景，不能指望运维自己去设 `NO_PROXY`。因此对回环地址显式 `trust_env=False`；
+非回环地址保持 httpx 默认行为（内网/云端识别仍需走代理的情况不受影响）。
 """
 from __future__ import annotations
 
+import ipaddress
+import urllib.parse
 from typing import Callable, Optional
 
 import httpx
 
 from .base import AsrFailure, AsrResult, AsrUnavailable
+
+#: 视为"本机"的主机名。回环地址永远不需要代理。
+#: ⚠️ `0.0.0.0` **不在这里** —— 它是"监听全部网卡"的 bind 地址，不是回环地址。
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _is_loopback(url: str) -> bool:
+    """URL 是否指向本机。
+
+    ⚠️ **不能用 `host.startswith("127.")` 判回环** —— 那是**字符串前缀**而不是 IP 段：
+    `127.evil.com` / `127.attacker.test` 都是合法 DNS 名，却会被判成"本机"，
+    于是对**远程**主机关掉代理，与"非回环保持 httpx 默认"的意图正好相反。
+    用 `ipaddress` 按真实 IP 段判断（顺带覆盖 `127.0.0.0/8` 里除 .0.0.1 之外的地址）。
+    """
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False          # 不是 IP 字面量（是域名）⇒ 交给 DNS 解析，不当作本机
 
 
 class HttpRemoteBackend:
@@ -67,10 +97,12 @@ class HttpRemoteBackend:
         if prompt:
             data["prompt"] = prompt
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
+        # 回环地址绕过代理（见模块 docstring）；非回环保持 httpx 默认（trust_env=True）
+        bypass = {"trust_env": False} if _is_loopback(self.url) else {}
 
         try:
             resp = self._post(self.url, files=files, data=data, headers=headers,
-                              timeout=self.timeout)
+                              timeout=self.timeout, **bypass)
         except AsrUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001 - 连不上属于"服务不可用"
@@ -80,6 +112,12 @@ class HttpRemoteBackend:
 
         status = int(getattr(resp, "status_code", 0))
         body = getattr(resp, "text", "") or ""
+        # 5xx 一律归 `AsrFailure`（下游 5003）—— 这是 C30 服务端 docstring 里
+        # **明确约定**的（「503 | 本机没装 whisper 或模型加载失败 | AsrFailure → 5003
+        # （但日志里原因明确）」），**不要看着像 bug 就顺手改成 5002**。
+        # ⚠️ 注意：它和 `routers/voice.py` 的错误码表对**同一场景**的归类不一致
+        # （那张表把"依赖缺失"归到 5002）。这是两份契约之间的口径分歧，
+        # 属**产品/契约决策**，已登记到 `docs/技术方向待处理问题.md`，此处保持现状。
         if status >= 500:
             raise AsrFailure(f"ASR 服务返回 HTTP {status}：{body[:200]}")
         if status >= 400:
