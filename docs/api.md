@@ -44,11 +44,30 @@ http://127.0.0.1:8000/api/v1           # 本地开发（uvicorn）
 ### 流式对话（SSE）
 - `POST /chat/send` 返回 `text/event-stream`，事件：
 ```
-event: chunk    data: {"delta":"你好"}
 event: sources  data: [{"title":"图书馆借阅规则","category":"图书馆","snippet":"本科生可借 10 册，借期 30 天…","content":"本科生可借 10 册，借期 30 天。","source_url":"https://example.edu/rule","score":0.8123,"doc_id":12,"seq":3,"chunk_id":99,"retrieval":"vector"}]
+event: chunk    data: {"delta":"你好"}
 event: done     data: {}
 event: error    data: {"code":5002,"message":"模型不可用"}
 ```
+- `C20` 引用校验新增两个事件（前端**可忽略**，忽略时退化为现状）：
+```
+event: refused    data: {"delta":"（拒答文案）","reason":"最高相似度 0.100 < 阈值 0.35"}
+event: citations  data: {"fabricated":["学生手册"],"final":"（剔除伪造引用后的全文）"}
+```
+  - `refused`：检索结果不足以回答，**后端未调用模型**；此路径下**不发 `sources`**
+    （避免把无关文档当依据展示），随后直接 `done` 且 `done.refused = true`。
+  - `citations`：正文已流式展示后发现模型编造了引用标记，用 `final` 覆盖气泡内容。
+  - ⚠️ 事件顺序：`sources → chunk… → citations? → done`；`refused → done`（无 `sources`）。
+  - ⚠️⚠️ **`refused` 当前实际只在「检索结果为空」时触发** —— **不要**把它当成
+    「问知识库以外的问题会被拒答」来设计前端：
+    - 机制上：上游向量库已按 `settings.rag_score_threshold`（0.35）先过滤一遍，
+      而拒答闸门阈值也是 0.35 ⇒ `最高分 < 阈值` 恒不成立
+      （见 `services/citation_check.py` 文件头「阈值」一节）。
+    - 更根本的是**数据上分不开**：用真实 `bge-m3` + 真实知识库（27 篇 chunk）实测每条问题的
+      top1 余弦相似度 —— 负样本 N01 `0.621` / N02 `0.500`，正样本最低 Q10 `0.572`
+      ⇒ 区间重叠，**不存在能同时「不拒答 Q10」与「拒答 N01」的阈值**，调大只会开始误拒正常提问。
+    - 该能力需要分数之外的手段（重排 / 交叉编码器 / 小分类器 / LLM 自评），
+      已登记到 `docs/技术方向待处理问题.md`。
 
 **`sources` 事件字段（C29 来源契约 —— 旧字段全部保留，向后兼容）**
 
