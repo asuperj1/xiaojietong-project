@@ -412,6 +412,27 @@ bar('D. 搜索交互（切标签提交待搜词、清空、去重、纯空白）
     req ? JSON.stringify(qs(req)) : '未发出请求'
   )
 }
+{
+  // D6 搜索失败后按回车必须能重试（否则用户只能去点「重试」按钮）
+  let fail = true
+  const { page, state } = loadForum({
+    responder: (req) =>
+      fail
+        ? { data: { code: 5001, message: '关键词搜索暂不可用，请稍后再试' } }
+        : { data: { code: 0, message: 'ok', data: { items: itemsFor(req, 2), total: 2, page: 1, size: 20 } } },
+  })
+  tapTab(page, 1)
+  await tick()
+  await search(page, state, '高数')
+  check('D6 失败后处于 error 态', page.data.error !== '', `error=${JSON.stringify(page.data.error)}`)
+
+  fail = false
+  const n = state.requests.length
+  page.onSearchConfirm()
+  await tick()
+  check('D6 失败后再按回车会重新发起请求（可重试）', state.requests.length === n + 1, `请求数 ${n} → ${state.requests.length}`)
+  check('D6 重试成功后 error 清空', page.data.error === '', `error=${JSON.stringify(page.data.error)}`)
+}
 
 // ---------------------------------------------------- E. 分页与到底 ----
 bar('E. 分页与到底（翻页保留标签与关键词；热点榜不翻页）')
@@ -671,6 +692,13 @@ bar('J. 结构对账（WXML 的 class 与事件处理函数都真实存在）')
     'J7 WXML 标签闭合与嵌套配平',
     balance.ok,
     balance.detail
+  )
+
+  // J8 空字段不留空位：/topics/hot 不返回 author_name / created_at
+  check(
+    'J8 作者/时间空值时不渲染空位（wx:if 守卫）',
+    /class="meta-item" wx:if="\{\{item\.authorName\}\}"/.test(wxml) &&
+      /class="meta-item" wx:if="\{\{item\.time\}\}"/.test(wxml)
   )
 }
 

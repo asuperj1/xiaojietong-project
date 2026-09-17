@@ -4,7 +4,9 @@ const { request } = require('../../services/request')
 const { formatTime } = require('../../utils/format')
 
 // 标签栏（F16）：7 项。
-// `value` 复用既有 forum category 参数（空串 = 全部）；`kind` 决定请求口径：
+// `kind` 决定请求口径；`value` 是**复用既有 forum category 参数**的取值（空串 = 全部），
+// **仅 category 类标签有意义** —— hot / mine 走后端专用接口、不发 category 参数，
+// 故这两项刻意不写 `value`，避免出现「带了一个永远不会被发送的值」的假契约：
 //   category → GET /topics?category=（后端已支持，见 docs/api.md §8）
 //   hot      → GET /topics/hot（热点榜；后端**无** category / keyword 参数）
 //   mine     → GET /topics/mine（我的帖子，额外返回 audit_status）
@@ -14,13 +16,15 @@ const CATS = [
   { label: '生活', value: '生活', kind: 'category' },
   { label: '闲置', value: '闲置', kind: 'category' },
   { label: '活动', value: '活动', kind: 'category' },
-  { label: '热点', value: 'HOT', kind: 'hot' },
-  { label: '我的帖子', value: 'MINE', kind: 'mine' },
+  { label: '热点', kind: 'hot' },
+  { label: '我的帖子', kind: 'mine' },
 ]
 
 const PAGE_SIZE = 20
 
-// 审核状态文案（与 pages/forum/mine 同口径）
+// 审核状态文案。与 pages/forum/mine 的映射**取值刻意不同**：
+// 这里未返回 audit_status 的列表（全部/分类/热点）统一映射成空串 = 「不适用，不渲染」，
+// 而 mine 页用「未知」= 「拿到了预期外的值」。两者语义不同，故不抽成一个共享 mapper。
 const AUDIT_TEXT = { 0: '待审核', 1: '已通过', 2: '未通过' }
 
 // 列表条目归一化：三种接口（/topics、/topics/hot、/topics/mine）字段不完全一致，
@@ -60,6 +64,7 @@ function buildRequest(cat, keyword, page, size) {
   }
   if (cat.kind === 'hot') return { path: '/topics/hot', data: {}, hint: '' }
   if (cat.kind === 'mine') return { path: '/topics/mine', data: { page, size }, hint: '' }
+  // 以下仅 category 类标签可达（hot / mine 已在上面返回），故 cat.value 必有值
   return { path: '/topics', data: { category: cat.value, page, size }, hint: '' }
 }
 
@@ -122,8 +127,10 @@ Page({
 
   onSearchConfirm() {
     const keyword = (this.data.keyword || '').trim()
-    // 与上次提交一致则不重复请求（回车/再次确认的常见误触）
-    if (keyword === this.data.searchText) return
+    // 与上次提交一致且当前无错误 → 不重复请求（回车/再次确认的常见误触）。
+    // ⚠️ 上次请求失败（error 非空，如后端 keyword 检索失败关闭 500+5001）时**不早退**：
+    // 否则用户再按一次回车无法重试，只能去点「重试」按钮。
+    if (keyword === this.data.searchText && !this.data.error) return
     this.setData({ keyword, searchText: keyword }, () => this.refresh())
   },
 

@@ -61,13 +61,14 @@
       </view>
       <view class="topic-summary">{{item.summary}}</view>
       <view class="topic-meta">
-        <text class="meta-item">{{item.authorName}}</text>
+        <!-- /topics/hot 不返回 author_name / created_at：空值时整项不渲染，避免留下空位 -->
+        <text class="meta-item" wx:if="{{item.authorName}}">{{item.authorName}}</text>
         <text class="xj-tag cat-tag" wx:if="{{item.category}}">{{item.category}}</text>
         <text
           class="xj-tag audit-tag {{item.auditOk ? 'audit-ok' : ''}} {{item.auditBad ? 'audit-bad' : ''}}"
           wx:if="{{item.auditText}}"
         >{{item.auditText}}</text>
-        <text class="meta-item">{{item.time}}</text>
+        <text class="meta-item" wx:if="{{item.time}}">{{item.time}}</text>
         <text class="meta-right">👍{{item.likeCount}} · 💬{{item.commentCount}}</text>
       </view>
     </view>
