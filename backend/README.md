@@ -75,17 +75,24 @@ curl http://127.0.0.1:8000/api/v1/user/me -H "Authorization: Bearer <token>"
 
 ```bash
 pip install faster-whisper     # 只有识别服务这台机器需要（几百 MB，刻意不进 requirements.txt）
-python -m app.services.asr.server --host 0.0.0.0 --port 9001
+python -m app.services.asr.server --port 9001        # 默认只监听 127.0.0.1
 curl http://127.0.0.1:9001/health   # 如实报告后端能否使用；不可用时 /transcribe 回 503 而不是假装成功
 ```
+
+> ⚠️ **本服务默认没有鉴权**。要与局域网内其它机器共用，加 `--host 0.0.0.0` 时**必须同时加
+> `--token <随机串>`**，否则同网段任何人可无鉴权调用转写、任意消耗 CPU/内存。
+> 跟主应用同机部署的话，保持默认的 `127.0.0.1` 即可。
 
 主应用侧配置（见 `.env.example` 末段）：
 
 ```
 XJT_ASR_BACKEND=http
 XJT_ASR_HTTP_URL=http://127.0.0.1:9001/transcribe
-XJT_ASR_HTTP_API_KEY=      # 与服务端 --token 配同一个值；不设则不鉴权
+XJT_ASR_HTTP_API_KEY=      # 与服务端 --token 配同一个值；不设则不鉴权（仅限本机监听时）
 ```
+
+> 本服务会读 `backend/.env`（与主应用同一份），所以 `XJT_ASR_WHISPER_MODEL` 等直接写在那里即可。
+> 命令行的 `--model` / `--device` / `--compute` 优先级更高。
 
 **契约**（客户端 `app/services/asr/http_remote.py` 定义，服务端 `app/services/asr/server.py` 实现）：
 multipart 字段名固定 **`file`**（不支持改名），表单字段 `language` / `prompt`，

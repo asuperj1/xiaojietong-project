@@ -41,7 +41,7 @@ POST  <XJT_ASR_HTTP_URL>
 
 ```bash
 # 在 backend/ 目录下（需要 python-multipart，已在 requirements.txt）
-python -m app.services.asr.server --host 0.0.0.0 --port 9001
+python -m app.services.asr.server --port 9001          # 默认只监听 127.0.0.1
 
 # 主应用侧配置
 #   XJT_ASR_BACKEND=http
@@ -49,13 +49,26 @@ python -m app.services.asr.server --host 0.0.0.0 --port 9001
 #   XJT_ASR_HTTP_API_KEY=<与服务端 --token 一致，可不设>
 ```
 
+⚠️ **要让局域网内其它机器用（`--host 0.0.0.0`），必须同时配 `--token`**：
+
+```bash
+python -m app.services.asr.server --host 0.0.0.0 --port 9001 --token <一段随机串>
+# 否则局域网内**任何人**都能无鉴权调用转写，任意消耗 CPU/内存
+#（叠加"每个请求加载一次模型"的老问题还能被轻易打到 OOM；该问题已在 _resolve() 里修掉）
+```
+
+> 默认 `127.0.0.1` 是刻意的：本服务的典型用法是**跟主应用同机部署**，
+> 只有确实要共用时才有对外监听的必要，那时也应该连 token 一起配上。
+
 **零业务依赖**：本模块不 import `app.db` / `app.routers` / `app.core.config`
 （`main()` 里才惰性读配置），因此可以脱离数据库单独跑，也便于离线单测。
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, Header, UploadFile
@@ -119,17 +132,30 @@ def create_app(
         version="1.0.0",
     )
 
+    # 后端起一次就够，**必须缓存**：`WhisperLocalBackend` 的模型缓存与那把
+    # `threading.Lock` 都挂在**实例**上（见 `whisper_local.py`），每次新建实例
+    # ⇒ `self._model` 永远是 None ⇒ **每个请求都重新加载一次模型**。
+    # 实测（修复前）：串行 3 个请求 = 3 次构造；3 个并发请求 = 3 份模型同时驻留。
+    # whisper `small` 加载是秒级 + 数百 MB 常驻，并发下内存线性上涨 ⇒ OOM/DoS。
+    _cached_backend: Optional[AsrBackend] = None
+
     def _resolve() -> AsrBackend:
-        """取后端：显式注入优先，否则按 `XJT_ASR_BACKEND` 规则构建 whisper 本地后端。"""
+        """取后端：显式注入优先，否则按 `XJT_ASR_WHISPER_*` 构建并**缓存**。
+
+        ⚠️ 缓存不只是省一次构造 —— 不缓存会让实例级的模型缓存与锁**完全失效**。
+        """
+        nonlocal _cached_backend
         if backend is not None:
             return backend
-        from .whisper_local import WhisperLocalBackend  # noqa: PLC0415 - 惰性
+        if _cached_backend is None:
+            from .whisper_local import WhisperLocalBackend  # noqa: PLC0415 - 惰性
 
-        return WhisperLocalBackend(
-            os.environ.get("XJT_ASR_WHISPER_MODEL", "small"),
-            os.environ.get("XJT_ASR_WHISPER_DEVICE", "cpu"),
-            os.environ.get("XJT_ASR_WHISPER_COMPUTE", "int8"),
-        )
+            _cached_backend = WhisperLocalBackend(
+                os.environ.get("XJT_ASR_WHISPER_MODEL", "small"),
+                os.environ.get("XJT_ASR_WHISPER_DEVICE", "cpu"),
+                os.environ.get("XJT_ASR_WHISPER_COMPUTE", "int8"),
+            )
+        return _cached_backend
 
     @app.get("/health")
     def health() -> JSONResponse:
@@ -191,7 +217,13 @@ def create_app(
         # ---- 转写：异常按「可用性」与「单次失败」分开，别混成一个码 ----
         b = _resolve()
         try:
-            result = b.transcribe(audio, filename=f"audio{ext}", language=language, prompt=prompt)
+            # ⚠️ **必须丢到工作线程**：whisper 是同步 CPU 推理（秒级~数十秒），直接在
+            # `async def` 里调会把事件循环堵死 —— 实测 50ms 心跳被整段卡住 1020ms，
+            # 期间 /health 与其它请求全部排队。同一取舍见 `routers/voice.py`
+            # （那里已用 `asyncio.to_thread`，PR `cef8d15` 专门修过）。
+            result = await asyncio.to_thread(
+                b.transcribe, audio, filename=f"audio{ext}", language=language, prompt=prompt
+            )
         except AsrUnavailable as exc:
             return JSONResponse(status_code=503, content={"detail": f"识别后端不可用：{exc}"})
         except AsrFailure as exc:
@@ -228,6 +260,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     ap.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS)
     args = ap.parse_args(argv)
+
+    # 主应用是从 `backend/.env` 读配置的（`core/config.py` 的 `env_file`）。本服务刻意
+    # **不 import `app.core.config`**（要保持"零业务依赖、可独立进程启动"），但**同样读一下
+    # .env** —— 否则 README/.env.example 里让人配的 `XJT_ASR_WHISPER_MODEL` 会被**静默忽略**，
+    # 服务悄悄用回 `small`（实测过）。
+    try:
+        from dotenv import load_dotenv  # noqa: PLC0415 - 可选依赖，缺了也不影响启动
+
+        load_dotenv(Path(__file__).resolve().parents[3] / ".env")
+    except ImportError:  # pragma: no cover - 未装 python-dotenv 时退化为只读进程环境
+        pass
 
     if args.model:
         os.environ["XJT_ASR_WHISPER_MODEL"] = args.model

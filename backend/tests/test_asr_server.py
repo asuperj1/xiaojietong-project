@@ -391,8 +391,147 @@ def test_is_loopback_truth_table():
                 "http://localhost:9001/x", "http://[::1]:9001/x"):
         assert _is_loopback(url) is True, url
     for url in ("http://asr.internal:9000/x", "https://asr.example.com/v1",
-                "http://10.0.0.7:9000/x", "http://172.217.1.1/x"):
+                "http://10.0.0.7:9000/x", "http://172.217.1.1/x",
+                # ⚠️ 下面三条是**旧实现的漏洞**（评审 P3-1）。当时的真值表里没有它们，
+                # 所以漏洞活了下来：
+                #   · `0.0.0.0` 是"监听全部网卡"的 bind 地址，不是回环地址
+                #   · `127.evil.com` / `127.attacker.test` 是**合法 DNS 名**；旧实现用
+                #     `host.startswith("127.")` 判**字符串前缀**（而非 IP 段），把它们错判成
+                #     "本机" ⇒ 对**远程**主机关掉代理，与"非回环保持 httpx 默认"正好相反
+                "http://0.0.0.0:9001/x", "http://127.evil.com/x", "http://127.attacker.test/x"):
         assert _is_loopback(url) is False, url
+
+
+# ============== 评审 P1：生产装配路径上的两个缺陷（原来零覆盖）==============
+#
+# 原来的 14 处 `create_app(` **全部**传了 `backend=`，于是「不传 backend 的生产路径」
+# 一行都没被测到 —— 而下面这两个缺陷恰好都藏在那条路径上。
+
+
+def test_backend_is_constructed_once_even_without_injection():
+    """**不注入 backend 时，后端实例必须被缓存**（评审 P1-1）。
+
+    `WhisperLocalBackend` 的模型缓存与 `threading.Lock` 都挂在**实例**上；每次新建实例
+    ⇒ `self._model` 永远是 None ⇒ **每个请求重新加载一次模型**。
+    实测修复前：串行 3 个请求 = 3 次构造；3 个并发 = 3 份模型同时驻留（whisper small
+    秒级加载 + 数百 MB 常驻 ⇒ 并发下内存线性上涨）。
+
+    这里插桩 `faster_whisper.WhisperModel` 数**真实构造次数**（模型构造就发生在那层）。
+    """
+    import sys
+    import types
+
+    count = {"n": 0}
+    fake = types.ModuleType("faster_whisper")
+
+    class _Model:
+        def __init__(self, *a, **k):
+            count["n"] += 1
+
+        def transcribe(self, path, **k):
+            class _S:
+                text = "ok"
+
+            class _I:
+                duration = 1.0
+                language = "zh"
+
+            return [_S()], _I()
+
+    fake.WhisperModel = _Model
+    sys.modules["faster_whisper"] = fake
+    try:
+        app = create_app()                       # ← 生产路径：不注入 backend
+        with TestClient(app) as c:
+            for _ in range(3):
+                r = c.post("/transcribe", files={"file": ("a.wav", make_wav(0.1), "audio/wav")})
+                assert r.status_code == 200, r.text
+        assert count["n"] == 1, (
+            f"后端未被缓存：3 个请求构造了 {count['n']} 次模型（期望 1）。"
+            f"每个请求重载一次模型会线性吃内存。"
+        )
+    finally:
+        sys.modules.pop("faster_whisper", None)
+
+
+def test_transcribe_does_not_block_the_event_loop():
+    """`/transcribe` 里的同步推理必须丢到工作线程（评审 P1-2）。
+
+    whisper 是秒级~数十秒的同步 CPU 推理；直接在 `async def` 里调会**堵死事件循环** ——
+    实测修复前 50ms 心跳被整段卡住 **1020ms**，期间 `/health` 与其它请求全部排队。
+
+    做法：给事件循环挂 50ms 心跳，POST 一个 sleep 1.0s 的后端，看心跳有没有被拉长。
+    """
+    import asyncio
+
+    class _Slow:
+        name = "fake-slow"
+
+        def availability(self):
+            return True, ""
+
+        def transcribe(self, audio, *, filename="", language="zh", prompt=""):
+            time.sleep(1.0)
+            return AsrResult(text="ok", backend=self.name)
+
+    async def _run() -> float:
+        app = create_app(backend=_Slow())
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t", timeout=30) as c:
+            gaps: list[float] = []
+            stop = False
+
+            async def heartbeat():
+                last = time.perf_counter()
+                while not stop:
+                    await asyncio.sleep(0.05)
+                    now = time.perf_counter()
+                    gaps.append(now - last)
+                    last = now
+
+            hb = asyncio.create_task(heartbeat())
+            await asyncio.sleep(0.2)
+            gaps.clear()
+            r = await c.post("/transcribe", files={"file": ("a.wav", make_wav(0.1), "audio/wav")})
+            assert r.status_code == 200, r.text
+            await asyncio.sleep(0.1)
+            stop = True
+            await hb
+            return max(gaps)
+
+    worst = asyncio.run(_run())
+    assert worst < 0.5, (
+        f"事件循环被阻塞了 {worst:.2f}s（正常应 ~0.05s）—— "
+        f"同步推理没有丢到 asyncio.to_thread"
+    )
+
+
+def test_upstream_5xx_is_failure_per_the_documented_contract():
+    """5xx（含 503）归 `AsrFailure`（下游 5003）—— **这是 C30 服务端 docstring 里
+    明确约定的**，不是疏漏：
+
+        503 | 本机没装 whisper 或模型加载失败 | AsrFailure → 5003（但日志里原因明确）
+
+    ⚠️ 但它与 `routers/voice.py` 的错误码表对**同一场景**的归类**不一致**
+    （那张表把"依赖缺失"归到 5002）。这是两份契约之间的口径分歧，属产品决策，
+    已登记到 `docs/技术方向待处理问题.md`。
+    **本用例锁的是"当前这份契约"，不是"这个问题已经解决"。** 若将来两表统一，
+    请连带更新本用例 —— 它会红，正好提醒那次改动是有意的。
+    """
+    backend = HttpRemoteBackend(
+        "http://127.0.0.1:9001/transcribe",
+        post=_spy_post(FakeResponse(503, {"detail": "busy"})),
+    )
+    # 503 也归 AsrFailure —— 与服务端 docstring 的契约表一致
+    with pytest.raises(AsrFailure):
+        backend.transcribe(WAV)
+
+    # 反向对照：**连不上**才是 AsrUnavailable（5002）
+    def _boom(*_a, **_k):
+        raise OSError("connection refused")
+
+    with pytest.raises(AsrUnavailable):
+        HttpRemoteBackend("http://127.0.0.1:9001/transcribe", post=_boom).transcribe(WAV)
 
 
 def test_loopback_url_asks_httpx_to_ignore_env_proxy():
