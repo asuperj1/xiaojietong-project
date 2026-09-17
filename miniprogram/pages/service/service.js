@@ -1,6 +1,14 @@
-// 服务页（Tab）—— 业务大宫格（与首页宫格一致的常驻入口）
+// 服务页（Tab）—— 需求 7 / F15：顶部「路线维保中心」吸顶卡 + 8 功能 2×4 玻璃宫格
+// 依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §2.3（视觉规范 §1.1~§1.3、§1.5）
+// 说明：gridItems 的条目名 / 跳转 url / tab 标志是业务契约，由
+//      tools/verify_f11_icon_set.js D 段逐条锁定 —— 本次只改视觉，不动业务。
+// ⚠️ 交接（不在本任务范围）：§2.3 备注「『外卖点餐』入口文案需改为『快递代收』」与 §2.7（外卖裁剪）
+//    联动，属 F19；届时需同时改本文件、pages/index/index.js 与上述校验脚本 D 段的 EXPECTED。
 Page({
   data: {
+    // F10 运行时降级：能力探测判定不支持毛玻璃时置 true → 根节点挂 .is-glass-fallback
+    glassFallback: false,
+
     gridItems: [
       { id: 1, name: '图书馆预约', icon: '/static/icons/book-open.svg', url: '/pages/library/index', tab: false },
       { id: 2, name: '查空教室', icon: '/static/icons/building-library.svg', url: '/pages/library/freeRoom', tab: false },
@@ -11,6 +19,14 @@ Page({
       { id: 7, name: '通知公告', icon: '/static/icons/bell.svg', url: '/pages/life/notices', tab: false },
       { id: 8, name: '任务中心', icon: '/static/icons/clipboard-document-list.svg', url: '/pages/agent/index', tab: false },
     ],
+  },
+
+  onLoad() {
+    // F10：能力探测只在 app.js onLaunch 做一次，这里只读结果、不重复探测
+    const app = getApp()
+    this.setData({
+      glassFallback: !(app && app.globalData && app.globalData.glassSupported),
+    })
   },
 
   onGridTap(e) {
