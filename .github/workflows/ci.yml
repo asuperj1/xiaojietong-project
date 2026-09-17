@@ -79,7 +79,17 @@ jobs:
       - name: 系统依赖（C++ 扩展编译 + MySQL 客户端）
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake g++ libmysqlclient-dev mysql-client python3-dev
+          # 包名在不同 Ubuntu 版本上并不一致（如 mysql-client 在 24.04 上已改名），
+          # 因此逐个安装并保留每个包的结果 —— 避免"一个装不上、整步崩掉、却看不出是哪个"。
+          for p in cmake g++ libmysqlclient-dev default-mysql-client python3-dev; do
+            echo "—— apt-get install $p"
+            sudo apt-get install -y -qq "$p" || echo "::warning::安装 $p 失败（继续，影响会在后续步骤暴露）"
+          done
+          # 装完自检：把关键产物位置直接打出来，失败时一眼能看到缺什么
+          echo "mysql.h    : $(ls /usr/include/mysql/mysql.h 2>/dev/null || echo 缺失)"
+          echo "mysql 客户端: $(command -v mysql || echo 缺失)"
+          echo "Python.h   : $(ls /usr/include/python3*/Python.h 2>/dev/null | head -1 || echo '缺失（由 setup-python 提供，通常不必）')"
+          cmake --version | head -1
 
       - name: Python 依赖
         run: |
@@ -90,9 +100,15 @@ jobs:
       - name: 编译 jt_db C++ 扩展
         run: |
           set -o pipefail
-          # 失败时把 CMake 的错误日志一并打出来 —— 只报一个 exit code 的话，
-          # 下一个人还得从头查一遍（本步骤此前连续 22 次运行都只给了 exit code 2）。
-          if ! bash db/cpp_driver/scripts/build.sh 2>&1 | tail -80; then
+          # 头尾都留：失败信息可能在**开头**（build.sh 的前置守卫就是开头几行），
+          # 只 tail 会把它截掉 —— 这正是上一轮"只看到 exit code"的原因之一。
+          if ! bash db/cpp_driver/scripts/build.sh 2>&1 | tee /tmp/xjt_build.log; then
+            echo "::group::构建日志（末尾 120 行）"
+            tail -120 /tmp/xjt_build.log
+            echo "::endgroup::"
+            echo "::group::构建日志（开头 40 行 —— 前置守卫提示在这里）"
+            head -40 /tmp/xjt_build.log
+            echo "::endgroup::"
             echo "::group::CMakeError.log"
             cat db/cpp_driver/build/CMakeFiles/CMakeError.log 2>/dev/null || echo "（无 CMakeError.log）"
             echo "::endgroup::"
