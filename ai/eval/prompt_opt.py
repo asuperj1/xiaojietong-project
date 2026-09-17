@@ -150,8 +150,12 @@ def paired_bootstrap_delta(rows_a: list[dict], rows_b: list[dict], *,
         b = micro_f1_of([by_id_b[i] for i in sample])
         deltas.append(b - a)
     deltas.sort()
-    lo = deltas[max(0, int(0.025 * iters) - 1)]
-    hi = deltas[min(iters - 1, int(0.975 * iters))]
+    # 百分位取 [2.5%, 97.5%] 的端点。
+    # 原写法 `int(0.025*iters)-1` ~ `int(0.975*iters)` 在 iters=2000 时落到
+    # deltas[49..1950]，实际覆盖 1902/2000 = **95.1%**，与标称的 95% 差一点。
+    # 改为两端各取对应分位的元素，覆盖率 95.0%。影响微小，但报告里印了这两个数就该准。
+    lo = deltas[max(0, int(0.025 * iters))]
+    hi = deltas[min(iters - 1, int(0.975 * iters) - 1)]
     point = micro_f1_of(rows_b) - micro_f1_of(rows_a)
     return {
         "delta_pt": round(point * 100, 2),

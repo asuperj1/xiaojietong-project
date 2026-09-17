@@ -395,3 +395,88 @@ def test_reference_date_mismatch_is_rejected(tmp_path):
                   "--dataset", str(bad), "--variants", "V0-naive", "--ks", "0",
                   "--curve-variants", "V0-naive", "--curve-ks", "0"])
     assert rc == 2
+
+
+# ==================== 已落盘基线的离线自洽守卫（评审 P2）====================
+#
+# 为什么需要它：`--reproduce-f1 0.4693` 那条复现校验**要跑真 Ollama + 24 条推理**才会执行。
+# 也就是说，如果有人改坏了 `extract_bench` 的度量口径（`prf` / `aggregate` / 归一化），
+# **CI 不会提前红**，得等某人手动跑一次全量实验才发现 —— 而"口径变了但数字看着正常"
+# 正是最难查的一类回归。
+#
+# 下面这条不需要模型：拿已落盘的基线 JSON，用**当前代码**从它自己存的 tp/fp/fn
+# 反算 P/R/F1 与 micro/macro，逐位比对。任何动了度量公式的改动都会立刻在这里红。
+
+BASELINE_JSON = EVAL_DIR / "baselines" / "c35_prompt_opt_20260917.json"
+
+
+def _baseline_configs():
+    if not BASELINE_JSON.exists():
+        pytest.skip(f"基线不存在：{BASELINE_JSON}")
+    return json.loads(BASELINE_JSON.read_text(encoding="utf-8")).get("configs") or []
+
+
+def _recompute_all(eb) -> int:
+    """用 `eb`（extract_bench）从基线自身的 tp/fp/fn 反算，逐位比对；返回校验处数。"""
+    import statistics
+
+    checked = 0
+    for c in _baseline_configs():
+        m = c.get("metrics") or {}
+        per_field = m.get("per_field") or {}
+        tag = f"{c.get('variant')}@k={c.get('k_effective')}"
+
+        # ① 逐字段 P/R/F1（含分母为 0 的 None 语义与 4 位舍入）
+        for fname, stored in per_field.items():
+            got = eb.prf(tp=stored["tp"], fp=stored["fp"], fn=stored["fn"])
+            for key in ("precision", "recall", "f1"):
+                assert got[key] == stored[key], (
+                    f"[{tag}] 字段 {fname}.{key} 反算不一致："
+                    f"基线 {stored[key]} vs 当前代码 {got[key]} —— 度量口径被改过？"
+                    f"改了就要同步重跑基线。"
+                )
+            checked += 1
+
+        # ② micro：各字段 tp/fp/fn 相加后再算
+        summed = {k: sum(per_field[f][k] for f in per_field) for k in ("tp", "fp", "fn")}
+        got_micro = eb.prf(**summed)
+        for key in ("precision", "recall", "f1", "tp", "fp", "fn"):
+            assert got_micro[key] == m["micro"][key], (
+                f"[{tag}] micro.{key} 反算不一致：基线 {m['micro'][key]} vs {got_micro[key]}"
+            )
+        checked += 1
+
+        # ③ macro：各字段 F1 的算术平均
+        f1s = [v["f1"] for v in per_field.values() if v["f1"] is not None]
+        if f1s:
+            assert round(statistics.fmean(f1s), 4) == m["macro_f1"], (
+                f"[{tag}] macro_f1 反算不一致：基线 {m['macro_f1']}"
+                f" vs {round(statistics.fmean(f1s), 4)}"
+            )
+            checked += 1
+    return checked
+
+
+def test_published_baseline_is_reproducible_offline():
+    """落盘基线的每个数字，都必须能用**当前代码**从它自己的 tp/fp/fn 反算出来。
+
+    覆盖三件事：`prf` 的公式与舍入、`aggregate` 的 micro 汇总、`aggregate` 的 macro。
+    **不需要 Ollama** —— 所以它能进 CI，而 `--reproduce-f1` 那条不能。
+    """
+    configs = _baseline_configs()
+    assert configs, "基线里没有 configs"
+    checked = _recompute_all(eb)
+    assert checked >= len(configs) * 2, f"只校验了 {checked} 处，覆盖不足"
+
+
+def test_offline_guard_detects_a_metric_change(monkeypatch):
+    """**反向对照**：把 `prf` 改坏一点点，上面那条守卫必须失败。
+
+    没有这条，上面那条可能只是"恰好全绿"（比如基线没存够数、或断言根本没跑到）。
+    """
+    real = eb.prf
+    # 变异：偷偷把 tp +1（模拟"口径被改坏"）
+    monkeypatch.setattr(eb, "prf",
+                        lambda **kw: real(tp=kw["tp"] + 1, fp=kw["fp"], fn=kw["fn"]))
+    with pytest.raises(AssertionError):
+        _recompute_all(eb)
