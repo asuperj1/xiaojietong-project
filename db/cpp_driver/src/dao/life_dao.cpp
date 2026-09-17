@@ -7,14 +7,21 @@
 namespace jt_db {
 
 QueryResult LifeDAO::page_notices(int page, int size, const std::string& category,
-                                  const std::string& target_grade) {
+                                  const std::string& target_grade, bool include_extended) {
     if (page < 1) page = 1;
     if (size < 1 || size > 100) size = 20;
     const long long limit = static_cast<long long>(size);
     const long long offset = static_cast<long long>((page - 1) * size);
 
+    // B20：扩展列由 14_notice_extend.sql 提供，是否带出交给调用方决定
+    // （未导入该脚本的库上传 true 会 ERROR 1054，故默认 false）。
+    const std::string cols =
+        include_extended
+            ? "id, title, content, source, category, publish_time, deadline, materials, importance "
+            : "id, title, content, source, category, publish_time ";
+
     return DbSession::current()->query(
-        "SELECT id, title, content, source, category, publish_time "
+        "SELECT " + cols +
         "FROM campus_notice "
         "WHERE (? = '' OR category = ?) "
         "  AND (? = '' OR target_grade = ? OR target_grade = '') "
