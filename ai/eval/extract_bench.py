@@ -61,6 +61,9 @@
     --few-shot-from 示例来源（默认 ai/finetune/data/seed_qa.jsonl 之外时用数据集自身 train 部分）
     --limit        抽样条数（按 category 分层抽样，保证覆盖面）
     --temperature  采样温度（默认 0.0，评测必须可复现）
+    --num-ctx      上下文窗口（默认 2048）。⚠️ few-shot 示例变多时会超 2048，
+                   Ollama 会**静默截断**示例而不报错；报告里的 prompt_tokens_avg
+                   可用于自证“示例真的进去了”（C35 提示工程实验就靠它）
     --out          JSON 结果输出路径
     --compare      基线 JSON，计算 Δ 并判定是否达标
     --threshold    达标阈值（百分点，默认 15.0）
@@ -73,6 +76,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import statistics
@@ -457,22 +461,33 @@ class OllamaBackend:
 
     name = "ollama"
 
-    def __init__(self, model: str, base_url: str, temperature: float, timeout: int = 180):
+    def __init__(self, model: str, base_url: str, temperature: float, timeout: int = 180,
+                 *, num_ctx: int = 2048, system_prompt: str | None = None):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.temperature = temperature
         self.timeout = timeout
+        # 上下文窗口：默认 2048（与改造前一致）。
+        # ⚠️ 提示工程实验（C35）里 k 条示例会把 prompt 撞到 2048 以上，
+        # Ollama 会**静默截断**而不会报错 —— 所以必须能调大，
+        # 并用下面的 prompt_eval_count 自证“示例真的进去了”。
+        self.num_ctx = int(num_ctx)
+        # None = 用模块级 SYSTEM_PROMPT（保持 C34 原行为不变）
+        self.system_prompt = system_prompt
+        #: 最近一次请求 Ollama 实际 prompt 了多少 token（用于验证没有被截断）
+        self.last_prompt_tokens = 0
 
     def generate(self, case: dict, prompt: str) -> tuple[str, float, str]:  # noqa: ARG002
         payload = json.dumps({
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system",
+                 "content": self.system_prompt if self.system_prompt is not None else SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             "stream": False,
             # 评测要可复现：temperature=0 + 固定 seed
-            "options": {"temperature": self.temperature, "seed": 42, "num_ctx": 2048},
+            "options": {"temperature": self.temperature, "seed": 42, "num_ctx": self.num_ctx},
         }).encode("utf-8")
         req = urllib.request.Request(
             f"{self.base_url}/api/chat", data=payload,
@@ -483,6 +498,10 @@ class OllamaBackend:
                 data = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             return "", time.perf_counter() - t0, str(exc)
+        try:
+            self.last_prompt_tokens = int(data.get("prompt_eval_count") or 0)
+        except (TypeError, ValueError):
+            self.last_prompt_tokens = 0
         return data.get("message", {}).get("content", ""), time.perf_counter() - t0, ""
 
     def preflight(self) -> str:
@@ -531,6 +550,7 @@ def run_mode(args, dataset: dict, cases: list[dict], backend,
     rows: list[dict] = []
     parse_errors = 0
     latencies: list[float] = []
+    prompt_tokens: list[int] = []
     failures: list[dict] = []
     prompt_mismatch = 0
 
@@ -543,6 +563,9 @@ def run_mode(args, dataset: dict, cases: list[dict], backend,
         if parsed is None:
             parse_errors += 1
         latencies.append(latency)
+        # 记录实际 prompt token 数：示例变多时必须随之增长，
+        # 否则说明示例被 num_ctx **静默截断**了（数字会看似“示例没用”）
+        prompt_tokens.append(int(getattr(backend, "last_prompt_tokens", 0) or 0))
 
         score = score_case(parsed, case["expected"])
         rows.append({"id": case["id"], "raw": raw, "parsed": parsed, "score": score})
@@ -576,6 +599,12 @@ def run_mode(args, dataset: dict, cases: list[dict], backend,
         "parse_errors": parse_errors,
         "parse_error_rate": round(parse_errors / len(rows), 4) if rows else None,
         "avg_latency_s": round(statistics.fmean(latencies), 3) if latencies else None,
+        "prompt_tokens_avg": round(statistics.fmean(prompt_tokens), 1) if prompt_tokens else None,
+        "prompt_tokens_max": max(prompt_tokens) if prompt_tokens else None,
+        "num_ctx": getattr(backend, "num_ctx", None),
+        "system_prompt_sha1": hashlib.sha1(
+            (getattr(backend, "system_prompt", None) or SYSTEM_PROMPT).encode("utf-8")
+        ).hexdigest()[:12],
         "prompt_mismatch": bool(prompt_mismatch),
         "failures": failures,
         "cases": rows,
@@ -621,6 +650,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="scripted 后端的答案文件（answers: {case_id: 输出文本}）")
     ap.add_argument("--limit", type=int, default=0, help="0 = 全部")
     ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--num-ctx", type=int, default=2048,
+                    help="上下文窗口（默认 2048，与改造前一致）。提示工程实验里示例变多时要调大，"
+                         "否则示例会被静默截断；报告里的 prompt_tokens_avg 可用于自证")
     ap.add_argument("--out", default="")
     ap.add_argument("--compare", default="", help="基线 JSON 路径")
     ap.add_argument("--threshold", type=float, default=15.0, help="达标阈值（百分点）")
@@ -737,7 +769,9 @@ def _make_backend(args):
             print(f"❌ 答案文件不存在：{path}")
             return None
         return ScriptedBackend(path)
-    return OllamaBackend(args.model, args.base_url, args.temperature)
+    return OllamaBackend(args.model, args.base_url, args.temperature,
+                         num_ctx=getattr(args, "num_ctx", 2048),
+                         system_prompt=getattr(args, "system_prompt", None))
 
 
 if __name__ == "__main__":
