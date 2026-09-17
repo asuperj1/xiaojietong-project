@@ -32,7 +32,11 @@ if(MSVC)
 endif()
 
 # ---------- Python / pybind11 ----------
-find_package(Python 3.8 COMPONENTS Interpreter Development REQUIRED)
+# 只要求 Development.Module：本目标编的是 **Python 扩展模块**，不需要链接 libpython
+# （那是 Embed 才需要的）。要求整包 Development 会连 libpython*.so 一起找，而 CI 上
+# actions/setup-python 装的 CPython 只有头文件、没有共享库 ⇒ CMake 直接报
+# "missing: Development"，编译步骤必失败。
+find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
 
 find_package(pybind11 CONFIG QUIET)
 if(NOT pybind11_FOUND)

@@ -18,7 +18,7 @@ name: CI
 
 on:
   push:
-    branches: [dev, main, "feat/**", "fix/**"]
+    branches: [dev, main]          # 分支上的验证交给 pull_request，避免每推一次就全量跑两遍
   pull_request:
     branches: [dev, main]
   workflow_dispatch:
@@ -79,7 +79,7 @@ jobs:
       - name: 系统依赖（C++ 扩展编译 + MySQL 客户端）
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake g++ libmysqlclient-dev mysql-client
+          sudo apt-get install -y -qq cmake g++ libmysqlclient-dev mysql-client python3-dev
 
       - name: Python 依赖
         run: |
@@ -88,7 +88,16 @@ jobs:
           python -m pip install pybind11
 
       - name: 编译 jt_db C++ 扩展
-        run: bash db/cpp_driver/scripts/build.sh
+        run: |
+          set -o pipefail
+          # 失败时把 CMake 的错误日志一并打出来 —— 只报一个 exit code 的话，
+          # 下一个人还得从头查一遍（本步骤此前连续 22 次运行都只给了 exit code 2）。
+          if ! bash db/cpp_driver/scripts/build.sh 2>&1 | tail -80; then
+            echo "::group::CMakeError.log"
+            cat db/cpp_driver/build/CMakeFiles/CMakeError.log 2>/dev/null || echo "（无 CMakeError.log）"
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: 导入建库脚本与种子数据
         run: |
