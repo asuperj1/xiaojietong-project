@@ -146,12 +146,15 @@ def logout(authorization: str = Header(default="")):
       · 登出必须是幂等的，客户端丢 token 后再调一次不能报错；
       · 保持与旧版兼容，不因新增鉴权而打断现有前端调用。
     """
+    # 响应形状固定为 `{ok, token_version}`（api.md 契约）：不带头时 token_version 为 null，
+    # 前端可以无条件读这个键，不必先判存在。
+    data: dict = {"ok": True, "token_version": None}
     if authorization.startswith("Bearer "):
         try:
             payload = decode_token(authorization[7:])
         except jwt.PyJWTError:
-            return ok()          # token 坏了也算登出成功
+            return ok(data)      # token 坏了也算登出成功
         uid = int(payload.get("uid", 0) or 0)
         if uid > 0:
-            cpp_bridge.user_dao().bump_token_version(uid)
-    return ok()
+            data["token_version"] = int(cpp_bridge.user_dao().bump_token_version(uid))
+    return ok(data)
