@@ -426,3 +426,99 @@ def test_citation_dataclass_is_frozen() -> None:
 def test_default_thresholds_are_sane() -> None:
     assert 0.0 < DEFAULT_COVERAGE_THRESHOLD < 1.0
     assert 0.0 < DEFAULT_SCORE_THRESHOLD < 1.0
+
+
+# ============================================ 评分闸门与 store 阈值的关系 ----
+
+
+def test_score_gate_threshold_relationship_is_pinned() -> None:
+    """把闸门阈值与 store 过滤阈值的**关系**钉住（评审 P2）。
+
+    原断言是 `assert 0.0 < DEFAULT_SCORE_THRESHOLD < 1.0` —— **对任何合理常数恒真**：
+    实测把它改成 0.11 ~ 0.88 之间任意值，全部 463 条用例仍然全绿。
+
+    这两个值**不是各自独立的**：上游 `rag.py` 让向量库按 `settings.rag_score_threshold`
+    先筛一遍，筛掉的候选进不到 `should_refuse`。所以：
+
+        gate 阈值 == store 阈值  ⇒  `top < gate` 恒为假 ⇒ 闸门只在「检索无结果」时触发
+        gate 阈值 >  store 阈值  ⇒  闸门能拦住「有来源但都不够像」的情况
+
+    **改 store 阈值而不动这个常量，闸门就会静默失效** —— 这正是本 PR 之前的状态。
+    """
+    from app.core.config import settings
+
+    assert DEFAULT_SCORE_THRESHOLD >= settings.rag_score_threshold, (
+        f"闸门阈值 {DEFAULT_SCORE_THRESHOLD} 低于 store 过滤阈值 "
+        f"{settings.rag_score_threshold} ⇒ should_refuse 永不可达（死代码）。"
+        f"两者要么相等（此时闸门只拦「检索无结果」），要么闸门更高。"
+    )
+
+
+def test_score_gate_fires_when_store_threshold_is_lower() -> None:
+    """反向对照：把 store 阈值降到闸门之下，闸门**必须真的能拦**。
+
+    没有这条，上面那条断言只能证明"常量之间的大小关系"，证明不了闸门本身可用。
+    """
+    weak = [{"title": "某文档", "content": "...", "score": 0.20}]
+    refused, reason = should_refuse("随便问点什么", weak, score_threshold=0.35)
+    assert refused is True
+    assert "0.200" in reason or "0.2" in reason
+
+    strong = [{"title": "某文档", "content": "...", "score": 0.60}]
+    ok, _ = should_refuse("随便问点什么", strong, score_threshold=0.35)
+    assert ok is False
+
+
+# ============================ 评审 P2-2 / P3-2：不要把整块闸门搞挂 ============
+
+
+def test_superscript_does_not_skip_the_whole_citation_check() -> None:
+    """一个 `[²]` 不得让**整条答案**的引用校验被静默跳过（评审 P2-2）。
+
+    `'²'.isdigit()` 为 `True`，但 `int('²')` 抛 `ValueError`。旧实现在
+    `check_citations` 里直接 `int(c.value)`，异常会被 `chat.py` 的
+    `except Exception` 记成 warning 吞掉 ⇒ 这条回答里**所有**伪造引用都不会被剔除。
+    """
+    answer = "面积为 [²] 平方米，另见[编造的标题]。"
+    report = check_citations(answer, [LIB])          # 不得抛异常
+    # 重点不是 `[²]` 被判成什么，而是**校验跑完了** —— 它后面的伪造引用必须被抓住。
+    assert "编造的标题" in [c.value for c in report.fabricated], (
+        "上标不应让同一条答案里的伪造引用漏网"
+    )
+    # `[²]` 自身既不是合法序号、也不匹配任何标题 ⇒ 归伪造（宁可放过方向的反面，
+    # 但至少是**确定的行为**且能被日志看见，而不是静默跳过整条校验）。
+    assert "²" in [c.value for c in report.fabricated]
+
+
+def test_fullwidth_digits_still_count_as_index() -> None:
+    """反向对照：全角数字 `int()` 是**可以**解的，不能一并降级成标题类。
+
+    提醒后来者：`isascii()` 是错的判据（它会把 `'１２３'` 也排除掉），
+    正确做法是用 `int()` 本身的接受域。
+    """
+    assert [c.kind for c in extract_citations("见[１２３]。")] == ["index"]
+
+
+def test_markdown_indent_and_hard_break_survive_clean() -> None:
+    """`clean_answer` 只清**删除点**的空白，不得改正文其余部分（评审 P3-2）。
+
+    旧实现是全篇 `re.sub(r"[ \\t]{2,}", " ")` + `re.sub(r"[ \\t]+([，。；：！？])", ...)`，
+    实测会把 Markdown 的 4 空格缩进压成 1 个、并删掉行尾两个空格（硬换行）。
+    """
+    answer = "步骤：\n    1. 打开系统  \n    2. 输入学号[编造的标题]"
+    report = check_citations(answer, [LIB])
+    assert [c.value for c in report.fabricated] == ["编造的标题"]
+    cleaned = clean_answer(answer, report)
+    assert "\n    1." in cleaned, f"缩进被压平：{cleaned!r}"
+    assert "打开系统  \n" in cleaned, f"行尾硬换行被删：{cleaned!r}"
+
+
+def test_clean_still_tidies_whitespace_left_by_deletion() -> None:
+    """反向对照：删除点**该**清理的空白仍要清 —— 别为了不动正文就什么都不做。"""
+    answer = "见 [编造的标题]。"
+    report = check_citations(answer, [LIB])
+    assert clean_answer(answer, report) == "见。"
+
+    mid = "详见 [编造的标题] 的说明。"
+    report2 = check_citations(mid, [LIB])
+    assert clean_answer(mid, report2) == "详见 的说明。"

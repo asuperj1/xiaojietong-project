@@ -40,8 +40,21 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------- 阈值 ----
-# 分数闸门：向量检索最高分低于它 → 拒答（与 settings.rag_score_threshold 默认一致）。
+# 分数闸门：向量检索最高分低于它 → 拒答。
 # ⚠️ 这是**唯一**参与拒答判定的阈值。
+#
+# ⚠️⚠️ **它与 `settings.rag_score_threshold` 的关系决定了闸门能不能生效**
+# ----------------------------------------------------------------
+# `rag.py` 调 `store.search(..., settings.rag_score_threshold)`，而向量库在返回前
+# 已经把 `score < 阈值` 的候选丢掉了（`vector_store.py` 的 `if score < ...: continue`）。
+# 于是进入 `should_refuse` 的 `top` **恒 ≥ store 阈值**：
+#
+#     gate 阈值 == store 阈值（当前两者都是 0.35）  ⇒  `top < gate` 恒为假
+#                                                     ⇒ 闸门只可能因「检索无结果」触发
+#     gate 阈值 >  store 阈值                      ⇒  闸门能拦住「有来源但都不够像」的情况
+#
+# 所以这两个值**不能各自随手改**：改 store 阈值而这个不跟，闸门就会静默失效
+# （这正是本 PR 之前的状态）。`test_score_gate_is_reachable` 把这条关系钉住。
 DEFAULT_SCORE_THRESHOLD = 0.35
 # ⚠️ 以下两个是**诊断用**阈值，**默认不参与任何拒绝判定**。
 # 原因：「用字面重合度判有无依据」这个方案已被实测否掉 —— 详见 should_refuse 的
@@ -162,10 +175,16 @@ def _looks_like_citation(text: str, match: "re.Match[str]", value: str) -> bool:
     一个伪造引用，只看日志），也不要错删模型正常输出的 Markdown 链接 / 代码下标
     （那会**直接改掉用户看到的正文**）。符合本模块“宁可放过、不可错杀”的取舍。
 
-    ⚠️ **残留风险（已知、不做处理）**：模型模仿 prompt 格式输出 `[分类]`（如 `[图书馆]`）
-    时，它不匹配任何来源标题 → 仍会被归为伪造并剔除。这是**有意保留**的：`[分类]`
-    与真正的标题引用在字面上无法区分，宁严不宽；若要彻底消除，需让 prompt 不再
-    用方括号包裹分类（改 `build_system_prompt`），不属于本模块职责。
+    ⚠️ **`[分类]` 的实际行为（本注释此前写反了，已按实测更正）**：模型模仿 prompt 格式
+    输出 `[分类]`（如 `[图书馆]`）时，**通常会被判为「有效」并原样保留** —— 因为
+    `_match_title` 的双向包含判定里 `c in nt` 会命中（`[图书馆]` ⊂ 「图书馆开放时间」）。
+
+        实测：srcs=[{"title":"图书馆开放时间",...}]、answer="开放时间为 8:00-22:00。[图书馆]"
+        →  valid=['图书馆']，fabricated=[]，clean_answer 后正文**逐字不变**
+
+    这是**「宁可放过」方向**的取舍（不算错杀），故保留现状；但若要真正拦住 `[分类]`，
+    需给 `c in nt` 方向加最短长度约束（如归一化后 ≥4 字），或让 prompt 不再用方括号
+    包裹分类（改 `build_system_prompt`）—— 后者不属于本模块职责。
     """
     if match.end() < len(text) and text[match.end()] in _MD_LINK_FOLLOWERS:
         return False  # ① 行内链接 `[x](`
@@ -176,6 +195,27 @@ def _looks_like_citation(text: str, match: "re.Match[str]", value: str) -> bool:
     if "://" in value:
         return False  # ④ URL 片段
     return True
+
+
+def _as_index(value: str) -> int | None:
+    """能**安全**转成 `int` 才当序号引用，否则返回 `None`。
+
+    为何不直接用 `str.isdigit()` 判：它对**上标**（`¹` `²` `³`）也返回 `True`，
+    但 `int()` 解不了 —— 实测 `'²'.isdigit() is True` 而 `int('²')` 抛
+    `ValueError: invalid literal for int() with base 10: '²'`。
+
+    后果不是"这一条引用判错"，而是**整条答案的引用校验被静默跳过**：
+    `check_citations` 抛出的异常会被 `chat.py` 的 `except Exception` 记成 warning，
+    于是这条回答里**所有**伪造引用都不会被剔除、`citations` 事件也不下发，
+    而调用方无从感知。一个字符合掉整块闸门。
+
+    判据与 `int()` 的接受域对齐（顺带正确接受全角数字 `'１２３'`，
+    它们 `isascii()` 为假但 `int()` 合法，故**不能**用 `isascii()` 代替）。
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def extract_citations(answer: str) -> list[Citation]:
@@ -205,7 +245,7 @@ def extract_citations(answer: str) -> list[Citation]:
             continue
         if not _looks_like_citation(src, m, value):
             continue
-        kind = "index" if value.isdigit() else "title"
+        kind = "index" if _as_index(value) is not None else "title"
         out.append(Citation(m.group(0), kind, value, m.start(), m.end()))
     return out
 
@@ -225,6 +265,36 @@ def should_refuse(
 
     - 有 `score` 时：最高分 < `score_threshold` → 拒答。
     - 没有 `score` 时（关键词降级路径）：**不拒答**，并在原因里说明。
+
+    ⚠️ 本闸门**当前实际只拦「检索无结果」**，拦不住负样本
+    -------------------------------------------------
+    **两层原因，都请勿只看一层就下结论：**
+
+    **① 机制层 —— 它与 store 的过滤阈值同值。**
+    上游 `rag.py` 已让向量库按 `settings.rag_score_threshold`（默认 0.35）过滤，
+    筛掉的候选根本进不到这里；而本函数默认阈值也是 0.35 ⇒ `top < 0.35` 恒为假。
+    见文件头「阈值」一节的说明与 `test_score_gate_is_reachable`。
+
+    **② 数据层 —— 即便把阈值抬高，也分不开负样本。**
+    用真实 `bge-m3` + 真实知识库（27 篇 chunk）实测每条问题的 **top1 余弦相似度**：
+
+    | 类别 | 样本 | top1 |
+    |---|---|---|
+    | 负样本 | N01「今年寒假从哪一天开始放假？」 | **0.621** |
+    | 负样本 | N02「计算机学院院长的办公室电话是多少？」 | **0.500** |
+    | 正样本（最低两条） | Q10「宿舍里能用热得快、电磁炉吗？」 | **0.572** |
+    | 正样本 | Q06「感冒发烧了去哪个医院看？」 | 0.592 |
+    | 正样本（最高） | Q20「家里困难，助学贷款怎么申请？」 | 0.787 |
+
+    ⇒ 负样本区间 `[0.500, 0.621]` 与正样本区间 `[0.572, 0.787]` **重叠**
+    （N01 的 0.621 高于 Q10/Q04/Q06 三条**正样本**）。
+    **不存在任何相似度阈值能同时做到「不拒答 Q10」与「拒答 N01」。**
+
+    **结论**：把 `DEFAULT_SCORE_THRESHOLD` 调到 0.5~0.6 **不会**让闸门变好 ——
+    只会开始拒答正常提问（Q10 0.572、Q04 0.598、Q06 0.592 首当其冲），
+    而 N01 仍会被回答。要真正拒答负样本，需要的是**分数之外的手段**
+    （重排 / 交叉编码器 / 小分类器 / LLM 自评），不是调这个数。
+    该结论已登记到 `docs/技术方向待处理问题.md`。
 
     ⚠️ 为何不用「问题与来源的文本重合度」当闸门
     -------------------------------------------
@@ -347,13 +417,16 @@ def check_citations(
     report.citations = extract_citations(answer)
 
     for c in report.citations:
-        if c.kind == "index":
-            idx = int(c.value)
+        idx = _as_index(c.value) if c.kind == "index" else None
+        if c.kind == "index" and idx is not None:
             if 1 <= idx <= len(items):
                 report.valid.append(c)
             else:
                 report.fabricated.append(c)
         else:
+            # `kind="index"` 却转不出 int（理论上不可达，`extract_citations` 已用同一
+            # 判据分流）—— 兜到此分支即当成标题类走匹配，**不抛异常**：一旦抛出去，
+            # `chat.py` 会吞掉并跳过整条答案的校验（见 `_as_index` docstring）。
             (report.valid if _match_title(c.value, titles) else report.fabricated).append(c)
 
     if check_sentences and src_text:
@@ -377,6 +450,34 @@ def check_citations(
     return report
 
 
+def _tidy_join(text: str, pos: int) -> str:
+    """把**删除点处**的空白残留收拢，其余正文**一字不动**。
+
+    为何不做全篇 `re.sub(r"[ \\t]{2,}", " ")`：那会压平 Markdown 缩进
+    （`"    1. xxx"` → `" 1. xxx"`）、并删掉行尾两个空格（Markdown 硬换行），
+    等于**改了用户看到的正文** —— 与模块「只剔引用、不碰正文」的定位冲突。
+    实测（全篇写法）：
+
+        原文  '操作步骤：\\n    1. 打开系统  \\n    2. 输入学号'
+        清洗后 '操作步骤：\\n 1. 打开系统 \\n 2. 输入学号'      ← 缩进与硬换行都没了
+
+    改为只处理 `pos` 左右**跨删除点的**那一段空白。
+    """
+    i = j = pos
+    while i > 0 and text[i - 1] in " \t":
+        i -= 1
+    while j < len(text) and text[j] in " \t":
+        j += 1
+    if i == j:
+        return text                       # 删除点本来就没有空白，无需处理
+    left, right = text[:i], text[j:]
+    if not right or right[0] in "，。；：！？、）】":
+        return left + right               # 右侧紧跟标点 ⇒ 不留空格
+    if not left or left[-1] in " \t\n":
+        return left + right               # 左侧已是空白/换行 ⇒ 不重复补
+    return f"{left} {right}"
+
+
 def clean_answer(answer: str, report: CitationReport) -> str:
     """剔除**伪造引用标记**（保留正文），并清理删除处残留的空格。
 
@@ -384,7 +485,7 @@ def clean_answer(answer: str, report: CitationReport) -> str:
     - 只删“伪造”的那几条；有效引用**原样保留**。
     - 删除的是**整段标记（含方括号）**，因此不会留下空括号 —— 早期 docstring
       写的“去掉因此产生的空括号”与实现不符（评审 P3-1），已改成与实现一致的措辞。
-    - 两个 `re.sub` 只处理**删除后的空格残留**：标点前空格、连续空格。
+    - 空白清理只发生在**删除点**（见 `_tidy_join`），**不会**动正文其余部分。
     - 哪些方括号**根本不会被当成引用**（Markdown 链接 / 代码下标 / 列表 / URL），
       见 `extract_citations` 及其上方注释。
     """
@@ -394,6 +495,5 @@ def clean_answer(answer: str, report: CitationReport) -> str:
     text = answer or ""
     for start, end in spans:
         text = text[:start] + text[end:]
-    text = re.sub(r"[ \t]{2,}", " ", text)
-    text = re.sub(r"[ \t]+([，。；：！？])", r"\1", text)
+        text = _tidy_join(text, start)   # 只收拢删除点处的空白，不动正文其余部分
     return text.strip()
