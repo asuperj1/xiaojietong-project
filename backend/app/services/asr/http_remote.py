@@ -15,14 +15,31 @@
 - **上游 4xx/5xx、返回非 JSON、缺 text** → `AsrFailure` → 5003（转写失败）
 
 注意 `post` 可注入：单测不需要真的起一个 ASR 服务。
+
+**回环地址必须绕过代理**（C30 实测踩到）：`httpx` 默认 `trust_env=True`，会读环境变量
+**以及 Windows 注册表里的系统代理**（`urllib.request.getproxies()` 的返回值）。若机器上
+配了代理，发往 `http://127.0.0.1:9001/transcribe` 的请求会被**代理**接走并回 502，
+本服务明明活着却报「转写失败 5003」—— 而"网络受限所以本机自建识别服务"恰恰就是
+配了代理的场景，不能指望运维自己去设 `NO_PROXY`。因此对回环地址显式 `trust_env=False`；
+非回环地址保持 httpx 默认行为（内网/云端识别仍需走代理的情况不受影响）。
 """
 from __future__ import annotations
 
+import urllib.parse
 from typing import Callable, Optional
 
 import httpx
 
 from .base import AsrFailure, AsrResult, AsrUnavailable
+
+#: 视为"本机"的主机名。回环地址永远不需要代理。
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+
+
+def _is_loopback(url: str) -> bool:
+    """URL 是否指向本机（含 `127.0.0.0/8` 任意地址）。"""
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    return host in _LOOPBACK_HOSTS or host.startswith("127.")
 
 
 class HttpRemoteBackend:
@@ -67,10 +84,12 @@ class HttpRemoteBackend:
         if prompt:
             data["prompt"] = prompt
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
+        # 回环地址绕过代理（见模块 docstring）；非回环保持 httpx 默认（trust_env=True）
+        bypass = {"trust_env": False} if _is_loopback(self.url) else {}
 
         try:
             resp = self._post(self.url, files=files, data=data, headers=headers,
-                              timeout=self.timeout)
+                              timeout=self.timeout, **bypass)
         except AsrUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001 - 连不上属于"服务不可用"
