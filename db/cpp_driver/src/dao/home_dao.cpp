@@ -100,13 +100,23 @@ bool HomeDAO::update_banner(long long id, const std::string& title, const std::s
         "UPDATE home_banner SET title = ?, image = ?, link_type = ?, link_target = ?, "
         "       sort = ?, start_at = ?, end_at = ?, enabled = ? WHERE id = ?",
         params);
-    return affected > 0;
+    return affected > 0 || banner_exists(id);
 }
 
 bool HomeDAO::set_banner_enabled(long long id, long long enabled) {
     auto [affected, _] = DbSession::current()->execute(
         "UPDATE home_banner SET enabled = ? WHERE id = ?", {enabled, id});
-    return affected > 0;
+    return affected > 0 || banner_exists(id);
+}
+
+bool HomeDAO::banner_exists(long long id) {
+    // 只在 affected == 0 时被调用（见上面的 ||），用于区分两种"0 行"：
+    //   · 行不存在                → 真的失败
+    //   · 新值与库内**完全相同**  → MySQL 报 0 行，但这是一次成功的幂等写入
+    // 不能只用 affected 判成败，否则"把一个已经上架的轮播再上架一次"会返回失败。
+    // 同一取舍见 `life_dao.cpp` 的 `mark_order_arrived`（那里是先匹配查询再写）。
+    auto rows = DbSession::current()->query("SELECT id FROM home_banner WHERE id = ?", {id});
+    return !rows.empty();
 }
 
 bool HomeDAO::remove_banner(long long id) {

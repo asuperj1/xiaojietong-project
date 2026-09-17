@@ -60,6 +60,11 @@ public:
 
     // 删
     bool remove_banner(long long id);
+
+private:
+    // 内部：轮播行是否存在（`update_banner` / `set_banner_enabled` 在 affected==0 时用它
+    // 区分「行不存在」与「新值和库内一样」—— 后者是成功的幂等写入，不能报失败）
+    bool banner_exists(long long id);
 };
 
 }  // namespace jt_db

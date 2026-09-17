@@ -151,10 +151,18 @@ long long LifeDAO::create_pickup_order(long long user_id, long long merchant_id,
                                        long long pickup_point_id) {
     const std::string code = generate_pickup_code();
     if (code.empty()) return -1;  // 取件码生成失败 ⇒ 宁可不建单，也不要建一个没有凭证的单
+
+    // 驿站必须是**存在且未软删**的：否则会建出指向不存在驿站的订单 ——
+    // 学生拿到一个"无处取件"的取件码，且事后无法从订单反查到任何有效取件点。
+    // 用 `INSERT ... SELECT ... FROM pickup_point WHERE ...` 而不是"先查后插"：
+    // 后者在并发下可能刚查完该点就被软删；SQL 层面一次完成才是原子的。
+    // （`status` 有意不参与校验：停用是运营动作，后台仍可能为它补建订单；
+    //   "软删"才代表这个取件点已经没了。）
     auto [affected, id] = DbSession::current()->execute(
         "INSERT INTO takeaway_order (user_id, merchant_id, items_json, total_amount, "
         "       delivery_fee, pay_amount, status, biz_type, pickup_code, pickup_point_id) "
-        "VALUES (?, ?, ?, ?, 0, ?, 1, 2, ?, ?)",
+        "SELECT ?, ?, ?, ?, 0, ?, 1, 2, ?, id FROM pickup_point "
+        "       WHERE id = ? AND is_deleted = 0",
         {user_id, merchant_id, std::string(items_json), amount, amount, std::string(code),
          pickup_point_id});
     return affected > 0 ? id : -1;

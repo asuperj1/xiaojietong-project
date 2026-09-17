@@ -76,6 +76,10 @@ public:
     std::string generate_pickup_code(int length = 6);
 
     // 代收下单：biz_type=2、delivery_fee=0、自动生成并写入取件码；返回订单 id（失败 -1）
+    //
+    // ⚠️ `pickup_point_id` 必须指向**存在且未软删**的驿站，否则返回 -1（不建单）——
+    //    否则会产出"无处取件"的订单。校验在 INSERT 内用 `SELECT ... FROM pickup_point
+    //    WHERE id = ? AND is_deleted = 0` 完成（原子，避免"先查后插"的竞态）。
     long long create_pickup_order(long long user_id, long long merchant_id,
                                   const std::string& items_json, double amount,
                                   long long pickup_point_id);

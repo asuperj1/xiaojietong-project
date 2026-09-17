@@ -155,10 +155,22 @@ def main() -> None:
         # 去重：带空格的同词再写一次 ⇒ 不新增行、且返回同一 id
         assert int(user.add_search_history(uid, "  测试-C23-高数  ")) == int(hid), \
             "trim 后应命中同一行（去重失效）"
+        hid2 = user.add_search_history(uid, "测试-C23-线代")
+        assert hid2 > hid, "后写入的行 id 应更大"
         hist = user.list_search_history(uid, 20)
         assert any(int(r["id"]) == int(hid) for r in hist), hist
-        assert [str(r["created_at"]) for r in hist] == \
-            sorted([str(r["created_at"]) for r in hist], reverse=True), "未按 created_at 倒序"
+        assert [int(r["id"]) for r in hist][0] == int(hid2), "最近搜索应排第一"
+        # 排序契约是 **(created_at DESC, id DESC)**。原断言只比较 `created_at` 列表是否
+        # 倒序 —— 而本用例写入的行**都落在同一秒**，`created_at` 全相等 ⇒ 那个断言**恒真**
+        # （评审实测：把 ORDER BY 里的 `id DESC` tie-break 删掉，原断言仍全绿）。
+        # 改为断言整表按双键有序。
+        #
+        # ⚠️ 但它仍**测不出**"删掉 tie-break"这个变异（实测 survived）：`created_at` 相等时,
+        #    InnoDB 对 `idx_user_created` 的倒序索引扫描**本身**就返回 id 降序，两种写法
+        #    观测结果一致。所以 `id DESC` 是一条**防御性保证**（不依赖存储引擎的自然顺序），
+        #    而不是在当前数据上可观测的行为差异 —— 这里如实标注，避免后来者误以为它已被锁住。
+        pairs = [(str(r["created_at"]), int(r["id"])) for r in hist]
+        assert pairs == sorted(pairs, reverse=True), f"未按 (created_at, id) 双键倒序：{pairs}"
         # 超长关键词：UTF-8 字符截断而非报错（列宽 VARCHAR(128)）
         assert int(user.add_search_history(uid, "测试-C23-" + "长" * 300)) > 0
         # 空 / 纯空白拒绝落库
@@ -252,6 +264,13 @@ def main() -> None:
         assert life.find_pickup_point(pid) is None, "软删后应查不到"
         assert all(int(p["id"]) != int(pid) for p in life.page_pickup_points(True, 200)), \
             "软删的驿站不该出现在任何列表（含 include_disabled）"
+        # ⚠️ 上面两条**物理删也能满足** —— 必须直接查库确认是"行still在、is_deleted=1"。
+        # 头注释写的「软删：驿站会被历史订单的 pickup_point_id 引用，物理删会让历史订单
+        # 查不到驿站」，只有这条断言才真正验证到（评审实测：把 UPDATE ... is_deleted=1
+        # 改成 DELETE FROM pickup_point，上面两条断言仍然全绿）。
+        _soft = jt_db.query("SELECT is_deleted FROM pickup_point WHERE id = ?", [pid])
+        assert _soft, "软删后行不应从表里消失（那是物理删）"
+        assert int(_soft[0]["is_deleted"]) == 1, f"应标记 is_deleted=1，实际 {_soft[0]}"
 
         # 代收下单：biz_type=2 / delivery_fee=0 / 取件码 6 位且可回查
         seed_point = int(points[0]["id"])
@@ -281,6 +300,21 @@ def main() -> None:
         arrived2 = jt_db.query(
             "SELECT arrived_at FROM takeaway_order WHERE id = ?", [oid])[0]["arrived_at"]
         assert arrived2 == arrived1, f"重复到件不应改动时间：{arrived1} -> {arrived2}"
+
+        # ⚠️ 上面这次比较**不足以证明幂等** —— 两次调用落在同一秒，`NOW()` 返回相同值，
+        # 即便实现写成裸 `SET arrived_at = NOW()`（覆盖式）也照样相等。
+        # （评审实测：把 `IFNULL(arrived_at, NOW())` 改成 `NOW()`，原断言仍全绿。）
+        # 真正能判别的做法：先把 arrived_at 人为拨到 1 小时前，再标一次到件 ——
+        # 必须是"保持旧值"，而不是"刷新成现在"。
+        jt_db.execute(
+            "UPDATE takeaway_order SET arrived_at = NOW() - INTERVAL 1 HOUR WHERE id = ?", [oid])
+        backdated = jt_db.query(
+            "SELECT arrived_at FROM takeaway_order WHERE id = ?", [oid])[0]["arrived_at"]
+        assert life.mark_order_arrived(oid, code) is True
+        after = jt_db.query(
+            "SELECT arrived_at FROM takeaway_order WHERE id = ?", [oid])[0]["arrived_at"]
+        assert after == backdated, (
+            f"重复到件改写了首次到件时间：{backdated} -> {after}（说明写成了覆盖式 NOW()）")
 
         # 到件通知：幂等
         assert life.mark_order_notified(oid) is True
