@@ -1,0 +1,410 @@
+"""C22 · `token_version`（登出使 token 失效）+ 学号唯一 / 限频。
+
+任务单 C22 的验收口径：「重复学号被拒；**1 次 / 7 天**限频；`PUT /user/me` 可改并回读；
+**登出使 token 失效**」。
+
+本文件专盯两处最容易做错的地方：
+
+1. **登出必须真的生效** —— 本仓此前 `POST /auth/logout` 是**空操作**
+   （原注释写"无状态 JWT：前端丢弃 token 即可"），所以"登出使 token 失效"原本**做不到**；
+   C22 用 `user.token_version` 才把它做出来。
+   而且 **`/auth/refresh` 也必须校验**，否则拿登出前的 refresh_token 就能换回新
+   access_token，"失效"形同虚设（本文件有专门用例守这条）。
+2. **向后兼容** —— 线上已签发的 token 里**没有** `tv` 字段。上线那一刻
+   **不能把已登录用户全部踢下线**：老 token 缺字段按 `0`，而库列默认也是 `0`
+   ⇒ 相等 ⇒ 放行。
+
+⚠️ 所有用例都用**专用探针用户**（`openid = oXJT_DEV_c22_probe_*`），用完即删。
+不复用 `hdr_a` / `hdr_b` —— 本文件会把 `token_version` +1，复用 session 级夹具
+会连带把其它用例的 token 一起打失效。
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import jwt
+import pytest
+
+from app.core.config import settings
+from app.db import cpp_bridge
+
+# 需要鉴权、且**无副作用**的探针接口（GET 列表，不会写库）
+_AUTH_PROBE = "/api/v1/life/notices?page=1&size=1"
+
+# 限频窗口（业务约定 7 天，与 C22 验收一致）
+_INTERVAL_DAYS = 7
+
+# 探针用户 openid 前缀（与登录接口 mock 的 `oXJT_DEV_<code>` 同体系，便于识别与清理）
+_PROBE_PREFIX = "oXJT_DEV_c22_probe_"
+
+
+def _jwt(uid: int, *, tv: int | None = None, kind: str = "access") -> str:
+    """手工签一个 token。
+
+    ``tv=None`` 时**不带** ``tv`` 字段 —— 用来精确模拟"上线前签发的存量 token"。
+    """
+    payload: dict = {
+        "uid": int(uid),
+        "role": 0,
+        "type": kind,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+    }
+    if tv is not None:
+        payload["tv"] = int(tv)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def _hdr(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _make_probe(tag: str) -> int:
+    """直接建一个专用探针用户，返回 uid。
+
+    **不走 HTTP 登录**：`POST /auth/wechat-login` 带 60 秒限频（实测返回
+    `429 code=1010 操作过于频繁`），若每个用例都去登录会把测试自己限死。
+    这里直接用 DAO 建用户，token 一律用 `_jwt()` 手工签 —— 反而能更精确地
+    控制 `tv`（包括故意不带 `tv` 的存量 token）。
+    """
+    openid = _PROBE_PREFIX + tag
+    dao = cpp_bridge.user_dao()
+    rows = cpp_bridge.query("SELECT id FROM `user` WHERE openid = ?", [openid])
+    if rows:
+        cpp_bridge.execute("DELETE FROM `user` WHERE id = ?", [int(rows[0]["id"])])
+    uid = int(dao.create(openid, "c22-probe"))
+    assert uid > 0, "探针用户创建失败"
+    cpp_bridge.execute("UPDATE `user` SET token_version = 0 WHERE id = ?", [uid])
+    return uid
+
+
+def _drop_probe(uid: int) -> None:
+    cpp_bridge.execute("DELETE FROM `user` WHERE id = ?", [uid])
+
+
+def _token_version(uid: int) -> int:
+    rows = cpp_bridge.query("SELECT token_version FROM `user` WHERE id = ?", [uid])
+    assert rows, f"用户 {uid} 不存在"
+    return int(rows[0].get("token_version") or 0)
+
+
+@pytest.fixture()
+def probe():
+    """专用探针用户（已归零 tv，用完即删）。"""
+    uid = _make_probe("main")
+    try:
+        yield {"uid": uid, "token": _jwt(uid, tv=0), "refresh": _jwt(uid, tv=0, kind="refresh")}
+    finally:
+        _drop_probe(uid)
+
+
+# ------------------------------------------------------- 向后兼容（最关键）
+
+def test_legacy_token_without_tv_is_accepted(client, probe):
+    """🔴 存量 token（**没有** `tv` 字段）上线后必须仍然可用。
+
+    这是 C22 最大的回归风险：库里 `token_version` 默认 0，老 token 缺字段也按 0，
+    两者相等 ⇒ 放行。若实现里写成 `payload["tv"]` 直接取键，这里会 KeyError/拒绝，
+    等于**上线即把全站已登录用户踢下线**。
+    """
+    legacy = _jwt(probe["uid"])          # 故意不带 tv
+    resp = client.get(_AUTH_PROBE, headers=_hdr(legacy))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["code"] == 0
+
+
+def test_token_with_matching_tv_is_accepted(client, probe):
+    """反向对照：带正确 `tv` 的 token 能用 ⇒ 证明上面的"能用"不是因为鉴权被绕过。"""
+    assert _token_version(probe["uid"]) == 0
+    resp = client.get(_AUTH_PROBE, headers=_hdr(_jwt(probe["uid"], tv=0)))
+    assert resp.status_code == 200, resp.text
+
+
+def test_token_with_stale_tv_is_rejected(client, probe):
+    """`tv` 与库里不一致 ⇒ 必须拒绝（否则版本号形同虚设）。"""
+    stale = _jwt(probe["uid"], tv=_token_version(probe["uid"]) + 1)
+    resp = client.get(_AUTH_PROBE, headers=_hdr(stale))
+    assert resp.status_code != 200, f"陈旧 tv 竟然通过了：{resp.status_code} {resp.text}"
+
+
+# --------------------------------------------------------------- 登出生效
+
+def test_logout_bumps_token_version_and_invalidates_old_token(client, probe):
+    """登出 ⇒ `token_version` +1，且**同一个 token 立刻失效**。"""
+    before = _token_version(probe["uid"])
+    assert client.get(_AUTH_PROBE, headers=_hdr(probe["token"])).status_code == 200
+
+    resp = client.post("/api/v1/auth/logout", headers=_hdr(probe["token"]))
+    assert resp.status_code == 200, resp.text
+    assert _token_version(probe["uid"]) == before + 1, "登出没有把 token_version +1"
+
+    after = client.get(_AUTH_PROBE, headers=_hdr(probe["token"]))
+    assert after.status_code != 200, f"登出后旧 token 竟然还能用：{after.text}"
+
+
+def test_logout_is_idempotent_without_token(client, probe):
+    """登出**不要求**带 token，且必须幂等（客户端丢 token 后再调一次不能报错）。"""
+    assert client.post("/api/v1/auth/logout").status_code == 200
+    assert client.post("/api/v1/auth/logout", headers=_hdr("not-a-jwt")).status_code == 200
+    assert client.post("/api/v1/auth/logout", headers=_hdr(probe["token"])).status_code == 200
+
+
+def test_refresh_after_logout_is_rejected(client, probe):
+    """🔴 登出后**旧 refresh_token 也必须失效**。
+
+    若 refresh 链路不校验 `tv`，攻击者/前端只要留着登出前的 refresh_token，
+    就能无限换回新的 access_token —— "登出使 token 失效"会**形同虚设**。
+    """
+    old_refresh = probe["refresh"]
+    assert client.post("/api/v1/auth/logout", headers=_hdr(probe["token"])).status_code == 200
+
+    resp = client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh})
+    assert resp.status_code != 200, f"登出后旧 refresh_token 竟然还能换新 token：{resp.text}"
+
+
+def test_refresh_token_carries_tv_and_legacy_refresh_still_works(client, probe):
+    """新签发的 refresh_token 必须带 `tv`；而**老 refresh（无 tv）仍兼容**。"""
+    fresh = client.post("/api/v1/auth/refresh", json={"refresh_token": probe["refresh"]})
+    assert fresh.status_code == 200, fresh.text
+    new_refresh = fresh.json()["data"]["refresh_token"]
+    assert jwt.decode(
+        new_refresh, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+    ).get("tv") == _token_version(probe["uid"])
+
+    legacy_refresh = _jwt(probe["uid"], kind="refresh")   # 不带 tv
+    ok = client.post("/api/v1/auth/refresh", json={"refresh_token": legacy_refresh})
+    assert ok.status_code == 200, f"存量 refresh token 被误杀：{ok.text}"
+
+
+# ----------------------------------------------------- 学号唯一 / 限频（DAO）
+
+def test_student_no_change_remaining_days(client, probe):
+    """限频：从未改过 = 0；刚改完 > 0；把时间戳倒推 8 天 = 0。"""
+    uid = probe["uid"]
+    dao = cpp_bridge.user_dao()
+
+    assert dao.student_no_change_remaining_days(uid, _INTERVAL_DAYS) == 0, "从未改过应为 0"
+
+    no = "C22TEST" + uuid.uuid4().hex[:8]
+    assert dao.update_student_no(uid, no) is True, "绑定学号失败"
+    remaining = dao.student_no_change_remaining_days(uid, _INTERVAL_DAYS)
+    assert remaining > 0, f"刚改完的剩余天数应 > 0，实际 {remaining}"
+
+    # 反向对照：把时间戳倒推 8 天（> 7 天窗口）⇒ 应恢复可改
+    cpp_bridge.execute(
+        "UPDATE `user` SET student_no_updated_at = NOW() - INTERVAL 8 DAY WHERE id = ?",
+        [uid],
+    )
+    assert dao.student_no_change_remaining_days(uid, _INTERVAL_DAYS) == 0, "超过窗口后应可改"
+
+    # 校验真的写进去了（回读）
+    assert dao.find_by_id(uid)["student_no"] == no
+
+
+def test_duplicate_student_no_is_rejected_by_unique_index(client, probe):
+    """重复学号必须被 `uk_student_no` 拦下（两个探针用户绑同一学号）。"""
+    other_uid = _make_probe("dup")
+    dao = cpp_bridge.user_dao()
+    no = "C22DUP" + uuid.uuid4().hex[:8]
+    try:
+        assert dao.update_student_no(probe["uid"], no) is True
+        with pytest.raises(Exception) as exc:      # DbException → Python 异常
+            dao.update_student_no(other_uid, no)
+        assert "Duplicate" in str(exc.value) or "1062" in str(exc.value), (
+            f"异常信息不像唯一键冲突：{exc.value}"
+        )
+    finally:
+        _drop_probe(other_uid)
+
+
+def test_update_student_no_returns_false_for_missing_user(client, probe):
+    """用户不存在 ⇒ 返回 False（而不是抛异常）。"""
+    assert cpp_bridge.user_dao().update_student_no(999_000_001, "C22NONE") is False
+    assert cpp_bridge.user_dao().student_no_change_remaining_days(
+        999_000_001, _INTERVAL_DAYS
+    ) == -1
+
+
+def test_bump_token_version_returns_new_version(client, probe):
+    """`bump_token_version` 返回**自增后**的新版本号；不存在用户返回 -1。"""
+    dao = cpp_bridge.user_dao()
+    v0 = _token_version(probe["uid"])
+    assert dao.bump_token_version(probe["uid"]) == v0 + 1
+    assert dao.bump_token_version(probe["uid"]) == v0 + 2
+    assert dao.bump_token_version(999_000_001) == -1
+
+
+# ============================ C22 学号 · HTTP 层（接口接线）
+#
+# 任务单 C22 的验收口径是「重复学号被拒；**1 次 / 7 天**限频；`PUT /user/me` 可改并回读」——
+# 这三条都是**接口层**的行为。此前本文件全部直接调 DAO，于是
+# 「限频根本没接到接口上」「重复学号变成 500」这类缺陷在 CI 里完全不可见：
+# DAO 写对了，接口却绕过了它。
+
+
+def _put_me(client, token: str, **body):
+    return client.put("/api/v1/user/me", headers=_hdr(token), json=body)
+
+
+def _student_no_of(uid: int) -> str:
+    rows = cpp_bridge.query("SELECT student_no FROM `user` WHERE id = ?", [uid])
+    assert rows, f"用户 {uid} 不存在"
+    return rows[0].get("student_no") or ""
+
+
+def _student_no_updated_at(uid: int) -> str:
+    rows = cpp_bridge.query("SELECT student_no_updated_at FROM `user` WHERE id = ?", [uid])
+    assert rows, f"用户 {uid} 不存在"
+    return rows[0].get("student_no_updated_at") or ""
+
+
+def test_http_put_me_binds_student_no_and_reads_back(client, probe):
+    """🔴 验收项「`PUT /user/me` 可改并回读」——必须在 HTTP 层成立。"""
+    no = "C22HTTP" + uuid.uuid4().hex[:8]
+    resp = _put_me(client, probe["token"], student_no=no)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["code"] == 0
+    assert resp.json()["data"]["student_no"] == no, "响应里应回读出新学号"
+    assert _student_no_of(probe["uid"]) == no, "库内应真的写入"
+    # 限频的判定依据必须同时被刷新，否则「7 天一次」无从谈起
+    assert _student_no_updated_at(probe["uid"]), "student_no_updated_at 应被刷新（限频依据）"
+
+
+def test_http_put_me_student_no_is_rate_limited(client, probe):
+    """🔴 验收项「**1 次 / 7 天**限频」——第二次改必须被拒，且库内保持第一次的值。"""
+    first = "C22RATE1" + uuid.uuid4().hex[:6]
+    second = "C22RATE2" + uuid.uuid4().hex[:6]
+    assert _put_me(client, probe["token"], student_no=first).json()["code"] == 0
+
+    resp = _put_me(client, probe["token"], student_no=second)
+    assert resp.status_code != 500, f"限频被拒不该是 500：{resp.text}"
+    body = resp.json()
+    assert body["code"] != 0, "7 天内第二次改学号必须被拒"
+    assert "天" in body["message"], f"拒绝原因应说明限频窗口：{body['message']}"
+    assert _student_no_of(probe["uid"]) == first, "被拒后库内必须保持原值"
+
+
+def test_http_put_me_student_no_allowed_after_interval(client, probe):
+    """反向对照：把 `student_no_updated_at` 拨到窗口外后，第二次改**应当成功**。
+
+    没有这条，上面那条「被拒」无法区分是限频生效、还是学号压根没写进去。
+    """
+    first = "C22OLD1" + uuid.uuid4().hex[:6]
+    second = "C22NEW2" + uuid.uuid4().hex[:6]
+    assert _put_me(client, probe["token"], student_no=first).json()["code"] == 0
+    cpp_bridge.execute(
+        "UPDATE `user` SET student_no_updated_at = NOW() - INTERVAL 8 DAY WHERE id = ?",
+        [probe["uid"]],
+    )
+    resp = _put_me(client, probe["token"], student_no=second)
+    assert resp.json()["code"] == 0, f"过了窗口应可改：{resp.text}"
+    assert _student_no_of(probe["uid"]) == second
+
+
+def test_http_duplicate_student_no_is_business_error_not_500(client, probe):
+    """🔴 验收项「重复学号被拒」——必须是**业务错误码**，不能是 500。
+
+    `user_dao.h` 明确要求调用方把唯一索引冲突「转成业务错误，不要让它变成 500」。
+    """
+    other = _make_probe("httpdup")
+    no = "C22DUPH" + uuid.uuid4().hex[:8]
+    try:
+        assert _put_me(client, probe["token"], student_no=no).json()["code"] == 0
+        resp = _put_me(client, _jwt(other, tv=0), student_no=no)
+        assert resp.status_code != 500, f"唯一索引冲突不该变成 500：{resp.text}"
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["code"] == 3001, resp.text
+        assert _student_no_of(probe["uid"]) == no, "原持有者不受影响"
+        assert _student_no_of(other) == "", "后来者不应被写入"
+    finally:
+        _drop_probe(other)
+
+
+def test_http_empty_student_no_is_rejected_not_500(client, probe):
+    """空学号必须**明确拒绝**。
+
+    `''` 在唯一索引下会被当成同一个学号 —— 若不拦，第一个清空的人成功、
+    之后所有人清空都 500，且用户从此无法解绑。
+    """
+    resp = _put_me(client, probe["token"], student_no="")
+    assert resp.status_code != 500, f"空学号不该 500：{resp.text}"
+    assert resp.json()["code"] == 1001, resp.text
+
+
+def test_http_logout_returns_token_version(client, probe):
+    """`docs/api.md` 契约：登出响应 `data = {ok, token_version}`。"""
+    v0 = _token_version(probe["uid"])
+    resp = client.post("/api/v1/auth/logout", headers=_hdr(probe["token"]))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["ok"] is True
+    assert data["token_version"] == v0 + 1, f"应回自增后的版本号：{data}"
+    assert _token_version(probe["uid"]) == v0 + 1
+
+
+def test_http_logout_without_token_still_ok(client):
+    """不带头仍成功，且 `token_version` 键存在（值为 null）—— 前端可无条件读该键。"""
+    resp = client.post("/api/v1/auth/logout")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["ok"] is True
+    assert "token_version" in data and data["token_version"] is None
+
+
+def test_http_logout_with_stale_token_does_not_bump_again(client, probe):
+    """陈旧 token 重复登出**不得**再自增 `token_version`。
+
+    否则任何拿到该用户**历史 token** 的一方都能无限次 +1 把账号顶下线
+    （token 泄露后的持久 DoS），而「幂等」也只剩 HTTP 状态码幂等。
+    """
+    token = probe["token"]
+    v0 = _token_version(probe["uid"])
+
+    first = client.post("/api/v1/auth/logout", headers=_hdr(token)).json()["data"]
+    assert first["token_version"] == v0 + 1
+    assert _token_version(probe["uid"]) == v0 + 1
+
+    # 同一个 token 此刻已失效（它的 tv 落后于库内），再调两次
+    for i in range(2):
+        again = client.post("/api/v1/auth/logout", headers=_hdr(token)).json()["data"]
+        assert again["ok"] is True, f"第 {i + 2} 次仍应返回成功（幂等）"
+        assert again["token_version"] is None, f"第 {i + 2} 次不应再自增"
+    assert _token_version(probe["uid"]) == v0 + 1, "库内版本号必须保持不变"
+
+
+def test_http_logout_with_valid_token_bumps_each_time(client, probe):
+    """反向对照：每次都拿一个**当前有效**的新 token，则每次都应自增。
+
+    没有这条，上面那条「不再自增」无法区分是闸门生效、还是自增功能整体坏了。
+    """
+    v0 = _token_version(probe["uid"])
+    for i in (1, 2):
+        fresh = _jwt(probe["uid"], tv=_token_version(probe["uid"]))
+        data = client.post("/api/v1/auth/logout", headers=_hdr(fresh)).json()["data"]
+        assert data["token_version"] == v0 + i, f"第 {i} 次应自增到 {v0 + i}，实际 {data}"
+    assert _token_version(probe["uid"]) == v0 + 2
+
+
+def test_http_refresh_rejects_access_token(client, probe):
+    """拿 **access** token 当 refresh 用必须被拒。
+
+    `auth.py` 有 `payload.get("type") != "refresh"` 这道闸，但此前**没有任何用例**
+    守着它 —— 变异实测：删掉该检查，全部用例仍然全绿。
+    """
+    access = _jwt(probe["uid"], tv=_token_version(probe["uid"]), kind="access")
+    resp = client.post("/api/v1/auth/refresh", json={"refresh_token": access})
+    assert resp.status_code == 401, resp.text
+    assert resp.json()["code"] == 2002, resp.text
+
+
+def test_http_refresh_accepts_refresh_token(client, probe):
+    """反向对照：真 refresh token 必须能用。
+
+    证明上一条拒绝的原因是「类型不对」，而不是「这个接口把什么都拒了」。
+    """
+    refresh = _jwt(probe["uid"], tv=_token_version(probe["uid"]), kind="refresh")
+    resp = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["token"] and data["refresh_token"]

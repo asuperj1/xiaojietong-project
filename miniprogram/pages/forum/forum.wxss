@@ -1,17 +1,53 @@
-/* 论坛（F7） */
+/* 论坛（F7 / F16） */
 .forum-page {
   padding-bottom: 140rpx;
 }
-.tabs {
-  display: flex;
-  align-items: center;
-  padding: 16rpx 24rpx;
-  background: #ffffff;
+
+/* 顶部吸顶区：搜索框 + 标签栏（F16） */
+.forum-header {
   position: sticky;
   top: 0;
   z-index: 10;
+  padding: 16rpx 24rpx 8rpx;
+  background: #ffffff;
+}
+
+/* 搜索框（F16）：与首页 pages/index 同形制 */
+.search-bar {
+  display: flex;
+  align-items: center;
+  background: #f5f7fa;
+  border-radius: 40rpx;
+  padding: 12rpx 24rpx;
+  margin-bottom: 12rpx;
+}
+.search-icon {
+  font-size: 28rpx;
+  margin-right: 12rpx;
+}
+.search-input {
+  flex: 1;
+  min-height: 44rpx;
+  font-size: 28rpx;
+  color: #333333;
+}
+.search-clear {
+  padding: 0 8rpx;
+  font-size: 36rpx;
+  line-height: 1;
+  color: #999999;
+}
+
+/* 7 标签栏：横向滚动，窄屏不挤压（F16） */
+.tabs {
+  width: 100%;
+  white-space: nowrap;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 .tab {
+  display: inline-block;
   font-size: 26rpx;
   color: #666666;
   padding: 8rpx 20rpx;
@@ -22,11 +58,38 @@
   background: #4A90D9;
   color: #ffffff;
 }
-.tab-mine {
-  margin-left: auto;
-  font-size: 26rpx;
-  color: #4A90D9;
+
+/* 搜索态口径提示（F16）：热点 / 我的帖子两栏后端不支持 keyword */
+.search-hint {
+  padding: 16rpx 24rpx 0;
+  font-size: 24rpx;
+  color: #999999;
 }
+
+/* 帖子卡片玻璃化（F16 / 需求8-3）：
+   app.wxss 的 .xj-card 实心底会盖住 styles/glass.wxss 的 .xj-glass-card，
+   故在此按 F10 令牌复写一层；运行时降级仍交给 glass.wxss 的
+   .is-glass-fallback / .is-glass-reduced 祖先规则（页面根节点已挂类）。 */
+.topic-card {
+  border-radius: 24rpx;
+  border-radius: var(--xj-radius-card, 24rpx);
+  background: rgba(255, 255, 255, 0.86);
+  background: var(--xj-glass-bg-reduced, rgba(255, 255, 255, 0.86));
+  box-shadow: 0 8px 24px rgba(31, 38, 135, 0.08), inset 0 2rpx 0 rgba(255, 255, 255, 0.6);
+  box-shadow: var(--xj-shadow-soft, 0 8px 24px rgba(31, 38, 135, 0.08)),
+    var(--xj-shadow-highlight, inset 0 2rpx 0 rgba(255, 255, 255, 0.6));
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .topic-card {
+    background: rgba(255, 255, 255, 0.62);
+    background: var(--xj-glass-bg, rgba(255, 255, 255, 0.62));
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: var(--xj-glass-blur, blur(20px) saturate(180%));
+    backdrop-filter: blur(20px) saturate(180%);
+    backdrop-filter: var(--xj-glass-blur, blur(20px) saturate(180%));
+  }
+}
+
 .topic-top {
   display: flex;
   align-items: center;
@@ -37,7 +100,31 @@
   font-weight: 600;
   color: #333333;
 }
+/* 帖子内圆角小标签（F16 / 需求8-3）：热 / 分类 / 审核状态 */
 .tag-hot {
+  flex-shrink: 0;
+  background: #fdeaea;
+  color: #e5484d;
+}
+.cat-tag {
+  flex-shrink: 0;
+  margin-right: 20rpx;
+  background: rgba(74, 144, 217, 0.12);
+  background: var(--xj-color-primary-soft, rgba(74, 144, 217, 0.12));
+  color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
+}
+.audit-tag {
+  flex-shrink: 0;
+  margin-right: 20rpx;
+  background: #f2f3f5;
+  color: #8A9099;
+}
+.audit-ok {
+  background: #e8f6ee;
+  color: #1f9d55;
+}
+.audit-bad {
   background: #fdeaea;
   color: #e5484d;
 }
