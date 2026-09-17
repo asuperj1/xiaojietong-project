@@ -145,13 +145,28 @@ def logout(authorization: str = Header(default="")):
     设计取舍：**不强制鉴权**（拿不到/无效 token 也返回成功）——
       · 登出必须是幂等的，客户端丢 token 后再调一次不能报错；
       · 保持与旧版兼容，不因新增鉴权而打断现有前端调用。
+
+    但**自增本身对 tv 做闸门**：只有「token 里的 `tv` 与库内当前值相等」时才 +1，
+    即只对**仍然有效**的 token 生效。否则同一个已经失效的 token 可以无限次调用：
+
+      · 「幂等」就只剩 HTTP 状态码幂等，副作用并不幂等（每次多两趟 DB）；
+      · 拿到该用户**任意一个历史 token** 的一方可以持续把账号顶下线 ——
+        token 泄露后的持久 DoS。
+
+    `token_version` 的语义是「**没有产生新版本号**」：不带头、token 损坏、
+    token 已失效、用户不存在，一律回 `null`。
     """
+    # 响应形状固定为 `{ok, token_version}`（api.md 契约），前端可无条件读这个键。
+    data: dict = {"ok": True, "token_version": None}
     if authorization.startswith("Bearer "):
         try:
             payload = decode_token(authorization[7:])
         except jwt.PyJWTError:
-            return ok()          # token 坏了也算登出成功
+            return ok(data)      # token 坏了也算登出成功
         uid = int(payload.get("uid", 0) or 0)
         if uid > 0:
-            cpp_bridge.user_dao().bump_token_version(uid)
-    return ok()
+            user = cpp_bridge.user_dao().find_by_id(uid)
+            current = int((user or {}).get("token_version", 0) or 0)
+            if user is not None and token_version_of(payload) == current:
+                data["token_version"] = int(cpp_bridge.user_dao().bump_token_version(uid))
+    return ok(data)
