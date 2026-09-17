@@ -33,8 +33,21 @@ import sys
 from pathlib import Path
 
 from .collect import collect_from_db, collect_from_dir, dedupe, summary
+from .datacard import (
+    build_datacard,
+    dump as dump_datacard,
+    dump_splits,
+    render_markdown as render_card_md,
+    split_samples,
+)
 from .export import export_labeling_csv, export_training_jsonl, stats_markdown
 from .prelabel import prelabel_samples, resolve_labeler
+from .quality import (
+    KAPPA_THRESHOLD,
+    dump_json,
+    quality_summary,
+    render_markdown as render_quality_md,
+)
 from .schema import read_jsonl, validate_sample, write_jsonl
 
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "out"
@@ -132,6 +145,67 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_quality(args: argparse.Namespace) -> int:
+    """`C32`：双人标注一致性（Cohen's Kappa）+ 实体 P/R/F1。
+
+    退出码：0 = 所有字段 Kappa ≥ 阈值；1 = 有字段未达标（便于 CI/脚本判失败）。
+    """
+    fields = [f for f in (args.fields or "").split(",") if f]
+    report = quality_summary(args.a, args.b, fields=fields or ("category", "importance", "deadline"))
+
+    md = render_quality_md(report)
+    if args.out:
+        Path(args.out).write_text(md, encoding="utf-8")
+        print(f"[quality] 报告已写出 -> {args.out}")
+    else:
+        print(md)
+    if args.json:
+        dump_json(report, args.json)
+        print(f"[quality] JSON 报告 -> {args.json}")
+
+    print(f"[quality] 共同标注 {report['paired']} 条，"
+          f"最差字段 Kappa = {report['min_kappa']}（阈值 {KAPPA_THRESHOLD}）")
+    if report["paired"] == 0:
+        print("[quality] [!] 没有共同标注的样本：确认两份文件里确有 human/reviewed 状态的样本")
+        return 1
+    return 0 if report["passed"] else 1
+
+
+def cmd_datacard(args: argparse.Namespace) -> int:
+    """`C32`：生成数据卡（规模/分布/划分，可选带一致性结论）。"""
+    samples = read_jsonl(args.infile)
+    split = None
+    if args.split:
+        ratios = {}
+        for item in args.split.split(","):
+            k, _, v = item.partition("=")
+            if k and v:
+                ratios[k.strip()] = float(v)
+        split = split_samples(samples, ratios=ratios or None, seed=args.seed)
+        if args.split_dir:
+            counts = dump_splits(split, args.split_dir)
+            print(f"[datacard] 划分已写出 -> {args.split_dir}：{counts}")
+
+    agreement = None
+    if args.quality_a and args.quality_b:
+        agreement = quality_summary(args.quality_a, args.quality_b)
+
+    card = build_datacard(
+        samples, name=args.name, version=args.version,
+        split=split, agreement=agreement,
+    )
+    md = render_card_md(card)
+    if args.out:
+        Path(args.out).write_text(md, encoding="utf-8")
+        print(f"[datacard] 数据卡已写出 -> {args.out}")
+    else:
+        print(md)
+    if args.json:
+        dump_datacard(card, args.json)
+        print(f"[datacard] JSON -> {args.json}")
+    return 0
+
+
 def cmd_pipeline(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -189,6 +263,30 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--labeler", default="keyword")
     pl.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
     pl.set_defaults(func=cmd_pipeline)
+
+    # ---------------- C32：质量校验与数据卡 ----------------
+    q = sub.add_parser("quality", help="C32：双人标注一致性（Cohen's Kappa ≥ 0.8）")
+    q.add_argument("--a", required=True, help="标注者 A 的 JSONL")
+    q.add_argument("--b", required=True, help="标注者 B 的 JSONL")
+    q.add_argument("--fields", default="category,importance,deadline",
+                   help="要统计的字段，逗号分隔（默认 category,importance,deadline）")
+    q.add_argument("--out", default="", help="报告 Markdown 输出路径")
+    q.add_argument("--json", default="", help="报告 JSON 输出路径")
+    q.set_defaults(func=cmd_quality)
+
+    d = sub.add_parser("datacard", help="C32：生成数据卡（规模/分布/划分）")
+    d.add_argument("--in", dest="infile", required=True)
+    d.add_argument("--name", default="xiaojietong-extraction")
+    d.add_argument("--version", default="v0")
+    d.add_argument("--split", default="train=0.8,dev=0.1,test=0.1",
+                   help="划分比例；传空字符串则不划分")
+    d.add_argument("--split-dir", default="", help="划分结果 JSONL 输出目录")
+    d.add_argument("--seed", type=int, default=42, help="划分随机种子（固定=可复现）")
+    d.add_argument("--quality-a", default="", help="可选：标注者 A，用于把 Kappa 写进数据卡")
+    d.add_argument("--quality-b", default="", help="可选：标注者 B")
+    d.add_argument("--out", default="", help="数据卡 Markdown 输出路径")
+    d.add_argument("--json", default="", help="数据卡 JSON 输出路径")
+    d.set_defaults(func=cmd_datacard)
     return p
 
 
