@@ -137,6 +137,7 @@ add_library(jt_db_core STATIC
     src/dao/job_dao.cpp
     src/dao/life_dao.cpp
     src/dao/favorite_dao.cpp
+    src/dao/home_dao.cpp
 )
 # Linux 必须：本静态库既要链进共享模块 jt_db.so，又要链进 PIE 可执行文件 jt_db_test。
 # gcc 默认不为静态库生成 PIC，而 src/db_session.cpp 的 thread_local 会引入 TLS 守卫

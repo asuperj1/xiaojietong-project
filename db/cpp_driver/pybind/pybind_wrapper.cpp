@@ -25,6 +25,7 @@
 #include "jt_db/dao/job_dao.h"
 #include "jt_db/dao/life_dao.h"
 #include "jt_db/dao/favorite_dao.h"
+#include "jt_db/dao/home_dao.h"
 #include "jt_db/transaction.h"
 
 namespace py = pybind11;
@@ -238,6 +239,18 @@ PYBIND11_MODULE(jt_db, m) {
         .def("update_role", &UserDAO::update_role, py::arg("id"), py::arg("role"),
              "更新角色")
         .def("remove", &UserDAO::remove, py::arg("id"), "删除用户")
+        .def("add_search_history", &UserDAO::add_search_history,
+             py::arg("user_id"), py::arg("keyword"),
+             "C23 写入搜索历史并去重（同人同词只留一行，重复搜索顶到最新）；"
+             "keyword 先 trim 再按 UTF-8 字符截到 128，空则返回 -1 不落库")
+        .def("list_search_history", &UserDAO::list_search_history,
+             py::arg("user_id"), py::arg("limit") = 20,
+             "C23 按 (user_id, created_at DESC) 取最近 N 条搜索历史（走 idx_user_created）")
+        .def("delete_search_history", &UserDAO::delete_search_history,
+             py::arg("user_id"), py::arg("history_id"),
+             "C23 删除单条搜索历史（WHERE 带 user_id，防越权）；返回是否删除成功")
+        .def("clear_search_history", &UserDAO::clear_search_history,
+             py::arg("user_id"), "C23 清空该用户全部搜索历史；返回删除行数")
         .def("update_student_no", &UserDAO::update_student_no, py::arg("id"),
              py::arg("student_no"),
              "C22 绑定/修改学号（同时刷新 student_no_updated_at）；学号重复抛异常")
@@ -338,7 +351,30 @@ PYBIND11_MODULE(jt_db, m) {
         .def("menu_items", &LifeDAO::menu_items, py::arg("merchant_id"), "商家菜单")
         .def("create_order", &LifeDAO::create_order, py::arg("user_id"),
              py::arg("merchant_id"), py::arg("items_json"), py::arg("amount"),
-             "下单，返回订单 id（失败 -1）");
+             "下单，返回订单 id（失败 -1）")
+        .def("page_pickup_points", &LifeDAO::page_pickup_points,
+             py::arg("include_disabled") = false, py::arg("limit") = 50,
+             "C25 驿站列表：默认只返回启用且未软删，按 sort DESC, id ASC")
+        .def("find_pickup_point", &LifeDAO::find_pickup_point, py::arg("id"),
+             "C25 取单条驿站（不存在 / 已软删返回 None）")
+        .def("create_pickup_point", &LifeDAO::create_pickup_point, py::arg("name"),
+             py::arg("address"), py::arg("business_hours"), py::arg("contact_phone"),
+             py::arg("sort") = 0, py::arg("status") = 1, "C25 新增驿站，返回新行 id")
+        .def("remove_pickup_point", &LifeDAO::remove_pickup_point, py::arg("id"),
+             "C25 **软删**驿站（历史订单仍能查到驿站）")
+        .def("generate_pickup_code", &LifeDAO::generate_pickup_code, py::arg("length") = 6,
+             "C25 生成未被占用的取件码（随机 + 唯一性校验；撞码 8 次返回空串）")
+        .def("create_pickup_order", &LifeDAO::create_pickup_order, py::arg("user_id"),
+             py::arg("merchant_id"), py::arg("items_json"), py::arg("amount"),
+             py::arg("pickup_point_id"),
+             "C25 代收下单：biz_type=2、delivery_fee=0、自动生成取件码")
+        .def("find_order_by_pickup_code", &LifeDAO::find_order_by_pickup_code,
+             py::arg("pickup_code"), "C25 取件码回查订单")
+        .def("mark_order_arrived", &LifeDAO::mark_order_arrived, py::arg("order_id"),
+             py::arg("pickup_code"),
+             "C25 驿站到件（订单与取件码须同时匹配；幂等，只写首次时间）")
+        .def("mark_order_notified", &LifeDAO::mark_order_notified, py::arg("order_id"),
+             "C25 到件通知已发（幂等：非空即不再改）");
 
     // ---- 通用收藏（C10 收敛：原由 favorite.py 拼原生 SQL）----
     py::class_<FavoriteDAO>(m, "FavoriteDAO")
@@ -359,4 +395,25 @@ PYBIND11_MODULE(jt_db, m) {
              py::arg("limit"), py::arg("offset"), "我的收藏·物品（分页）")
         .def("count_items", &FavoriteDAO::count_items, py::arg("user_id"),
              "我的收藏·物品总数");
+
+    // ---- 首页运营（C24：home_banner 轮播位）----
+    py::class_<HomeDAO>(m, "HomeDAO")
+        .def(py::init<>())
+        .def("list_banners", &HomeDAO::list_banners, py::arg("limit") = 20,
+             "C24 前台轮播列表：只返回「启用 + 在有效期内」，按 sort DESC, id DESC")
+        .def("list_all_banners", &HomeDAO::list_all_banners, py::arg("limit") = 100,
+             "C24 管理端轮播列表：不做任何业务过滤（含停用/未生效/已过期）")
+        .def("find_banner", &HomeDAO::find_banner, py::arg("id"),
+             "C24 取单条轮播（不存在返回 None）")
+        .def("create_banner", &HomeDAO::create_banner, py::arg("title"), py::arg("image"),
+             py::arg("link_type"), py::arg("link_target"), py::arg("sort") = 0,
+             py::arg("start_at") = "", py::arg("end_at") = "", py::arg("enabled") = 1,
+             "C24 新增轮播；start_at/end_at 传空串表示 NULL（不限制）；返回新行 id")
+        .def("update_banner", &HomeDAO::update_banner, py::arg("id"), py::arg("title"),
+             py::arg("image"), py::arg("link_type"), py::arg("link_target"),
+             py::arg("sort"), py::arg("start_at"), py::arg("end_at"), py::arg("enabled"),
+             "C24 整行更新轮播（先 find_banner 拿现值再改，避免把未传字段清空）")
+        .def("set_banner_enabled", &HomeDAO::set_banner_enabled, py::arg("id"),
+             py::arg("enabled"), "C24 上/下架轮播（避免调用方做读-改-写）")
+        .def("remove_banner", &HomeDAO::remove_banner, py::arg("id"), "C24 删除轮播");
 }
