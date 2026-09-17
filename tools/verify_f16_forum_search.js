@@ -705,7 +705,11 @@ bar('J. 结构对账（WXML 的 class 与事件处理函数都真实存在）')
 // -------------------------------------------------- 反向对照 ----
 bar('反向对照（对真实源码做一处语义突变后，断言必须转为失败 —— 证明不是空跑）')
 
-const realSource = fs.readFileSync(FORUM_JS, 'utf8')
+// 行尾归一化：仓库 blob 为 LF，但 Windows 检出（core.autocrlf=true）会把工作区文件
+// 变成 CRLF。R3 / R4 用**含 \n 的字面量锚点**造突变，不归一化则 replace 静默变成空操作，
+// 自检会报「突变不可用」（不是逻辑错，只是环境差异）。归一化只在读取侧进行，
+// 不触碰被测源码本身。
+const realSource = fs.readFileSync(FORUM_JS, 'utf8').replace(/\r\n/g, '\n')
 
 // R1 突变分类取值：学习 → 学习X
 {
