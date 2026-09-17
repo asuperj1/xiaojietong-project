@@ -110,7 +110,9 @@ async def _keyword_retrieve(question: str, top_k: int) -> list[dict]:
             f"SELECT id AS doc_id, title, category, LEFT(content, 200) AS content, "
             f"source_url, ({match_score_expr(term_list)}) AS match_hits "
             f"FROM knowledge_doc WHERE status != 2 AND ({cond}) "
-            f"ORDER BY ({match_score_expr(term_list)}) DESC, updated_at DESC "
+            # 排序必须带唯一 tie-break：
+            # score 极易并列（大量文档同为 1 命中），并列时 LIMIT 取哪几条不确定。
+            f"ORDER BY ({match_score_expr(term_list)}) DESC, updated_at DESC, id DESC "
             f"LIMIT ?",
             params,
         )
