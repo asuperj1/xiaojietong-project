@@ -79,8 +79,71 @@ ai/dataset/
 4. `collect --from db` 目前只取 `campus_notice` / `knowledge_doc`；
    网页采集（`B27` 配置驱动采集器）打通后可作为第三个来源接入。
 
+## 标注质量校验与数据卡（`C32`）
+
+`C31` 解决了"怎么产出数据"，`C32` 回答"**这批数据能不能用**"。
+验收口径来自任务单：**Cohen's Kappa ≥ 0.8**。
+
+### 为什么必须是"两份标注文件"
+
+`Sample.labels` 只存**一份**标注，做不了一致性统计。所以 `quality` 子命令的输入是
+**标注者 A / B 各一份 JSONL**，按 `id` 配对后逐字段比对：
+
+```bash
+# 双人一致性（Kappa + 实体 P/R/F1）
+python -m ai.dataset.cli quality \
+    --a ai/dataset/out/annotator_a.jsonl \
+    --b ai/dataset/out/annotator_b.jsonl \
+    --fields category,importance,deadline \
+    --json ai/dataset/out/quality.json \
+    --out  ai/dataset/out/quality.md
+```
+
+- 退出码：**0 = 全部字段达标；1 = 有字段未达标**（便于 CI 判失败）
+- 只统计 `human` / `reviewed` 状态的样本 —— `prelabeled` 是机器初稿，
+  算进去只会得到虚高的 Kappa
+- 三类字段用三种口径：
+  | 字段 | 口径 | 说明 |
+  |---|---|---|
+  | `category` | Cohen's Kappa | 离散分类 |
+  | `importance` | Cohen's Kappa | 1~5 离散 |
+  | `deadline` | Kappa（先归一化） | `2026-09-30 23:59:59` 与 `2026-09-30` 算一致 |
+  | `entities` | **P/R/F1** | 集合不适用 Kappa；键为 `(type, norm or text)` |
+
+### 数据卡
+
+```bash
+python -m ai.dataset.cli datacard \
+    --in ai/dataset/out/annotator_a.jsonl \
+    --name xjt-extraction --version v0.1 \
+    --split "train=0.8,dev=0.1,test=0.1" --split-dir ai/dataset/out/splits \
+    --quality-a ai/dataset/out/annotator_a.jsonl \
+    --quality-b ai/dataset/out/annotator_b.jsonl \
+    --json ai/dataset/out/datacard.json \
+    --out  ai/dataset/out/datacard.md
+```
+
+数据卡含四节：**规模**（条数/状态/文本长度分位）· **分布**（来源/分类/重要度/实体类型）·
+**划分**（train/dev/test 条数与占比）· **标注质量**（Kappa 表 + 实体 F1）。
+
+> 划分用固定 `seed` + 按 `id` 排序后切分 ⇒ **同输入必然同输出**。
+> 否则 `C34` 的基线对比不可复现："F1 提升 15 个百分点"可能是换了测试集的产物。
+
+### 边界约定（容易写错的地方）
+
+- `pe == 1`（双方都只用了同一个标签）→ Kappa 数学上无定义：
+  完全一致给 `1.0`，否则给 `0.0`，并在报告里标 `degenerate=True`
+- 配对为空（没有共同 `id`）→ 返回 `None` 而不是 `0.0`，
+  避免"没数据"被误读成"一致性极差"
+- 分歧样例最多列 50 条（避免报告刷屏），JSON 报告里保留同量
+
 ## 测试
 
 ```bash
-python -m pytest ai/dataset/tests -q      # 15 passed，全程离线
+python -m pytest ai/dataset/tests -q      # 40 passed（C31: 15 + C32: 25），全程离线
 ```
+
+`C32` 的测试里有两条**反向对照**，用来证明断言不是恒真的：
+
+1. 高一致数据的 Kappa 必须**显著高于**低一致数据，且低一致必须**低于阈值**
+2. 换 `seed` 后划分结果必须**不同**（证明 seed 真的起作用）
