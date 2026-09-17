@@ -1,26 +1,109 @@
-/* 服务页（业务大宫格） */
-.grid-card {
-  display: flex;
-  flex-wrap: wrap;
-  background: #ffffff;
-  border-radius: 24rpx;
-  margin: 0 24rpx;
-  padding: 16rpx 0;
-}
-.grid-item {
-  width: 25%;
-  text-align: center;
-  padding: 24rpx 0;
+/* ============================================================
+   服务页（需求 7 / F15）—— 顶部「路线维保中心」吸顶卡 + 8 功能 2×4 玻璃宫格
+   依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §2.3
+         视觉规范 §1.1（液态玻璃 / 圆角 / 主色）、§1.2（三层降级）、§1.3（按压反馈）、§1.5（图标尺寸）
+   玻璃与令牌：复用 app.wxss 全局引入的 styles/tokens.wxss + styles/glass.wxss
+              （.xj-glass-card / .xj-page-bg / var(--xj-*)）；不新增主题变量、不改公共样式。
+   能力降级：根节点 .is-glass-fallback 由 service.js 读 globalData.glassSupported 决定
+             （第三层运行时降级，规则见 styles/glass.wxss）。
+   注：两处 `.svc-*.xj-glass-card` 是复合类选择器，用于把本页几何（内边距 / 圆角）覆盖到
+      库类上，(0,2,0) > 库的 (0,1,0)，与 app.wxss / 页面 wxss 的先后顺序无关。
+   ============================================================ */
+
+/* ---- 页面容器 ----
+   渐变底由同一元素上的 .xj-page-bg（styles/glass.wxss）提供，本规则只管高度与底部留白；
+   刻意不复用 .xj-page：它的 24rpx 上内边距会把通栏吸顶条推离屏幕顶部。 */
+.svc-page {
+  min-height: 100vh;
+  padding-bottom: 60rpx;
   box-sizing: border-box;
 }
-.grid-icon {
-  width: 96rpx;
-  height: 96rpx;
+
+/* ---- 吸顶容器（需求 7「position: sticky 吸顶」）----
+   sticky 的吸附范围 = 父级 .svc-page 的高度（贯穿整页），故滚动全程保持吸附；
+   不支持 sticky 的环境退化为「普通顶部卡片」，页面仍完整可用（渐进增强，不做 JS 兜底）。 */
+.svc-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 10; /* 吸顶后浮在宫格之上 */
+}
+
+/* ---- 路线维保中心：通栏长玻璃卡片 ----
+   只覆盖库内两项几何：① 纵向内边距收到 8rpx 梯度上的 16rpx（吸顶条更紧凑）；
+   ② 通栏 → 左右不留白、上方贴齐屏幕，仅下方两角收圆，吸顶时是一块完整的顶部玻璃条。 */
+.svc-maint.xj-glass-card {
+  padding: 16rpx 24rpx;
+  padding: var(--xj-space-sm, 16rpx) var(--xj-space-md, 24rpx);
+  border-radius: 0 0 28rpx 28rpx;
+  border-radius: 0 0 var(--xj-radius-panel, 28rpx) var(--xj-radius-panel, 28rpx);
+}
+.svc-maint-title {
+  display: block; /* <text> 默认行内，会与副标题挤在同一行 */
+  font-size: 32rpx;
+  font-size: var(--xj-font-size-lg, 32rpx);
+  font-weight: 600;
+  font-weight: var(--xj-font-weight-semibold, 600);
+  line-height: var(--xj-line-height, 1.6);
+  color: #1F2329;
+  color: var(--xj-text-primary, #1F2329);
+}
+.svc-maint-sub {
   display: block;
-  margin: 0 auto;
+  margin-top: 8rpx;
+  margin-top: var(--xj-space-xs, 8rpx);
+  font-size: 24rpx;
+  font-size: var(--xj-font-size-sm, 24rpx);
+  line-height: var(--xj-line-height, 1.6);
+  color: #8A9099;
+  color: var(--xj-text-secondary, #8A9099);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---- 8 功能宫格：2 行 × 4 列 ---- */
+.svc-grid {
+  display: flex;
+  flex-wrap: wrap; /* 每行 4 个（25% 宽）→ 8 个正好 2 行 */
+  padding: 24rpx 8rpx 0;
+  padding: var(--xj-space-md, 24rpx) var(--xj-space-xs, 8rpx) 0;
+}
+/* 单元格：承担「四列宽度 + 卡片间距 + 点击热区」，玻璃面在内层卡片上 */
+.svc-tile {
+  width: 25%;
+  padding: 8rpx;
+  padding: var(--xj-space-xs, 8rpx);
+  box-sizing: border-box;
+  transition: transform var(--xj-duration-fast, 150ms) var(--xj-ease-press, cubic-bezier(0.4, 0, 0.2, 1));
+}
+/* 按压反馈（§1.3：scale(.96) / 150ms） */
+.svc-pressed {
+  transform: scale(0.96);
+}
+/* 圆角方形玻璃卡片：几何沿用 .xj-glass-card，仅按宫格尺寸收窄左右内边距（5 字条目不折行） */
+.svc-tile-card.xj-glass-card {
+  min-height: 160rpx;
+  padding: 24rpx 8rpx;
+  padding: var(--xj-space-md, 24rpx) var(--xj-space-xs, 8rpx);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
+}
+/* ⚠️ .grid-icon / .grid-name 的类名由 F11 校验 D 段（tools/verify_f11_icon_set.js）锁定，勿改名 */
+.grid-icon {
+  width: 56rpx; /* §1.5「功能卡 56rpx」；static/icons/README.md §6 亦把 96rpx→56rpx 归 F15 */
+  height: 56rpx;
+  display: block;
 }
 .grid-name {
-  margin-top: 12rpx;
+  margin-top: 8rpx;
+  margin-top: var(--xj-space-xs, 8rpx);
   font-size: 24rpx;
-  color: #333333;
+  font-size: var(--xj-font-size-sm, 24rpx);
+  line-height: var(--xj-line-height, 1.6);
+  color: #1F2329;
+  color: var(--xj-text-primary, #1F2329);
 }
