@@ -1,0 +1,206 @@
+{
+  "task": "C33",
+  "created": "2026-09-17",
+  "command": "python ai/finetune/build_extract_dataset.py --count 800 --seed 20260917 --dev-ratio 0.2",
+  "generator": "ai/dataset/synth_notice.py",
+  "generator_seed": 20260917,
+  "reference_date": "2026-09-16",
+  "system_prompt_source": "ai/eval/extract_bench.py::SYSTEM_PROMPT",
+  "system_prompt_sha1": "bf951145f1a65091e4d257b69e8f7f6b323a51b6",
+  "system_prompt_chars": 220,
+  "counts": {
+    "total": 800,
+    "train": 641,
+    "dev": 159
+  },
+  "file_sha256": {
+    "extract_train.jsonl": "41ffdf416910ab8c5d17c68a2a3a69745805d9eb30f5cd3612c8eac1295930de",
+    "extract_dev.jsonl": "1eec59702b0b304034acfb8fa58562b020dcb3442ebdcf0deb5bae695da5fb5c"
+  },
+  "split": {
+    "strategy": "按 tags.kind 分层（同层内带种子的洗牌后再切 dev_ratio）",
+    "dev_ratio": 0.2,
+    "seed": 20260917,
+    "dev_share_max_gap": 0.004,
+    "tolerance": 0.05,
+    "by_kind": {
+      "activity_event": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      },
+      "activity_multi_window": {
+        "train": 58,
+        "dev": 14,
+        "train_share": 0.0905,
+        "dev_share": 0.0881
+      },
+      "activity_signup": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      },
+      "contest_result": {
+        "train": 28,
+        "dev": 7,
+        "train_share": 0.0437,
+        "dev_share": 0.044
+      },
+      "contest_round": {
+        "train": 58,
+        "dev": 14,
+        "train_share": 0.0905,
+        "dev_share": 0.0881
+      },
+      "contest_signup": {
+        "train": 36,
+        "dev": 9,
+        "train_share": 0.0562,
+        "dev_share": 0.0566
+      },
+      "lecture_preview": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      },
+      "lecture_required": {
+        "train": 36,
+        "dev": 9,
+        "train_share": 0.0562,
+        "dev_share": 0.0566
+      },
+      "notice_hard_deadline": {
+        "train": 36,
+        "dev": 9,
+        "train_share": 0.0562,
+        "dev_share": 0.0566
+      },
+      "notice_info_only": {
+        "train": 13,
+        "dev": 3,
+        "train_share": 0.0203,
+        "dev_share": 0.0189
+      },
+      "notice_multi_holiday": {
+        "train": 70,
+        "dev": 18,
+        "train_share": 0.1092,
+        "dev_share": 0.1132
+      },
+      "notice_service_window": {
+        "train": 36,
+        "dev": 9,
+        "train_share": 0.0562,
+        "dev_share": 0.0566
+      },
+      "scholarship_cutoff": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      },
+      "scholarship_notice_only": {
+        "train": 30,
+        "dev": 7,
+        "train_share": 0.0468,
+        "dev_share": 0.044
+      },
+      "scholarship_submit": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      }
+    },
+    "by_category": {
+      "奖学金": {
+        "train": 126,
+        "dev": 31,
+        "train_share": 0.1966,
+        "dev_share": 0.195
+      },
+      "活动": {
+        "train": 154,
+        "dev": 38,
+        "train_share": 0.2402,
+        "dev_share": 0.239
+      },
+      "竞赛": {
+        "train": 122,
+        "dev": 30,
+        "train_share": 0.1903,
+        "dev_share": 0.1887
+      },
+      "讲座": {
+        "train": 84,
+        "dev": 21,
+        "train_share": 0.131,
+        "dev_share": 0.1321
+      },
+      "通知": {
+        "train": 155,
+        "dev": 39,
+        "train_share": 0.2418,
+        "dev_share": 0.2453
+      }
+    }
+  },
+  "coverage": {
+    "by_category": {
+      "奖学金": 157,
+      "活动": 192,
+      "竞赛": 152,
+      "讲座": 105,
+      "通知": 194
+    },
+    "by_importance": {
+      "3": 208,
+      "4": 354,
+      "5": 238
+    },
+    "by_time_kind": {
+      "absolute_iso": 32,
+      "absolute_next_year": 64,
+      "absolute_year": 96,
+      "cross_year": 64,
+      "multi2+multi2": 144,
+      "multi3+multi3+multi3": 88,
+      "next_week_monday": 32,
+      "next_week_wednesday": 32,
+      "no_year": 96,
+      "none": 88,
+      "since_today_two_weeks": 32,
+      "this_week_friday": 32
+    },
+    "by_n_entities": {
+      "0": 88,
+      "1": 480,
+      "2": 144,
+      "3": 88
+    },
+    "null_deadline_count": 88,
+    "matrix_cells_covered": 15
+  },
+  "holdout_isolation": {
+    "holdout_size": 28,
+    "holdout_sources": [
+      "ai/eval/extract_cases.json",
+      "ai/eval/fixtures/few_shot_examples.json",
+      "ai/eval/fixtures/prompt_opt_examples_ext.json"
+    ],
+    "text_overlap": 0,
+    "max_ngram_coverage": 0.3091,
+    "max_ngram_similarity": 0.1667,
+    "threshold": 0.6,
+    "passed": true
+  },
+  "known_limitations": [
+    "训练集是**合成**的；C34 评测集是人工编写的（同域不同源），泛化性未验证。",
+    "相对时间全部按固定基准日 2026-09-16 推算 ⇒ 模型可能过拟合到 2026 年（表现为忽略 prompt 里的「今天」）。已混入含显式年份的绝对时间样本缓解，但不能消除。",
+    "重要度 importance 的标注边界本身模糊（评测集里 E02 记 4、E17 记 5）⇒ 该字段的上限受标注一致性限制，不是模型问题（与 C32 的 Cohen's Kappa 同源）。",
+    "`train.py` 目前是**整序列 loss**（未按 assistant 段做 mask）⇒ 模型也会学「生成通知正文」。抽取任务的更优做法是只对输出算 loss；本次先按原流水线跑，作为后续改进点记录在训练报告里。"
+  ]
+}
