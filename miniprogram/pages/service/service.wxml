@@ -1,16 +1,42 @@
-<!-- 服务页（业务大宫格） -->
-<view class="xj-page">
-  <view class="grid-card">
+<!-- 服务页（需求 7 / F15）：顶部「路线维保中心」吸顶卡 + 8 功能 2×4 玻璃宫格 -->
+<view class="svc-page xj-page-bg {{glassFallback ? 'is-glass-fallback' : ''}}">
+  <!-- 顶部置顶：通栏长玻璃卡片，position: sticky 吸顶（见 service.wxss .svc-sticky） -->
+  <view class="svc-sticky">
     <view
-      class="grid-item"
+      class="svc-maint xj-glass-card"
+      hover-class="svc-maint--pressed"
+      hover-start-time="20"
+      hover-stay-time="140"
+      bindtap="onMaintTap"
+    >
+      <view class="svc-maint-icon">
+        <image class="svc-maint-icon-img" src="/static/icons/map.svg" mode="aspectFit"></image>
+      </view>
+      <view class="svc-maint-main">
+        <view class="svc-maint-title">路线维保中心</view>
+        <view class="svc-maint-sub">校园路线维保与巡检服务</view>
+      </view>
+      <view class="svc-maint-arrow"></view>
+    </view>
+  </view>
+
+  <!-- 8 个功能入口：圆角方形玻璃卡片，2 行 × 4 列（每行 25% × 4） -->
+  <view class="svc-grid">
+    <view
+      class="svc-tile"
       wx:for="{{gridItems}}"
       wx:key="id"
       data-url="{{item.url}}"
       data-tab="{{item.tab}}"
+      hover-class="svc-pressed"
+      hover-start-time="20"
+      hover-stay-time="140"
       bindtap="onGridTap"
     >
-      <image class="grid-icon" src="{{item.icon}}" mode="aspectFit"></image>
-      <view class="grid-name">{{item.name}}</view>
+      <view class="svc-tile-card xj-glass-card">
+        <image class="grid-icon" src="{{item.icon}}" mode="aspectFit"></image>
+        <view class="grid-name">{{item.name}}</view>
+      </view>
     </view>
   </view>
 </view>
