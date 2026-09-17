@@ -536,27 +536,59 @@ def similarity_report(samples: list[Sample], holdout_texts: list[str], *,
     """与"留出集"（评测集 + few-shot 示例池）的表层重合度检查。
 
     为什么要量化：训练集与评测集**同域不同源**这件事，光靠"我自己写的时候很小心"是没法服人的。
-    用字符 n-gram 重合度给出一个数：**最大重合度**越低，说明"不是抄的"越有底气。
+
+    ⚠️ 闸门判据是 **`coverage`（留出文本被训练样本覆盖的比例 = `∩ / |留出|`）**，不是 Jaccard。
+    ---------------------------------------------------------------------------
+    最初这里用的是 **Jaccard（`∩ / ∪`）**，那是**错的度量方向**：Jaccard 会被**文本长度稀释** ——
+    训练样本越长，分母的并集越大、Jaccard 越小。实测（构造样本：把一段 57 字的留出原文
+    原样拼进训练文本，再补随机汉字填充）：
+
+        | 填充 | Jaccard | 留出被覆盖 | 0.6 闸门 |
+        |---|---|---|---|
+        | 0 字   | 1.000 | 1.000 | ❌ 拦下 |
+        | 50 字  | 0.524 | 1.000 | ✅ **放行（漏）** |
+        | 400 字 | 0.121 | 1.000 | ✅ 放行（漏） |
+
+    ⇒ 只要合成语料比留出文本长一倍出头，**哪怕把留出原文一字不差抄进去，Jaccard 闸门也会放行** ——
+    而这正是这个检查唯一要防的事。`coverage` 直接回答"留出有多少进了训练"，才是对的判据；
+    Jaccard 仍然照报（它反映"两条文本整体像不像"，两者都有用，但不能拿后者当闸门）。
+
     注意这只是**表层**检查，不能证明分布不同 —— 分布差异只能靠报告里的诚实声明。
     """
     hold = [h for h in holdout_texts if h.strip()]
-    worst = {"similarity": 0.0, "sample_id": "", "holdout_index": -1}
+    # 留出集的 gram 集合预计算一次：原实现放在内层循环里，是 O(N·M) 次重复计算
+    hold_grams = [_char_ngrams(h, n) for h in hold]
+    # ⚠️ 两个最大值**各自独立统计**：它们通常不在同一对样本上取到。
+    #    （把 Jaccard 记成"coverage 最大那一对的 Jaccard"会让这个数悄悄变小，
+    #      与历史报告不可比 —— 我第一版就这么写错过。）
+    worst_cov = {"coverage": 0.0, "sample_id": "", "holdout_index": -1}
+    max_jac = 0.0
     for s in samples:
         grams = _char_ngrams(s.text, n)
-        for i, h in enumerate(hold):
-            hg = _char_ngrams(h, n)
-            if not grams or not hg:
+        if not grams:
+            continue
+        for i, hg in enumerate(hold_grams):
+            if not hg:
                 continue
-            j = len(grams & hg) / len(grams | hg)
-            if j > worst["similarity"]:
-                worst = {"similarity": round(j, 4), "sample_id": s.id, "holdout_index": i}
+            inter = len(grams & hg)
+            if not inter:
+                continue
+            coverage = inter / len(hg)                  # ← 闸门看这个
+            if coverage > worst_cov["coverage"]:
+                worst_cov = {"coverage": coverage, "sample_id": s.id, "holdout_index": i}
+            j = inter / len(grams | hg)
+            if j > max_jac:
+                max_jac = j
     return {
         "n_gram": n,
         "holdout_size": len(hold),
-        "max_similarity": worst["similarity"],
-        "worst_sample": worst["sample_id"],
+        # `max_similarity` 保留原名 = **全局最大 Jaccard**，便于与既有报告/基线对比；
+        # 但**闸门与 `passed` 用的是 `max_coverage`**。
+        "max_similarity": round(max_jac, 4),
+        "max_coverage": round(worst_cov["coverage"], 4),
+        "worst_sample": worst_cov["sample_id"],
         "warn_at": warn_at,
-        "passed": worst["similarity"] < warn_at,
+        "passed": worst_cov["coverage"] < warn_at,
     }
 
 
@@ -651,8 +683,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  时间表达 : {stats['by_time_kind']}")
     print(f"  实体数   : {stats['by_n_entities']}")
     print(f"  覆盖格子 : {stats['matrix_cells_covered']} 格")
-    print(f"  与留出集最大 {stats['similarity']['n_gram']}-gram 重合："
-          f"{stats['similarity']['max_similarity']}（阈值 {stats['similarity']['warn_at']}，"
+    print(f"  与留出集最大 {stats['similarity']['n_gram']}-gram 覆盖："
+          f"{stats['similarity']['max_coverage']}"
+          f"（Jaccard {stats['similarity']['max_similarity']}；"
+          f"阈值 {stats['similarity']['warn_at']}，"
           f"{'通过' if stats['similarity']['passed'] else '⚠️ 过高'}）")
     print(f"  自检     : {'全部通过' if not problems else f'❌ {len(problems)} 个问题'}")
     for p in problems[:10]:

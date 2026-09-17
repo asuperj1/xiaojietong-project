@@ -220,6 +220,9 @@ def test_similarity_stays_below_threshold(samples):
     """表层重合度要量化 —— "我很小心没抄"是没法服人的，给个数才有。"""
     report = sn.similarity_report(samples, _holdout()["texts"])
     assert report["passed"] is True, report
+    # 闸门看的是 coverage（留出被训练集覆盖的比例）
+    assert report["max_coverage"] < 0.6
+    # Jaccard 照报，但它**不是**闸门（见下一条用例）
     assert report["max_similarity"] < 0.6
 
 
@@ -230,7 +233,47 @@ def test_similarity_report_flags_a_copy():
     fake.text = hold[0]
     report = sn.similarity_report([fake], hold)
     assert report["passed"] is False
+    assert report["max_coverage"] == pytest.approx(1.0, abs=0.01)
     assert report["max_similarity"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_copy_hidden_in_longer_text_is_still_caught():
+    """🔴 **这条用例是闸门换口径的直接理由**（原来的 Jaccard 闸门会放它过去）。
+
+    把留出原文**一字不差**地嵌进一条更长的合成语料里 —— 这是最现实的污染形态
+    （模板套用 + 补内容，很容易"顺手"把留出集的一条抄进去）。
+
+    实测对比（本用例就是按这组数定的断言）：
+
+        | 训练文本         | Jaccard | coverage | 旧闸门(0.6) |
+        |---|---|---|---|
+        | = 留出原文        | 1.000 | 1.000 | ❌ 拦下 |
+        | + 50 字随机填充   | 0.524 | 1.000 | ✅ **放行（漏）** |
+        | + 400 字随机填充  | 0.121 | 1.000 | ✅ 放行（漏） |
+
+    ⇒ Jaccard 被**文本长度稀释**，只要训练文本长一倍出头就掉到阈值以下；
+      coverage 恒为 1.0，因为留出文本**确实被完整抄进去了**。
+    """
+    import random
+
+    hold = _holdout()["texts"]
+    rng = random.Random(7)
+    pool = [chr(c) for c in range(0x4E00, 0x4E00 + 500)]        # 随机汉字，n-gram 不重复
+
+    for extra in (50, 100, 400):
+        fake = _good_sample()
+        fake.text = hold[0] + "".join(rng.choice(pool) for _ in range(extra))
+        report = sn.similarity_report([fake], hold)
+
+        # 闸门必须拦下 —— 留出原文被完整抄了进去
+        assert report["passed"] is False, f"（+{extra} 字填充）闸门放行了一条完整抄袭：{report}"
+        assert report["max_coverage"] == pytest.approx(1.0, abs=0.01), report
+        # 反向说明：Jaccard **已经掉到阈值以下** —— 若闸门还用它，上面那条就会失败
+        if extra >= 100:
+            assert report["max_similarity"] < 0.6, (
+                f"（+{extra} 字填充）预期 Jaccard 已低于阈值（这正是旧闸门漏掉它的原因），"
+                f"实际 {report['max_similarity']}"
+            )
 
 
 # ================================================ 覆盖与配比 ====

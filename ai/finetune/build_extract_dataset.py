@@ -145,10 +145,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"❌ 与留出集（C34 评测集 + C34/C35 示例池）正文重合：{overlap[:5]}…")
         return 2
     sim = synth.similarity_report(samples, holdout_texts)
+    # 闸门看的是 **coverage**（留出文本被训练样本覆盖的比例）——
+    # Jaccard 会被文本长度稀释：把留出原文原样抄进一条更长的合成文本时，
+    # Jaccard 会掉到阈值以下**放行**，而 coverage 仍是 1.0。两者都打印，便于对照。
     print(f"  留出集隔离：{len(holdout_texts)} 条，正文零重合；"
-          f"最大 {sim['n_gram']}-gram 重合 {sim['max_similarity']}（阈值 {sim['warn_at']}）")
+          f"最大 {sim['n_gram']}-gram 覆盖 {sim['max_coverage']}"
+          f"（Jaccard {sim['max_similarity']}；阈值 {sim['warn_at']}）")
     if not sim["passed"]:
-        print(f"❌ 与留出集的表层重合度过高（{sim['max_similarity']} ≥ {sim['warn_at']}）——"
+        print(f"❌ 留出文本被训练集覆盖达 {sim['max_coverage']} ≥ {sim['warn_at']} ——"
               "先改模板族再训，否则「提升」很可能是抄来的")
         return 2
 
@@ -191,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
                                 "ai/eval/fixtures/few_shot_examples.json",
                                 "ai/eval/fixtures/prompt_opt_examples_ext.json"],
             "text_overlap": 0,
+            # 闸门判据（见 similarity_report 的 docstring）：留出文本被训练集覆盖的比例
+            "max_ngram_coverage": sim["max_coverage"],
+            # 并列保留 Jaccard，便于与历史报告对比；**它不是闸门**
             "max_ngram_similarity": sim["max_similarity"],
             "threshold": sim["warn_at"],
             "passed": sim["passed"],

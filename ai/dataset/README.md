@@ -180,9 +180,16 @@ python -m pytest ai/dataset/tests -q      # 40 passed（C31: 15 + C32: 25），�
 已混入含显式年份的绝对时间样本缓解，但**不能消除** —— 写进训练报告的局限里。
 
 ### 与留出集的隔离（两道闸）
-生成器自带 `similarity_report`：与 **C34 评测集 24 条 + C34/C35 示例池 16 条**比字符 3-gram 重合度。
-实测（800 条）：**正文零重合，最大 3-gram 重合 0.167**（阈值 0.6）。
-第二道闸在 `ai/finetune/build_extract_dataset.py`：写盘前再查一次，重合则退出码 2、不写任何文件。
+生成器自带 `similarity_report`：与 **C34 评测集 24 条 + C34/C35 示例池 16 条**比字符 3-gram 重合。
+实测（800 条）：**正文零重合；最大 3-gram 覆盖 0.309、Jaccard 0.167**（阈值 0.6）。
+
+> ⚠️ **闸门判据是 `coverage`（留出文本被训练样本覆盖的比例 = `∩ / |留出|`），不是 Jaccard。**
+> Jaccard 会被**文本长度稀释**：把留出原文原样抄进一条更长的合成文本时，
+> 它随训练文本变长单调下降 —— 实测填充 50 字时 Jaccard 已降到 **0.524 < 0.6**（旧闸门**放行**），
+> 而 coverage 仍是 **1.0**（确实被完整抄了）。两者都在报告里列出，但**只有 coverage 当闸门**。
+> 回归见 `tests/test_synth_notice.py::test_copy_hidden_in_longer_text_is_still_caught`。
+
+第二道闸在 `ai/finetune/build_extract_dataset.py`：写盘前再查一次，覆盖超阈值则退出码 2、不写任何文件。
 
 ### 用法
 ```bash

@@ -65,6 +65,7 @@
       "ai/eval/fixtures/prompt_opt_examples_ext.json"
     ],
     "text_overlap": 0,
+    "max_ngram_coverage": 0.3091,
     "max_ngram_similarity": 0.1667,
     "threshold": 0.6,
     "passed": true
