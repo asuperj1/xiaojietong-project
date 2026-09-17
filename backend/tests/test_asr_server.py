@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import socket
 import threading
@@ -28,7 +29,7 @@ from fastapi.testclient import TestClient
 from app.services.asr import AsrFailure, AsrResult, AsrUnavailable
 from app.services.asr.http_remote import HttpRemoteBackend
 from app.services.asr.probe import make_wav
-from app.services.asr.server import create_app
+from app.services.asr.server import _TooLarge, _read_limited, create_app
 
 ENDPOINT = "/transcribe"
 
@@ -420,3 +421,63 @@ def test_loopback_bypass_is_effective_against_a_real_proxy(monkeypatch):
         result = HttpRemoteBackend(f"{base}{ENDPOINT}", timeout=5.0).transcribe(
             WAV, filename="a.wav")
     assert result.text == "离线也能识别"
+
+# ============================== 分片读的累加上限（C30 加固）==============
+#
+# 为什么要单独补这一节：对 `server.py` 做变异测试（把 `_read_limited` 里的
+# `if total > limit:` 改成 `if False:`）后，**本文件仍然 29 项全绿** —— 说明原先
+# 只覆盖了 `Content-Length` 预检那条早退分支（`declared > limit`），而
+# **分片累加这道守卫没有任何用例**。
+#
+# 而分片累加正是防「**谎报或不报 `Content-Length` 的客户端**」的那一道：
+# 删掉它不会有任何测试变红，保护会静默消失 —— 这正是 PR #60 审查里
+# 「先 `read()` 整包再判大小」那个坑的正面防线。
+#
+# 为什么用桩而不是端到端：`TestClient`/httpx 发 multipart 时一定会带上
+# 正确的 `Content-Length`，走不到累加分支；要打中它必须绕过 `Content-Length`，
+# 故直接对 `_read_limited` 做单元级测试（它是模块级函数，可独立调用）。
+
+
+class _FakeUpload:
+    """最小 `UploadFile` 桩：只实现 `read`/`size`，并记录读了几次。"""
+
+    def __init__(self, chunks, size=None):
+        self._chunks = list(chunks)
+        self.size = size
+        self.reads = 0
+
+    async def read(self, n=-1):
+        self.reads += 1
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+def test_read_limited_rejects_when_declared_size_exceeds_limit():
+    """（a）`Content-Length` 已超限 → 立刻拒绝，且**一个分片都不读**。"""
+    up = _FakeUpload([b"x" * 10], size=999)
+    with pytest.raises(_TooLarge):
+        asyncio.run(_read_limited(up, 100))
+    assert up.reads == 0, "已由 size 判定超限，不应再读内容"
+
+
+def test_read_limited_rejects_oversized_stream_ignoring_declared_size():
+    """（b）**谎报 `size` 的客户端**：声明 1 字节、实际超上限 → 仍须拒绝。
+
+    这是删掉分片累加守卫后会静默失效的那条路径（原先无任何用例覆盖）。
+    """
+    up = _FakeUpload([b"a" * 100, b"b" * 51], size=1)
+    with pytest.raises(_TooLarge):
+        asyncio.run(_read_limited(up, 150))
+
+
+def test_read_limited_accepts_exactly_at_limit():
+    """边界反向对照：**恰好等于**上限必须放行，不是「宁严不宽」。"""
+    up = _FakeUpload([b"a" * 100, b"b" * 50], size=None)
+    assert len(asyncio.run(_read_limited(up, 150))) == 150
+
+
+def test_read_limited_rejects_one_byte_over_limit_without_content_length():
+    """无 `size` 时 **超 1 字节**也必须拒绝（上限是「≤」而不是「<」或「明显超过」）。"""
+    up = _FakeUpload([b"a" * 150, b"b"], size=None)
+    with pytest.raises(_TooLarge):
+        asyncio.run(_read_limited(up, 150))
+
