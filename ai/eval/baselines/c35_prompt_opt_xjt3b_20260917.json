@@ -1,0 +1,392 @@
+{
+  "meta": {
+    "task": "C35",
+    "created": "2026-09-17",
+    "backend": "ollama",
+    "model": "xjt-3b",
+    "num_ctx": 8192,
+    "temperature": 0.0,
+    "seed": 42,
+    "iters": 2000,
+    "dataset": "ai/eval/extract_cases.json",
+    "dataset_total": 24,
+    "n_cases": 24,
+    "pool": {
+      "base": "ai/eval/fixtures/few_shot_examples.json",
+      "ext": "ai/eval/fixtures/prompt_opt_examples_ext.json",
+      "base_size": 4,
+      "ext_size": 12,
+      "cap": 16
+    },
+    "prompt_variants": [
+      {
+        "variant": "V0-naive",
+        "added": "（C34 原样，无补充）",
+        "prompt_chars": 220
+      },
+      {
+        "variant": "V1-date",
+        "added": "补基准日 + 无年份按 2026 理解 + 跨年规则",
+        "prompt_chars": 399
+      },
+      {
+        "variant": "V2-rubric",
+        "added": "再补 importance 3~5 判定标准",
+        "prompt_chars": 609
+      },
+      {
+        "variant": "V3-optimized",
+        "added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+        "prompt_chars": 919
+      }
+    ],
+    "grid": [
+      "V0-naive@k=0",
+      "V3-optimized@k=0"
+    ],
+    "total_wall_time_s": 58.9
+  },
+  "ladder": [
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.5417,
+            "recall": 0.5417,
+            "f1": 0.5417,
+            "tp": 13,
+            "fp": 11,
+            "fn": 11
+          },
+          "importance": {
+            "precision": 0.125,
+            "recall": 0.125,
+            "f1": 0.125,
+            "tp": 3,
+            "fp": 21,
+            "fn": 21
+          },
+          "deadline": {
+            "precision": 0.2727,
+            "recall": 0.15,
+            "f1": 0.1935,
+            "tp": 3,
+            "fp": 8,
+            "fn": 17
+          },
+          "entities": {
+            "precision": 0.1154,
+            "recall": 0.1034,
+            "f1": 0.1091,
+            "tp": 3,
+            "fp": 23,
+            "fn": 26
+          }
+        },
+        "micro": {
+          "precision": 0.2588,
+          "recall": 0.2268,
+          "f1": 0.2418,
+          "tp": 22,
+          "fp": 63,
+          "fn": 75
+        },
+        "macro_f1": 0.2423,
+        "strict_accuracy": 0.0,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "avg_latency_s": 1.499,
+      "prompt_tokens_avg": 147.1,
+      "prompt_tokens_max": 161,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V0-naive@k=0",
+      "wall_time_s": 36.0,
+      "prompt_chars": 220
+    },
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.4583,
+            "recall": 0.4583,
+            "f1": 0.4583,
+            "tp": 11,
+            "fp": 13,
+            "fn": 13
+          },
+          "importance": {
+            "precision": 0.2917,
+            "recall": 0.2917,
+            "f1": 0.2917,
+            "tp": 7,
+            "fp": 17,
+            "fn": 17
+          },
+          "deadline": {
+            "precision": 1.0,
+            "recall": 0.4,
+            "f1": 0.5714,
+            "tp": 8,
+            "fp": 0,
+            "fn": 12
+          },
+          "entities": {
+            "precision": 0.8333,
+            "recall": 0.5172,
+            "f1": 0.6383,
+            "tp": 15,
+            "fp": 3,
+            "fn": 14
+          }
+        },
+        "micro": {
+          "precision": 0.5541,
+          "recall": 0.4227,
+          "f1": 0.4795,
+          "tp": 41,
+          "fp": 33,
+          "fn": 56
+        },
+        "macro_f1": 0.4899,
+        "strict_accuracy": 0.0,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "avg_latency_s": 0.951,
+      "prompt_tokens_avg": 576.1,
+      "prompt_tokens_max": 590,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V3-optimized@k=0",
+      "wall_time_s": 22.8,
+      "prompt_chars": 919
+    }
+  ],
+  "configs": [
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.5417,
+            "recall": 0.5417,
+            "f1": 0.5417,
+            "tp": 13,
+            "fp": 11,
+            "fn": 11
+          },
+          "importance": {
+            "precision": 0.125,
+            "recall": 0.125,
+            "f1": 0.125,
+            "tp": 3,
+            "fp": 21,
+            "fn": 21
+          },
+          "deadline": {
+            "precision": 0.2727,
+            "recall": 0.15,
+            "f1": 0.1935,
+            "tp": 3,
+            "fp": 8,
+            "fn": 17
+          },
+          "entities": {
+            "precision": 0.1154,
+            "recall": 0.1034,
+            "f1": 0.1091,
+            "tp": 3,
+            "fp": 23,
+            "fn": 26
+          }
+        },
+        "micro": {
+          "precision": 0.2588,
+          "recall": 0.2268,
+          "f1": 0.2418,
+          "tp": 22,
+          "fp": 63,
+          "fn": 75
+        },
+        "macro_f1": 0.2423,
+        "strict_accuracy": 0.0,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "avg_latency_s": 1.499,
+      "prompt_tokens_avg": 147.1,
+      "prompt_tokens_max": 161,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V0-naive@k=0",
+      "wall_time_s": 36.0,
+      "prompt_chars": 220
+    },
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.4583,
+            "recall": 0.4583,
+            "f1": 0.4583,
+            "tp": 11,
+            "fp": 13,
+            "fn": 13
+          },
+          "importance": {
+            "precision": 0.2917,
+            "recall": 0.2917,
+            "f1": 0.2917,
+            "tp": 7,
+            "fp": 17,
+            "fn": 17
+          },
+          "deadline": {
+            "precision": 1.0,
+            "recall": 0.4,
+            "f1": 0.5714,
+            "tp": 8,
+            "fp": 0,
+            "fn": 12
+          },
+          "entities": {
+            "precision": 0.8333,
+            "recall": 0.5172,
+            "f1": 0.6383,
+            "tp": 15,
+            "fp": 3,
+            "fn": 14
+          }
+        },
+        "micro": {
+          "precision": 0.5541,
+          "recall": 0.4227,
+          "f1": 0.4795,
+          "tp": 41,
+          "fp": 33,
+          "fn": 56
+        },
+        "macro_f1": 0.4899,
+        "strict_accuracy": 0.0,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "avg_latency_s": 0.951,
+      "prompt_tokens_avg": 576.1,
+      "prompt_tokens_max": 590,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V3-optimized@k=0",
+      "wall_time_s": 22.8,
+      "prompt_chars": 919
+    }
+  ],
+  "comparisons": [
+    {
+      "a": "V0-naive@k=0",
+      "b": "V3-optimized@k=0",
+      "k": 0,
+      "delta_pt": 23.78,
+      "ci_low_pt": 14.93,
+      "ci_high_pt": 32.74,
+      "iters": 2000,
+      "n_pairs": 24,
+      "significant": true
+    }
+  ],
+  "label_budget": {
+    "available": true,
+    "optimized_k0_f1": 0.4795,
+    "naive_curve": {
+      "0": 0.2418
+    },
+    "optimized_curve": {
+      "0": 0.4795
+    },
+    "matched_k": null,
+    "bracket_below_k": 0,
+    "bracket_above_k": null,
+    "max_k_tested": 0,
+    "reached": false
+  },
+  "gate": {
+    "expr": "V3-optimized@k=0 − V0-naive@k=0",
+    "delta_pt": 23.77,
+    "min_gain_pt": 5.0,
+    "passed": true
+  },
+  "reproduce": null,
+  "caveats": [
+    "评测集只有 24 条且是**合成数据**（C34 已注明）：几个百分点的差异可能只是抽样噪声，所以给出了配对自助法的 95% 区间；区间跨 0 的结论一律按「不显著」处理。",
+    "`V3-optimized` 里的 category 受控词表取的是评测集实际使用的 5 类。真实部署里类目来自库表/前端栏目（属正当先验），但它确实缩小了模型的搜索空间 —— 该档增益含这一条，不与「日期规则」「重要度细则」混算。",
+    "C35 的扩充示例（12 条）与 prompt 文本都是按 C34 记录的**标注规范**编写的，**不是**在评测集上反复调参拟合出来的；prompt 与示例一经确定即冻结，评测集只用于最终度量。",
+    "任务书里「100 条+优 prompt ≈ 300 条+朴素」的完整曲线需要**真实标注数据**（C31 工具链 + D12 人标注协作产出）才能测到 k=100/300；本实验在现有池子（上限 16 条）内给出可测段，并如实报告是否在测到的 k 上追平，**不外推**。",
+    "`importance` 的标注本身存在边界模糊（例如同为「提交材料截止」，评测集里 E02 记 4、E17 记 5）：这属于标注一致性问题（与 C32 的 Cohen's Kappa 同源），会同时压低所有档位的上限，不是 prompt 能修的。"
+  ],
+  "note": "本文件对应 `ai/eval/prompt_opt.py --slim` 的输出：仅去掉逐条明细 cases/failures，指标与结论未作任何改动。逐条明细见 out/（不入库）。"
+}
