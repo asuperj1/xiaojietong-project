@@ -17,22 +17,40 @@ async with httpx.AsyncClient(timeout=30.0, **proxy_bypass_kwargs(url)) as client
     ...
 ```
 
-> 注：`app/services/asr/http_remote.py` 里有一份同源的私有实现（`_is_loopback`）。
-> 它已随 PR #115 提交，为避免两处同时改同一段代码产生冲突，**待 #115 合并后**再改为
-> 引用本模块 —— 届时本模块即为唯一出处。
+判据（这里踩过两次，别再手写前缀匹配）：
+
+- IP 字面量用 `ipaddress.ip_address(host).is_loopback`，**不要**写 `host.startswith("127.")` ——
+  那样 `127.evil.com`（合法域名）会被误判成本机，本该走代理的**远程**主机被静默绕过代理；
+- `0.0.0.0` / `::` 是 **bind（监听）** 地址，不是回环地址，**不算本机**。
+
+> 注：`app/services/asr/http_remote.py` 在 PR #115（C30，**尚未合并**）里引入了同源的私有实现
+> `_is_loopback`（口径与本模块一致）。#115 合并后应改为 `from app.core.net import is_loopback`，
+> 本模块即为唯一出处。
 """
 from __future__ import annotations
 
+import ipaddress
 import urllib.parse
 
-#: 视为"本机"的主机名。回环地址永远不需要代理。
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+#: 非 IP 字面量的"本机"主机名（RFC 6761 保留名 + IPv6 回环字面量的可读别名）。
+_LOOPBACK_HOSTS = frozenset({"localhost", "::1"})
 
 
 def is_loopback(url: str) -> bool:
-    """URL 是否指向本机（含 `127.0.0.0/8` 任意地址）。非 http(s) 或解析不出主机名返回 False。"""
-    host = (urllib.parse.urlsplit(url or "").hostname or "").lower()
-    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+    """URL 是否指向本机（含 `127.0.0.0/8` 任意地址与 IPv6 `::1`）。
+
+    ⚠️ `0.0.0.0` / `::` **不算**：它们是"监听全部网卡"的 bind 地址，不是回环地址。
+    非 http(s)、解析不出主机名、或主机名既不是 IP 也不是 `localhost` → False。
+    """
+    host = (urllib.parse.urlsplit(url or "").hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:      # 域名：`127.evil.com` 这种前缀巧合不是本机
+        return False
 
 
 def proxy_bypass_kwargs(url: str) -> dict:

@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -43,27 +44,42 @@ class StubOllama:
 
     def __init__(self, content: str = '{"title": "九成新教材"}', *, status: int = 200,
                  model_names: tuple[str, ...] = ("xjt-3b",),
-                 content_missing: bool = False) -> None:
+                 content_missing: bool = False,
+                 raw_models: list | None = None,
+                 delay: float = 0.0) -> None:
         self.content = content
         self.status = status
         self.model_names = model_names
         self.content_missing = content_missing
+        self.raw_models = raw_models
+        self.delay = delay
         self.calls: list[dict] = []
         self.tags_calls = 0
+        self.in_flight = 0
+        self.peak_in_flight = 0
         app = FastAPI()
 
         @app.post("/api/chat")
         async def chat(payload: dict = Body(...)):     # noqa: B008 - FastAPI 惯例
-            self.calls.append(payload)
-            if self.status != 200:
-                return JSONResponse(status_code=self.status, content={"error": "boom"})
-            if self.content_missing:
-                return {"done": True}
-            return {"message": {"content": self.content}, "done": True}
+            self.in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+            try:
+                if self.delay:
+                    await asyncio.sleep(self.delay)
+                self.calls.append(payload)
+                if self.status != 200:
+                    return JSONResponse(status_code=self.status, content={"error": "boom"})
+                if self.content_missing:
+                    return {"done": True}
+                return {"message": {"content": self.content}, "done": True}
+            finally:
+                self.in_flight -= 1
 
         @app.get("/api/tags")
         async def tags():
             self.tags_calls += 1
+            if self.raw_models is not None:
+                return {"models": self.raw_models}
             return {"models": [{"name": n} for n in self.model_names]}
 
         self.app = app
@@ -135,10 +151,24 @@ def test_availability_reports_explicit_reason(cfg, expect):
     assert ok is False and expect in why
 
 
+def test_blank_config_falls_back_instead_of_becoming_a_value():
+    """配置里写了个空格不能被当成"已配置"：既不回落、又会造出非法模型名/地址。"""
+    c = ExtractModelClient(base_url="  ", model=" ", http_url=" ")
+    assert c.base_url == settings.ollama_base_url.rstrip("/")
+    assert c.model == settings.ollama_model
+    assert c.http_url == ""
+
+
+def test_model_name_is_stripped():
+    """带空白的合法配置要取到干净值（否则会变成非法模型名）。"""
+    c = ExtractModelClient(model="  xjt-extract-1.5b  ", base_url=" http://10.0.0.9:11434/ ")
+    assert c.model == "xjt-extract-1.5b"
+    assert c.base_url == "http://10.0.0.9:11434"
+
+
 def test_none_backend_never_calls_out():
     """`none` 必须在**发请求之前**就拒绝，而不是打个空请求再报错。"""
     with pytest.raises(ExtractUnavailable) as exc:
-        import asyncio
         asyncio.run(ExtractModelClient(backend="none").extract_json("x", instruction=INSTRUCTION))
     assert "关闭" in str(exc.value)
 
@@ -186,11 +216,12 @@ async def test_isolation_extract_model_is_used_not_chat_model(monkeypatch):
 @pytest.mark.asyncio
 async def test_isolation_can_point_at_a_different_host(monkeypatch):
     """隔离也意味着能指向**另一台** Ollama：请求必须打到抽取地址，而不是对话地址。"""
-    monkeypatch.setattr(settings, "ollama_base_url", f"http://127.0.0.1:{free_port()}")
-    stub = StubOllama('{"ok": true}')
-    with live_server(stub.app) as base:
-        monkeypatch.setattr(settings, "extract_base_url", base)
-        await em.extract_json("任意正文", instruction=INSTRUCTION)
+    with free_port() as chat_url:          # 一个必然连不上的"对话地址"
+        monkeypatch.setattr(settings, "ollama_base_url", chat_url)
+        stub = StubOllama('{"ok": true}')
+        with live_server(stub.app) as base:
+            monkeypatch.setattr(settings, "extract_base_url", base)
+            await em.extract_json("任意正文", instruction=INSTRUCTION)
     assert len(stub.calls) == 1
 
 
@@ -239,9 +270,10 @@ async def test_upstream_error_is_failure_not_unavailable(status):
 @pytest.mark.asyncio
 async def test_connect_error_is_unavailable():
     """服务没起 → "不可用"，与"这次抽失败了"区分开（便于运维定位）。"""
-    c = ExtractModelClient(base_url=f"http://127.0.0.1:{free_port()}", model="m", timeout=1.0)
-    with pytest.raises(ExtractUnavailable):
-        await c.extract_json("x", instruction=INSTRUCTION)
+    with free_port() as base:
+        c = ExtractModelClient(base_url=base, model="m", timeout=1.0)
+        with pytest.raises(ExtractUnavailable):
+            await c.extract_json("x", instruction=INSTRUCTION)
 
 
 @pytest.mark.asyncio
@@ -281,6 +313,88 @@ async def test_probe_ok_when_model_present():
     with live_server(stub.app) as base:
         ok, why = await _client_for(stub, base).probe()
     assert ok is True and why == ""
+
+
+@pytest.mark.asyncio
+async def test_probe_accepts_tagged_model_name():
+    """**P1 回归**：Ollama 清单带 tag（`xjt-3b:latest`），配置里写的是不带 tag 的名字。
+
+    旧实现精确匹配 ⇒ `probe()` 报"没有模型"，可同一次会话里 `extract_json()` 是成功的
+    —— 假装失败同样是有害的（运维会去注册一个已存在的模型）。
+    """
+    stub = StubOllama('{"ok": true}', model_names=("xjt-3b:latest",))
+    with live_server(stub.app) as base:
+        c = ExtractModelClient(base_url=base, model="xjt-3b", timeout=5.0)
+        ok, why = await c.probe()
+        assert (ok, why) == (True, "")
+        # 同一配置下真去抽取也必须成功 —— 两者不能自相矛盾
+        result = await c.extract_json("x", instruction=INSTRUCTION)
+    assert result.data == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_probe_requires_exact_tag_when_config_has_one():
+    """反向对照：配置**带** tag 时必须精确命中，不能被 `:latest` 顶替。"""
+    stub = StubOllama(model_names=("xjt-3b:latest",))
+    with live_server(stub.app) as base:
+        ok, why = await ExtractModelClient(base_url=base, model="xjt-3b:v2").probe()
+    assert ok is False and "xjt-3b:v2" in why
+
+
+@pytest.mark.asyncio
+async def test_probe_ignores_null_and_non_object_model_entries():
+    """`{"name": null}` 不能变成字面量 `"None"`（`get(k, default)` 只在键缺失时生效）。"""
+    stub = StubOllama(raw_models=[{"name": None}, "bogus", {"no_name": 1},
+                                  {"name": "xjt-3b:latest"}])
+    with live_server(stub.app) as base:
+        ok, why = await ExtractModelClient(base_url=base, model="xjt-3b").probe()
+        assert (ok, why) == (True, "")
+        ok2, why2 = await ExtractModelClient(base_url=base, model="nope").probe()
+    assert ok2 is False and "None" not in why2 and "xjt-3b:latest" in why2
+
+
+@pytest.mark.asyncio
+async def test_keep_alive_forwarded_only_when_configured():
+    """`XJT_EXTRACT_KEEP_ALIVE` 是控制显存驻留的手段：配了就带，没配就不带（不改变默认行为）。"""
+    stub = StubOllama('{"ok": true}')
+    with live_server(stub.app) as base:
+        await _client_for(stub, base, keep_alive="5m").extract_json("x", instruction=INSTRUCTION)
+        assert stub.last()["keep_alive"] == "5m"
+        await _client_for(stub, base).extract_json("x", instruction=INSTRUCTION)
+    assert "keep_alive" not in stub.last()
+
+
+@pytest.mark.asyncio
+async def test_concurrency_gate_caps_in_flight_requests():
+    """**P2 回归**：抽取是批量负载，必须有限流 —— 否则几十个请求同时压向同一个 Ollama。"""
+    stub = StubOllama('{"ok": true}', delay=0.05)
+    with live_server(stub.app) as base:
+        c = ExtractModelClient(base_url=base, model="m", timeout=10.0, max_concurrency=2)
+        await asyncio.gather(*[c.extract_json("x", instruction=INSTRUCTION) for _ in range(6)])
+    assert stub.peak_in_flight == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrency_gate_can_be_disabled():
+    """反向对照：`0` = 不限 —— 必须真的不打闸，否则上一个用例可能只是"本来就串行"。"""
+    stub = StubOllama('{"ok": true}', delay=0.05)
+    with live_server(stub.app) as base:
+        c = ExtractModelClient(base_url=base, model="m", timeout=10.0, max_concurrency=0)
+        await asyncio.gather(*[c.extract_json("x", instruction=INSTRUCTION) for _ in range(6)])
+    assert stub.peak_in_flight == 6
+
+
+@pytest.mark.asyncio
+async def test_outbound_clients_are_reused_and_split_by_proxy_mode():
+    """**P3 回归**：出站客户端要复用连接池，且回环与外网**不能共用**（`trust_env` 不同）。"""
+    c = ExtractModelClient(base_url="http://127.0.0.1:11434", model="m")
+    local = c._http_client("http://127.0.0.1:11434/api/chat")
+    assert local is c._http_client("http://127.0.0.1:11434/api/tags")      # 同一个池
+    remote = c._http_client("https://ollama.example.com/api/chat")
+    assert remote is not local
+    assert local.trust_env is False and remote.trust_env is True
+    await c.aclose()
+    assert c._clients == {}
 
 
 # ================================================ 自建抽取服务路 ====
@@ -326,10 +440,10 @@ async def test_http_backend_errors():
         c = ExtractModelClient(backend="http", http_url=f"{base}/extract", timeout=5.0)
         with pytest.raises(ExtractFailure):
             await c.extract_json("正文", instruction=INSTRUCTION)
-    c2 = ExtractModelClient(backend="http", http_url=f"http://127.0.0.1:{free_port()}/x",
-                            timeout=1.0)
-    with pytest.raises(ExtractUnavailable):
-        await c2.extract_json("正文", instruction=INSTRUCTION)
+    with free_port() as dead:
+        c2 = ExtractModelClient(backend="http", http_url=f"{dead}/x", timeout=1.0)
+        with pytest.raises(ExtractUnavailable):
+            await c2.extract_json("正文", instruction=INSTRUCTION)
 
 
 @pytest.mark.asyncio
@@ -340,6 +454,39 @@ async def test_http_backend_non_json_is_failure():
         with pytest.raises(ExtractFailure) as exc:
             await c.extract_json("正文", instruction=INSTRUCTION)
     assert "JSON" in str(exc.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inner", ["a string", [1, 2], 42, None])
+async def test_http_backend_non_object_data_is_failure(inner):
+    """**P2 回归**：`{"data": <非对象>}` 不能把整个信封当结果返回。
+
+    旧实现会返回 `{"data": ..., "model": ...}` —— 调用方拿到的"抽取结果"里
+    混着传输层包装字段（噪声当结果）。按本模块的失败语义，这应当是 `ExtractFailure`。
+    """
+    stub = StubExtractService({"data": inner, "model": "m1"})
+    with live_server(stub.app) as base:
+        c = ExtractModelClient(backend="http", http_url=f"{base}/extract", timeout=5.0)
+        with pytest.raises(ExtractFailure) as exc:
+            await c.extract_json("正文", instruction=INSTRUCTION)
+    assert "data" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_http_backend_fails_closed_on_ambiguous_data_key():
+    """契约里 `data` 既可能是信封、也可能是抽取结果自己字段名 —— 分不清时**失败关闭**。
+
+    这是一条**有意的取舍**：猜错的方向决定后果 ——
+    把信封当结果返回 = 把传输层字段混进业务数据（旧行为，难排查）；
+    报错 = 调用方立刻看到"契约不符"（并把原文前 200 字带上）。
+    抽取字段名用 `data` 的服务请改用 `{"data": {...}}` 包一层，或换字段名。
+    """
+    stub = StubExtractService({"time": "9月30日", "data": "非对象"})
+    with live_server(stub.app) as base:
+        c = ExtractModelClient(backend="http", http_url=f"{base}/extract", timeout=5.0)
+        with pytest.raises(ExtractFailure) as exc:
+            await c.extract_json("正文", instruction=INSTRUCTION)
+    assert "data" in str(exc.value)
 
 
 # ================================== 与既有调用方对接（真集成）====
@@ -361,9 +508,10 @@ async def test_secondhand_describe_uses_unified_entry(monkeypatch):
     with live_server(stub.app) as base:
         monkeypatch.setattr(settings, "extract_base_url", base)
         em.reset_client()
-        got = await secondhand_ai._model_describe({"标题": "教材", "分类": "教材"})
+        got, truncated = await secondhand_ai._model_describe({"标题": "教材", "分类": "教材"})
 
     assert got == verdict
+    assert truncated is False
     assert stub.last()["model"] == "xjt-extract-1.5b"
 
 
@@ -376,7 +524,7 @@ async def test_secondhand_describe_degrades_safely_on_bad_json(monkeypatch):
     with live_server(stub.app) as base:
         monkeypatch.setattr(settings, "extract_base_url", base)
         em.reset_client()
-        assert await secondhand_ai._model_describe({"标题": "教材"}) is None
+        assert await secondhand_ai._model_describe({"标题": "教材"}) == (None, False)
 
 
 @pytest.mark.asyncio
@@ -386,7 +534,107 @@ async def test_secondhand_describe_degrades_when_disabled(monkeypatch):
 
     monkeypatch.setattr(settings, "extract_backend", "none")
     em.reset_client()
-    assert await secondhand_ai._model_describe({"标题": "教材"}) is None
+    assert await secondhand_ai._model_describe({"标题": "教材"}) == (None, False)
+
+
+# ============================================ 输入截断（P1 回归）====
+
+
+def test_fit_payload_keeps_json_valid():
+    """**P1 回归**：`secondhand_ai` 传的是"整份 JSON 当正文"，按字符硬截会把 JSON 拦腰斩断。
+
+    `_fit_payload` 改为先裁唯一无上限的字段（备注/标题），因此送进模型的**始终是合法 JSON**。
+    """
+    from app.services.secondhand_ai import _fit_payload
+
+    info = {"标题": "教材", "分类": "教材", "成色": "9/10",
+            "用户备注": "很长的备注" * 500, "同类参考": {"均价": 25.0}}
+    assert len(json.dumps(info, ensure_ascii=False)) > 200      # 前提：确实超限
+
+    body, truncated = _fit_payload(info, 200)
+    assert truncated is True
+    assert len(body) <= 200
+    data = json.loads(body)                    # ← 关键：整份 JSON 仍然合法
+    assert data["标题"] == "教材" and data["分类"] == "教材"
+    assert data["同类参考"] == {"均价": 25.0}   # 结构字段一个不少
+    assert data["用户备注"].endswith("…（过长已截断）")
+    assert len(data["用户备注"]) < 5000
+
+
+def test_fit_payload_is_a_no_op_when_it_fits():
+    """反向对照：不超限时**逐字节不动**（不能"为了保险"一律裁剪）。"""
+    from app.services.secondhand_ai import _fit_payload
+
+    info = {"标题": "教材", "用户备注": "短备注"}
+    body, truncated = _fit_payload(info, 0)          # 0 = 不限制
+    assert (body, truncated) == (json.dumps(info, ensure_ascii=False), False)
+    body2, truncated2 = _fit_payload(info, 10_000)
+    assert (body2, truncated2) == (json.dumps(info, ensure_ascii=False), False)
+
+
+@pytest.mark.asyncio
+async def test_model_describe_truncates_note_without_breaking_json(monkeypatch):
+    """端到端：超长备注下，模型收到的那份 JSON **仍可解析**，且 `truncated` 被返回给调用方。"""
+    from app.services import secondhand_ai
+
+    monkeypatch.setattr(settings, "extract_backend", "ollama")
+    monkeypatch.setattr(settings, "extract_model", "xjt-extract-1.5b")
+    monkeypatch.setattr(settings, "extract_max_chars", 400)
+    em.reset_client()
+
+    stub = StubOllama('{"title": "优化标题"}')
+    with live_server(stub.app) as base:
+        monkeypatch.setattr(settings, "extract_base_url", base)
+        em.reset_client()
+        data, truncated = await secondhand_ai._model_describe(
+            {"标题": "教材", "分类": "教材", "用户备注": "很长的备注" * 500})
+
+    assert data == {"title": "优化标题"} and truncated is True
+    sent = stub.last()["messages"][1]["content"]
+    assert len(sent) <= 400
+    assert json.loads(sent)["标题"] == "教材"       # ← 修复前这里是 JSONDecodeError
+
+
+@pytest.mark.asyncio
+async def test_describe_and_price_surfaces_truncation(monkeypatch):
+    """`truncated` 必须**透出到响应** —— 仓库里唯一的生产调用方不该把它丢掉。"""
+    from app.services import secondhand_ai
+
+    monkeypatch.setattr(secondhand_ai, "suggest_price", lambda *a, **k: {
+        "category": "教材", "condition_level": 8, "suggested_price": 20.0,
+        "price_min": 15.0, "price_max": 40.0, "sample_count": 3,
+        "avg_price": 25.0, "source": "stat", "reason": "库内同类 3 件均价 25.0 元"})
+    monkeypatch.setattr(settings, "extract_backend", "ollama")
+    monkeypatch.setattr(settings, "extract_model", "xjt-extract-1.5b")
+    monkeypatch.setattr(settings, "extract_max_chars", 300)
+    em.reset_client()
+
+    stub = StubOllama('{"title": "t", "description": "d", "suggested_price": 20}')
+    with live_server(stub.app) as base:
+        monkeypatch.setattr(settings, "extract_base_url", base)
+        em.reset_client()
+        long_note = await secondhand_ai.describe_and_price("教材", "教材", 8, "备注" * 300)
+        short_note = await secondhand_ai.describe_and_price("教材", "教材", 8, "九成新")
+    assert long_note["source"] == "model" and long_note["model_truncated"] is True
+    assert short_note["model_truncated"] is False        # 反向对照：没裁过就说没裁
+
+
+def test_isolation_report_tells_the_truth(monkeypatch):
+    """隔离状态要如实报告：同地址同模型 = 未生效；只换模型但同地址 = **仍未**隔离。"""
+    monkeypatch.setattr(settings, "ollama_base_url", "http://127.0.0.1:11434")
+    monkeypatch.setattr(settings, "ollama_model", "xjt-3b")
+
+    same = ExtractModelClient().isolation_report()
+    assert same["isolated"] is False and same["same_host"] and same["same_model"]
+
+    only_model = ExtractModelClient(base_url="http://127.0.0.1:11434",
+                                    model="xjt-extract-1.5b").isolation_report()
+    assert only_model["isolated"] is False and only_model["same_host"]
+    assert "同一台" in only_model["note"]
+
+    other_host = ExtractModelClient(base_url="http://10.0.0.9:11434",
+                                    model="xjt-extract-1.5b").isolation_report()
+    assert other_host["isolated"] is True
 
 
 # ================================================ 回环代理绕过 ====
@@ -399,6 +647,32 @@ def test_is_loopback_truth_table():
     for url in ("http://10.0.0.9:11434", "https://ollama.example.com",
                 "http://172.217.1.1", "", "not-a-url"):
         assert is_loopback(url) is False, url
+
+
+def test_is_loopback_rejects_bind_addresses_and_lookalike_domains():
+    """**P2 回归**：`0.0.0.0`/`::` 是 bind 地址不是回环；`127.evil.com` 是远程域名。
+
+    旧实现用 `host.startswith("127.")` 会在 `127.evil.com` 上误判 ⇒ **静默绕过代理**
+    （与意图相反）；旧实现还把 `0.0.0.0` 写进了回环集合。
+    """
+    assert is_loopback("http://0.0.0.0:11434") is False
+    assert is_loopback("http://[::]:11434") is False
+    assert is_loopback("http://127.evil.com/x") is False
+    assert proxy_bypass_kwargs("http://127.evil.com/x") == {}
+    assert proxy_bypass_kwargs("http://[::1]:11434") == {"trust_env": False}
+
+
+def test_free_port_holds_the_port_until_released():
+    """**P3 回归**：`free_port()` 要占住端口（bind 但不 listen），连接必然是"服务没起"。"""
+    import socket
+
+    with free_port() as url:
+        host, _, port = url.removeprefix("http://").partition(":")
+        with pytest.raises(OSError):            # 连接被拒 = 没有服务在听
+            socket.create_connection((host, int(port)), timeout=1.0)
+        with socket.socket() as s:              # 端口被占住，别人抢不走
+            with pytest.raises(OSError):
+                s.bind((host, int(port)))
 
 
 def test_proxy_bypass_kwargs_only_for_loopback():

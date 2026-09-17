@@ -3,7 +3,8 @@
 - ``GET /health``            基础状态（保持兼容：status / db / cpp_ext / pool）
 - ``GET /health/detail``     可观测详情：DB·C++ 扩展·Ollama 可达性与模型清单·
                              embedding 模型就绪·向量库类型与条数·
-                             知识库文档/分块数·当前检索模式（vector/keyword）与降级原因
+                             知识库文档/分块数·当前检索模式（vector/keyword）与降级原因·
+                             **抽取模型（C36：配置/隔离是否生效/模型是否已注册）**
 - ``GET /health/selfcheck``  一键自检：embed + 检索 + 生成，逐项 pass/fail
 """
 
@@ -19,6 +20,7 @@ from app.core.config import settings
 from app.db import cpp_bridge
 from app.services import rag
 from app.services.embedder import embedder
+from app.services.extract_model import get_client as get_extract_client
 from app.services.vector_store import get_vector_store
 
 router = APIRouter()
@@ -62,6 +64,39 @@ async def _ollama_state() -> dict:
         "embed_model": settings.rag_embed_model,
         "embed_model_ready": settings.rag_embed_model.split(":")[0] in base_names,
     }
+
+
+async def _extract_state() -> dict:
+    """抽取模型状态（C36）：配置 + **隔离是否真的生效** + 模型是否已注册。
+
+    `probe()` 是**会发请求**的预检（同 `_ollama_state` 一样是只读 GET），
+    所以只在静态可用时才发；`none` / 配置不全的情况下直接给出原因，不发任何请求。
+
+    为什么要有这一段：抽取与对话的配置是两套，运维只设了 `XJT_EXTRACT_MODEL` 却以为
+    "已经隔离了"是最容易发生的误判 —— 这里把 `isolation` 的结论直接摆出来。
+    """
+    client = get_extract_client()
+    ok, why = client.availability()
+    state = {
+        "backend": client.backend,
+        "base_url": client.http_url if client.backend == "http" else client.base_url,
+        "model": client.model,
+        "max_chars": client.max_chars,
+        "max_concurrency": client.max_concurrency,
+        "available": ok,
+        "reason": why,
+        "ready": False,
+        "detail": "",
+        "isolation": client.isolation_report(),
+    }
+    if not ok:
+        return state
+    if client.backend != "ollama":
+        state.update(ready=True, detail="http 模式：可用性只由配置决定，不做模型注册预检")
+        return state
+    ready, detail = await client.probe()
+    state["ready"], state["detail"] = ready, detail
+    return state
 
 
 @router.get("/health/detail")
@@ -118,6 +153,7 @@ async def health_detail():
         "retrieval_mode": retrieval_mode,
         "degrade_reason": degrade_reason,
         "celery": celery_status(),
+        "extract": await _extract_state(),
     }
 
 

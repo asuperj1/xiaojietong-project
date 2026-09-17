@@ -5,8 +5,8 @@
 不经过 `httpx` 的传输层，`trust_env` 之类的行为根本不会被触发，
 用例会"绿得没有意义"。
 
-（`tests/test_asr_server.py` 里有一份等价的内联实现，随 PR #115 提交；
-待其合并后可统一到本模块，此处先避免改动未合并分支上的文件。）
+（`tests/test_asr_server.py`（PR #115，**尚未合并**）里有一份等价的内联实现 `_live_server`；
+#115 合并后统一到本模块，此处先避免改动未合并分支上的文件。）
 """
 from __future__ import annotations
 
@@ -41,8 +41,18 @@ def live_server(app):
         thread.join(timeout=10)
 
 
-def free_port() -> int:
-    """拿一个刚被释放的端口（用于"服务没起"的用例：连它必然失败）。"""
+@contextlib.contextmanager
+def free_port():
+    """占用一个**没有任何服务在监听**的端口（用于"服务没起"的用例）。
+
+    用法：`with free_port() as base_url:` —— 退出时才释放。
+
+    为什么不直接返回一个 int：原实现（bind 拿到端口后立刻 close）有 TOCTOU 窗口 ——
+    端口被释放到用例真去连之间，别的进程（或并行跑的另一个用例）可能抢走它，
+    于是用例连上了别人的服务（拿到 404 → 退化成 `ExtractFailure`）而失败。
+    这里让 socket **保持 bind 但不 listen**：连接会得到 RST（等价于"服务没起"），
+    而端口在占用期间不会被抢走。
+    """
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+        yield f"http://127.0.0.1:{s.getsockname()[1]}"

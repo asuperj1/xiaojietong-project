@@ -26,6 +26,18 @@ XJT_EXTRACT_MODEL=xjt-extract-1.5b           # 抽取专用小模型
 
 留空则回落到 `ollama_base_url` / `ollama_model` —— **默认零行为变化**。
 
+⚠️ **"换了模型名"不等于"隔离了"**：只要 `XJT_EXTRACT_BASE_URL` 还指向同一台 Ollama，
+两个模型就共享同一个进程的显存与请求队列（Ollama 按需 load/evict，两个模型同时驻留时
+显存照样互相挤）。真正的隔离是**换地址**（另一台机器 / 另一个容器）。默认值（留空 = 沿用
+`ollama_*`）就是"隔离未生效"，`isolation_report()` 会如实说出来，`/health/detail` 照实显示。
+
+**并发闸门**：抽取常被批量调用（批量导入、定时任务），`XJT_EXTRACT_MAX_CONCURRENCY`
+（默认 2；0 = 不限）限制同时在飞的抽取请求数，避免批量抽取把对话模型与显存挤掉；
+`XJT_EXTRACT_KEEP_ALIVE`（默认空 = Ollama 默认）可控制抽取模型驻留时长。
+
+**连接池复用**：出站 `AsyncClient` 按"是否绕代理"缓存复用（回环要 `trust_env=False`、
+外网要保持 httpx 默认，两者不能共用一个客户端），不会每次都重建连接。
+
 ## 失败语义：不静默降级
 
 对话可以在模型不可用时回一句占位文案（用户看得见），**抽取不行**：编不出实体就得说编不出。
@@ -41,6 +53,8 @@ XJT_EXTRACT_MODEL=xjt-extract-1.5b           # 抽取专用小模型
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from dataclasses import dataclass, field
 from typing import Optional
@@ -54,6 +68,34 @@ __all__ = [
     "ExtractFailure", "ExtractModelClient", "ExtractResult", "ExtractUnavailable",
     "extract_json", "get_client", "reset_client", "set_client",
 ]
+
+
+def _first_text(*candidates: Optional[str]) -> str:
+    """取第一个**非空白**候选值。
+
+    配置里写了个空格（`XJT_EXTRACT_MODEL=" "`）不该被当成"已配置"：
+    它既不回落、又会变成一个非法模型名 —— 所以先 `strip()` 再判空。
+    """
+    for c in candidates:
+        s = (c or "").strip()
+        if s:
+            return s
+    return ""
+
+
+def _model_names(payload: object) -> list[str]:
+    """从 Ollama `/api/tags` 的响应里取模型名；`{"name": null}` / 非对象条目一律跳过。
+
+    别写成 `str(m.get("name", ""))` —— `dict.get` 的默认值只在**键不存在**时生效，
+    键存在但值为 `null` 时会得到字面量 `"None"`，污染错误信息。
+    """
+    models = payload.get("models") if isinstance(payload, dict) else None
+    names: list[str] = []
+    for m in models or []:
+        name = m.get("name") if isinstance(m, dict) else None
+        if isinstance(name, str) and name.strip():
+            names.append(name.strip())
+    return names
 
 
 class ExtractUnavailable(RuntimeError):
@@ -122,18 +164,57 @@ class ExtractModelClient:
         http_url: str = "",
         api_key: str = "",
         max_chars: Optional[int] = None,
+        max_concurrency: Optional[int] = None,
+        keep_alive: str = "",
     ) -> None:
-        # 参数留空 → 取配置；显式传入则优先（单测与多实例复用都靠这个）
-        self.backend = (backend or getattr(settings, "extract_backend", "ollama") or "ollama").strip().lower()
-        self.base_url = (base_url or getattr(settings, "extract_base_url", "")
-                         or settings.ollama_base_url or "").rstrip("/")
-        self.model = model or getattr(settings, "extract_model", "") or settings.ollama_model
+        # 参数留空（或只写了空格）→ 取配置；显式传入则优先（单测与多实例复用都靠这个）
+        self.backend = (_first_text(backend, getattr(settings, "extract_backend", ""))
+                        or "ollama").lower()
+        self.base_url = _first_text(base_url, getattr(settings, "extract_base_url", ""),
+                                    settings.ollama_base_url).rstrip("/")
+        self.model = _first_text(model, getattr(settings, "extract_model", ""),
+                                 settings.ollama_model)
         self.timeout = float(timeout if timeout is not None
                              else getattr(settings, "extract_timeout", 60.0))
-        self.http_url = (http_url or getattr(settings, "extract_http_url", "") or "").strip()
-        self.api_key = api_key or getattr(settings, "extract_http_api_key", "")
+        self.http_url = _first_text(http_url, getattr(settings, "extract_http_url", ""))
+        self.api_key = _first_text(api_key, getattr(settings, "extract_http_api_key", ""))
         self.max_chars = int(max_chars if max_chars is not None
                              else getattr(settings, "extract_max_chars", 4000))
+        self.max_concurrency = int(max_concurrency if max_concurrency is not None
+                                   else getattr(settings, "extract_max_concurrency", 2))
+        self.keep_alive = _first_text(keep_alive, getattr(settings, "extract_keep_alive", ""))
+        # 惰性构造（`asyncio.Semaphore` / `AsyncClient` 都要求有事件循环时才安全创建）
+        self._sem: Optional[asyncio.Semaphore] = None
+        self._clients: dict[bool, httpx.AsyncClient] = {}
+
+    # ------------------------------------------------------------ 隔离 ----
+
+    def isolation_report(self) -> dict:
+        """如实报告"隔离到底有没有生效"（给运维与 `/health/detail` 看）。
+
+        本模块标题里的"隔离"靠配置实现，因此默认值（留空 = 沿用 `ollama_*`）下它是**零**。
+        这里不粉饰：`isolated` 只在**换了地址**（另一台机器 / 另一个容器）时为真 ——
+        "只换了模型名但同地址"仍然共享显存与请求队列，所以照样算未隔离。
+        """
+        chat_url = (settings.ollama_base_url or "").rstrip("/")
+        chat_model = settings.ollama_model
+        same_host = self.base_url.rstrip("/") == chat_url
+        same_model = self.model == chat_model
+        if not same_host:
+            note = "抽取指向另一台机器：请求队列与显存独立"
+        elif not same_model:
+            note = ("抽取换了模型，但仍在同一台 Ollama 上：两个模型共享显存与队列"
+                    "（Ollama 按需 load/evict）；要真隔离需把 XJT_EXTRACT_BASE_URL 指向另一台机器")
+        else:
+            note = "抽取与对话同地址同模型 —— 隔离未生效（留空即为此默认值）"
+        return {
+            "isolated": not same_host,
+            "same_host": same_host,
+            "same_model": same_model,
+            "chat_base_url": chat_url,
+            "chat_model": chat_model,
+            "note": note,
+        }
 
     # ------------------------------------------------------------ 可用性 ----
 
@@ -165,26 +246,83 @@ class ExtractModelClient:
             return ok, why
         url = f"{self.base_url}/api/tags"
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0),
-                                         **proxy_bypass_kwargs(url)) as client:
-                resp = await client.get(url)
+            client = self._http_client(url)
+            resp = await client.get(url, timeout=httpx.Timeout(5.0))
         except Exception as exc:  # noqa: BLE001 - 连不上属于不可用
             return False, f"无法连接 {url}：{type(exc).__name__}: {exc}"
         if resp.status_code != 200:
             return False, f"{url} 返回 HTTP {resp.status_code}"
         try:
-            names = [str(m.get("name", "")) for m in (resp.json().get("models") or [])]
+            names = _model_names(resp.json())
         except Exception as exc:  # noqa: BLE001
             return False, f"模型清单不是合法 JSON：{type(exc).__name__}: {exc}"
-        if self.model not in names:
+        if not self._is_registered(names):
             return False, (f"Ollama 在跑，但没有模型 {self.model!r}（已有：{names or '空'}）。"
                            f"见 ai/finetune/register_model.py 与 docs/模型分发与部署.md")
         return True, ""
 
+    def _is_registered(self, names: list[str]) -> bool:
+        """模型清单是否包含本次要用的模型。
+
+        Ollama 的清单带 tag（`xjt-3b:latest`），而配置里通常写不带 tag 的名字；
+        Ollama 收到 `model="xjt-3b"` 时会按 `xjt-3b:latest` 解析，因此：
+
+        - 配置**不带** tag → 比 base name（与 `routers/health.py` 同口径）
+        - 配置**带** tag → 必须精确命中（`xjt-3b:v2` 不能被 `xjt-3b:latest` 顶替）
+        """
+        if self.model in names:
+            return True
+        if ":" in self.model:
+            return False
+        return any(n.split(":")[0] == self.model for n in names)
+
+    # ------------------------------------------------------------ 出站 ----
+
+    def _http_client(self, url: str) -> httpx.AsyncClient:
+        """按"是否绕过代理"缓存 `AsyncClient`，复用连接池。
+
+        `trust_env` 是**客户端级**参数（回环必须 False、外网要保持 httpx 默认），
+        所以两种情形各缓存一个客户端，不能混用一个；超时按请求传入（`timeout=`），
+        因此同一个池可以服务不同超时的调用。
+        """
+        key = "trust_env" not in proxy_bypass_kwargs(url)
+        client = self._clients.get(key)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(**proxy_bypass_kwargs(url))
+            self._clients[key] = client
+        return client
+
+    async def aclose(self) -> None:
+        """关掉内部复用的连接池（长驻进程一般不需要；测试与优雅退出可用）。"""
+        for client in list(self._clients.values()):
+            with contextlib.suppress(Exception):
+                await client.aclose()
+        self._clients.clear()
+
+    @contextlib.asynccontextmanager
+    async def _concurrency_gate(self):
+        """并发闸门：限制同时在飞的抽取请求数（`max_concurrency <= 0` 时不限）。
+
+        抽取是**批量**负载（批量导入 / 定时任务），没有闸门时几十个请求会同时压向同一个
+        Ollama，把对话模型与显存挤掉。
+        """
+        if self.max_concurrency <= 0:
+            yield
+            return
+        if self._sem is None:
+            self._sem = asyncio.Semaphore(self.max_concurrency)
+        async with self._sem:
+            yield
+
     # ------------------------------------------------------------ 抽取 ----
 
     def _prepare(self, text: str) -> tuple[str, bool]:
-        """截断超长输入。**截断会标记出来**（`truncated`），不静默丢内容。"""
+        """截断超长输入。**截断会标记出来**（`truncated`），不静默丢内容。
+
+        ⚠️ 这是**按字符**的通用护栏，会从任意位置切断 —— 所以调用方**不能**把"整份 JSON
+        当正文"直接喂进来（会得到非法 JSON）。需要保证结构完整时，请先在调用方裁剪
+        （见 `services/secondhand_ai.py::_fit_payload`）。
+        """
         body = text or ""
         if self.max_chars > 0 and len(body) > self.max_chars:
             return body[: self.max_chars], True
@@ -215,11 +353,12 @@ class ExtractModelClient:
         if not system:
             raise ExtractFailure("未提供抽取指令（instruction）")
 
-        if self.backend == "http":
-            return await self._extract_via_http(body, system, schema_hint, truncated,
-                                                timeout if timeout is not None else self.timeout)
-        return await self._extract_via_ollama(body, system, temperature, truncated,
-                                              timeout if timeout is not None else self.timeout)
+        async with self._concurrency_gate():
+            if self.backend == "http":
+                return await self._extract_via_http(body, system, schema_hint, truncated,
+                                                    timeout if timeout is not None else self.timeout)
+            return await self._extract_via_ollama(body, system, temperature, truncated,
+                                                  timeout if timeout is not None else self.timeout)
 
     # ------------------------------------------------- 后端：Ollama ----
 
@@ -236,10 +375,12 @@ class ExtractModelClient:
             "format": "json",              # 要 JSON 就别让模型自由发挥
             "options": {"temperature": temperature},
         }
+        if self.keep_alive:
+            # 控制抽取模型驻留时长（如 "5m" / 0 = 用完即卸），显存紧的部署靠它
+            payload["keep_alive"] = self.keep_alive
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout),
-                                         **proxy_bypass_kwargs(url)) as client:
-                resp = await client.post(url, json=payload)
+            resp = await self._http_client(url).post(url, json=payload,
+                                                     timeout=httpx.Timeout(timeout))
         except ExtractUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001 - 连不上属于"不可用"
@@ -275,14 +416,16 @@ class ExtractModelClient:
 
         请求 `POST` JSON：`{"text": ..., "instruction": ..., "schema": ...}`
         响应 JSON **对象**：顶层就是抽取结果；或 `{"data": {...}}` 包一层都接受。
+
+        `data` 存在但**不是对象** → `ExtractFailure`：那说明响应不符合契约，
+        把整个信封当结果返回会让调用方拿到混着传输层字段的噪声（本模块不干这种事）。
         """
         url = self.http_url
         payload = {"text": body, "instruction": system, "schema": schema_hint}
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout),
-                                         **proxy_bypass_kwargs(url)) as client:
-                resp = await client.post(url, json=payload, headers=headers)
+            resp = await self._http_client(url).post(url, json=payload, headers=headers,
+                                                     timeout=httpx.Timeout(timeout))
         except ExtractUnavailable:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -303,6 +446,12 @@ class ExtractModelClient:
             raise ExtractFailure("抽取服务返回的 JSON 顶层不是对象")
 
         inner = raw.get("data")
+        if "data" in raw and not isinstance(inner, dict):
+            kind = type(inner).__name__
+            raise ExtractFailure(
+                f"抽取服务返回的 data 字段不是对象（是 {kind}）"
+                f'：契约要求 {{"data": {{...}}}}；原文前 200 字：{str(raw)[:200]}'
+            )
         data = inner if isinstance(inner, dict) else raw
         return ExtractResult(data=data, model=str(raw.get("model") or self.model),
                              backend="http", truncated=truncated, raw=raw)

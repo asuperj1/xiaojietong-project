@@ -58,12 +58,21 @@ uvicorn app.main:app --reload --port 8000
 | 配置 | 作用 |
 |---|---|
 | `XJT_EXTRACT_BACKEND` | `ollama`（默认）/ `http`（自建抽取服务）/ `none`（明确关闭） |
-| `XJT_EXTRACT_BASE_URL` | 留空沿用 `ollama_base_url`；**可指向另一台 Ollama** |
+| `XJT_EXTRACT_BASE_URL` | 留空沿用 `ollama_base_url`；**指向另一台 Ollama 才是真隔离** |
 | `XJT_EXTRACT_MODEL` | 留空沿用 `ollama_model`；**可换抽取专用小模型** |
 | `XJT_EXTRACT_HTTP_URL` | `http` 模式的服务地址（契约见下） |
+| `XJT_EXTRACT_MAX_CHARS` | 输入截断上限（默认 4000，按字符）；截断会标记，不静默 |
+| `XJT_EXTRACT_MAX_CONCURRENCY` | 同时在飞的抽取请求上限（默认 2；`0` = 不限） |
+| `XJT_EXTRACT_KEEP_ALIVE` | 传给 Ollama 的 `keep_alive`（如 `5m`、`0` = 用完即卸）；空 = Ollama 默认 |
 
 隔离的意义：抽取是「批量、短输出、要确定性」的负载，与对话（长输出、流式、
 占并发）放在同一模型/同一实例上会互相挤显存与队列，且换抽取模型不该影响线上对话。
+
+> ⚠️ **「换了模型名」不等于「隔离了」**：只要 `XJT_EXTRACT_BASE_URL` 还指向同一台 Ollama，
+> 两个模型就共享同一个进程的显存与请求队列（Ollama 按需 load/evict）。
+> 真隔离是**换地址**；默认值（留空 = 沿用 `ollama_*`）就是「隔离未生效」。
+> `/health/detail` 的 `extract.isolation` 会如实报告（`isolated` 仅在换地址时为 `true`）。
+> 同机部署想缓解挤占，先用 `XJT_EXTRACT_MAX_CONCURRENCY` + `XJT_EXTRACT_KEEP_ALIVE`。
 
 ```python
 from app.services.extract_model import extract_json, ExtractFailure, ExtractUnavailable
@@ -80,12 +89,21 @@ result.truncated     # 输入被截断过吗（不静默丢内容）
 并在响应里把 `source` 标出来，降级对用户可见。
 
 `http` 模式契约：`POST` JSON `{"text", "instruction", "schema"}` → 响应 JSON **对象**
-（顶层即结果，或 `{"data": {...}}` 包一层）。回环地址会自动绕过系统代理
+（顶层即结果，或 `{"data": {...}}` 包一层；`data` 存在但**不是对象** → `ExtractFailure`，
+不把整个信封当结果返回）。回环地址会自动绕过系统代理
 （见 `app/core/net.py`：Windows 注册表代理会把 `127.0.0.1:11434` 也接走并回 502）。
 
-> 验证：`tests/test_extract_model.py`（35 例，不需 DB、不需真 Ollama）真起 uvicorn 桩服务走真 HTTP，
+**输入过长怎么办**：`extract_json` 的 `XJT_EXTRACT_MAX_CHARS` 是**按字符**的通用护栏，
+会从任意位置切断 —— 所以「整份 JSON 当正文」的调用方（`secondhand_ai`）必须先在**调用方**
+裁掉无上限字段（备注/标题），保证送进模型的始终是合法 JSON，并把 `truncated` 透出去
+（`POST /secondhand/items/ai-describe` 的响应字段 `model_truncated`）。
+
+**可观测**：`GET /health/detail` 新增 `extract` 段（backend/地址/模型/`available`/`reason`/
+`ready`/`isolation`/`max_concurrency`），运维不必去猜「抽取到底通没通、隔离到底生效没」。
+
+> 验证：`tests/test_extract_model.py`（56 例，不需 DB、不需真 Ollama）真起 uvicorn 桩服务走真 HTTP，
 > 并带**反向对照**：对话模型换成另一个时抽取请求里必须出现抽取模型名；非回环地址不得关闭代理；
-> 坏输出必须报错而不能返回 `{}`。
+> 坏输出必须报错而不能返回 `{}`；`max_concurrency=0` 时不得打闸；不超限时不得裁剪。
 
 ## 冒烟测试
 

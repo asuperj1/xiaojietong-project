@@ -287,8 +287,11 @@ event: error    data: {"code":5002,"message":"模型不可用"}
   "suggested_price":22.5, "price_min":18.0, "price_max":27.0,
   "reason":"库内同类 3 件均价 25.0 元，按成色 9/10 折算",
   "category":"教材", "condition_level":9, "sample_count":3, "avg_price":25.0,
-  "source":"model" }
+  "source":"model", "model_truncated":false }
 ```
+
+> v1.24 起新增 `model_truncated`：模型侧输入过长时**先裁备注/标题**（保证送进模型的始终是
+> 完整 JSON），裁过就在这里标 `true`（模型没看到全文）；`source` 非 `model`（降级路径）时同样存在。
 > `source`：`model`（模型生成）/ `stat`（库内同类统计兜底）/ `fallback`（无样本，分类通用区间）。
 > 模型不可用或输出异常时自动降级为模板文案 + 统计定价，不阻塞发布；
 > 模型建议价超出统计区间 [0.5×min, 1.5×max] 时回退统计值（价格护栏）。
@@ -864,3 +867,4 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.22 | 2026-09-16 | **B24 显式新建会话**：新增 `POST /chat/conversations`（请求体可省，默认标题「新对话」，返回 `conversation_id` 供前端「点新建」即刻使用；**空会话可直接对话**，无需先发消息）与 `PATCH /chat/conversations/{id}`（重命名；空/超长标题 `1001`、越权与不存在**同码 `1001`**）；`/chat/send` 与 `/chat/conversations/{id}/messages` 的归属校验收敛为 `_owned_conversation()` 单一实现（原两处重复 SQL）；**置顶未做**（表无 `is_pinned`/`sort` 列，需 DDL 批次） |
 | v1.23 | 2026-09-16 | **B32 语音转文字**：新增 `POST /voice/transcribe`（wav/mp3/m4a/ogg/webm/amr，**按文件头魔数判定类型**，不信 `Content-Type`）；ASR 后端**配置驱动可插拔**（`XJT_ASR_BACKEND` = `none` / `http` / `whisper`，whisper 为**可选依赖、不进 requirements**）；**失败一律明确回码不静默**——格式/大小/时长 `1001`、服务不可用 `5002`、转写失败 `5003`（本次新增）；单文件 ≤2MB、时长 3~10 秒（WAV 精确校验，其它容器按大小兜底） |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
+| v1.24 | 2026-09-17 | **C36 抽取服务化（统一入口 + 与对话模型隔离）**：新增 `services/extract_model.py`（`XJT_EXTRACT_BACKEND` = `ollama`/`http`/`none`，`BASE_URL`/`MODEL`/`MAX_CHARS`/`MAX_CONCURRENCY`/`KEEP_ALIVE` 独立配置；失败**不静默降级**——抛 `ExtractUnavailable`/`ExtractFailure`，绝不返回 `{}`）；`secondhand_ai` 改接统一入口，`POST /secondhand/items/ai-describe` 新增 `model_truncated`（输入过长时先裁备注/标题，保证送进模型的是完整 JSON）；新增 `core/net.py`（回环地址绕过系统代理，修复 Windows 注册表代理导致的 502）；`GET /health/detail` 新增 `extract` 段（配置 / `available` / `ready` / **`isolation`** —— 只换模型不换地址**不算**隔离） |
