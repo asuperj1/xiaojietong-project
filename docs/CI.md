@@ -1,22 +1,32 @@
 # CI 与回归门禁（B34）
 
-> **2026-09-17 修订（fix-forward，不撤回）**：本工作流首次合入后**连续 22 次运行全红**，
-> 失败全在「编译 jt_db C++ 扩展」这一步（`exit code 2`），其后的**导入建库脚本 / 门禁 /
-> 上传报告三步全部 skipped** —— 也就是说**门禁脚本一次都没真正执行过**，这套门禁此前
-> **从未自证**。根因与修法（（要点已全部内联于上，**不依赖外部文件** —— 那份意见书当时只在另一个 PR 里，若本文件先合入 dev 会指向不存在的路径。）
+> **2026-09-17 修订（真因已由 CI 原始日志定位，勿再猜）**
 >
-> 1. **缺 `python3-dev`**：CMake 的 `find_package(Python ... Development)` 要求「头文件 + 库」，
->    而 `actions/setup-python` 只给头文件、不给 `libpython*.so`，装了它并不能替代 `python3-dev`；
-> 2. **CMake 侧要求过宽**：我们编的是**扩展模块**，不需要 Embed ⇒ 已收窄为
->    `Development.Module`，从根上不再依赖 `libpython`；
-> 3. **触发范围过宽**：`on.push` 原来含 `feat/**` / `fix/**`，每推一次就全量跑两遍 ⇒
->    已收敛为 `dev` / `main`，分支上的验证交给 `pull_request`；
-> 4. **编译步骤不可诊断**：原来只给一个退出码 ⇒ 现在失败时会打印 `CMakeError.log`
->    与末尾 80 行构建日志。
+> **真因**：`db/cpp_driver/CMakeLists.txt` 的静态库 `jt_db_core` **缺 PIC**。链接
+> `jt_db.so` 时 ld 报：
+> `relocation R_X86_64_TPOFF32 against '__tls_guard' can not be used when making a
+> shared object; recompile with -fPIC`
+> 来源是 `src/db_session.cpp:9` 的 `thread_local std::shared_ptr<MysqlConnection>
+> DbSession::txn_;` —— 带动态初始化的 thread_local 在 gcc 下会生成 TLS 守卫
+> `__tls_guard`，该重定位在共享库 / PIE 中非法。**MSVC 无 PIC 概念，所以本地
+> （Windows）永远编得过** —— 这就是「本地绿、CI 红」的全部原因。
+> 修法：`set_target_properties(jt_db_core PROPERTIES POSITION_INDEPENDENT_CODE ON)`，
+> 且必须设在**静态库**上（`jt_db_test` 也链它，而 Ubuntu 的 gcc 默认生成 PIE）。
 >
-> ⚠️ 教训（写给下一个改 CI 的人）：**CI 类改动必须先在作者分支上跑绿、把运行链接贴进 PR
-> 再请人合**。CI 的独特之处是「它能自己证明自己」，而这次是先合进 dev 才第一次运行，
-> 于是 22 次全红 —— 既没起到门禁作用，也把「红灯」稀释成了噪音。
+> **以下是顺带加固，均非病因**（原始日志已逐条证伪；保留是因为它们本身更正确）：
+> 1. 系统依赖补 `python3-dev`、CMake 收窄为 `Development.Module` —— 原始日志显示连最宽的
+>    `Development`（含 Embed）在 runner 上都被标记为 found，配置期本来就是成功的；
+> 2. `set(PYBIND11_FINDPYTHON ON)` —— 对「只编模块」是更正确的写法，但同样不是病因；
+> 3. 触发范围收敛（`on.push` 只留 dev/main）—— 省额度、降噪音，与失败无关；
+> 4. **编译/链接失败可诊断** —— 这条是前三轮里**唯一真正推动问题的改动**。原步骤只给一个
+>    `exit code 2`，22 次全红都没人看到 ld 那一行；拆成「体检 / configure / 编译」三步后，
+>    第一次运行就把失败位置钉到了链接期。**失败信息本身就是给别人看的文档。**
+>
+> ⚠️ 教训（写给下一个改 CI 的人）：
+> - **CI 类改动必须先在作者分支上跑绿、把运行链接贴进 PR 再请人合** —— 这次先合进 dev
+>   才第一次运行，于是 22 次全红，没保护到任何人，还把「红灯」稀释成了噪音；
+> - **更要紧的**：那 22 次里没有任何人去看失败日志，前三轮的「高概率根因」全是猜的，
+>   直到有人把日志拉下来才定住。**持续红灯时先拉日志，别先猜。**
 
 > 目标：**宁可红灯，不要假绿**。
 > 本仓库的集成用例在环境缺失时会 `pytest.skip`（见 `backend/tests/conftest.py`），

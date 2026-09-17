@@ -132,7 +132,7 @@ jobs:
         with:
           name: ci-gate-g1
           path: ci_gate_g1.json
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # ==================================================== 全量门禁（可选）===
   full-gate:
@@ -154,4 +154,4 @@ jobs:
         with:
           name: ci-gate-full
           path: ci_gate_report.json
-          if-no-files-found: warn
+          if-no-files-found: error
