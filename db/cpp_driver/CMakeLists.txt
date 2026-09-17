@@ -38,6 +38,13 @@ endif()
 # "missing: Development"，编译步骤必失败。
 find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
 
+# ⚠️ 必须在 find_package(pybind11) **之前**：让 pybind11 走 Modern FindPython
+# （只要 Development.Module）。否则 pip 装的 pybind11 会走经典模式，自己去做
+# find_package(PythonLibs ... REQUIRED) —— 那**仍然要求 libpython*.so**，而 CI 上
+# actions/setup-python 只提供头文件、不提供共享库：这就是"我们收窄了组件、却还是挂"的原因
+# （收窄的是我们的请求，不是 pybind11 的请求）。
+set(PYBIND11_FINDPYTHON ON)
+
 find_package(pybind11 CONFIG QUIET)
 if(NOT pybind11_FOUND)
     # 尝试通过 Python 自身定位 pip 安装的 pybind11 cmake 目录

@@ -97,23 +97,19 @@ jobs:
           pip install -r backend/requirements.txt
           python -m pip install pybind11
 
-      - name: 编译 jt_db C++ 扩展
+      - name: 环境体检（10 秒，能省掉好几轮猜）
         run: |
-          set -o pipefail
-          # 头尾都留：失败信息可能在**开头**（build.sh 的前置守卫就是开头几行），
-          # 只 tail 会把它截掉 —— 这正是上一轮"只看到 exit code"的原因之一。
-          if ! bash db/cpp_driver/scripts/build.sh 2>&1 | tee /tmp/xjt_build.log; then
-            echo "::group::构建日志（末尾 120 行）"
-            tail -120 /tmp/xjt_build.log
-            echo "::endgroup::"
-            echo "::group::构建日志（开头 40 行 —— 前置守卫提示在这里）"
-            head -40 /tmp/xjt_build.log
-            echo "::endgroup::"
-            echo "::group::CMakeError.log"
-            cat db/cpp_driver/build/CMakeFiles/CMakeError.log 2>/dev/null || echo "（无 CMakeError.log）"
-            echo "::endgroup::"
-            exit 1
-          fi
+          cmake --version | head -1
+          python -c "import sysconfig; print('python include:', sysconfig.get_paths()['include'])"
+          echo "pybind11 cmakedir: $(python -m pybind11 --cmakedir 2>&1)"
+          ls -l /usr/include/mysql/mysql.h 2>/dev/null || echo "mysql.h 缺失"
+          python -c "import glob,os,sysconfig; d=sysconfig.get_config_var('LIBDIR') or ''; print('LIBDIR:', d); print('libpython*:', sorted(os.path.basename(p) for p in glob.glob(os.path.join(d,'libpython*'))) or '（无 —— pybind11 经典模式会因此挂）')"
+
+      - name: CMake configure（只配置，不编译 —— 挂在这里就是配置期问题）
+        run: cmake -B db/cpp_driver/build -S db/cpp_driver -DCMAKE_BUILD_TYPE=Release
+
+      - name: 编译 jt_db（configure 已过，这里挂就是编译期问题）
+        run: cmake --build db/cpp_driver/build --config Release --target jt_db
 
       - name: 导入建库脚本与种子数据
         run: |
