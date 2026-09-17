@@ -38,6 +38,23 @@
  *
  * 退出码：0 = 当前实现的**行为契约全部满足**；1 = 有场景不满足（缺陷仍在 / 行为退化）。
  *
+ * v3（PR #109 评审 P2-1，2026-09-16）
+ * --------------------------------
+ * 补 Android 阈值**边界对** S4b（`Android 9` → 期望 true）/ S4c（`Android 8.9` → 期望 false）：
+ * v2 的 Android 采样点只有 `Android 12` 与 `Android 8.1.0`，导致 `glass.js` 的
+ * 「Android ≥ 9」规则**边界没被锁住** —— 独立评审实测把阈值改成 10 / 11 / 12 时脚本仍 exit 0。
+ *
+ * ⚠️ 验证范围（PR #109 评审 P2-2 补写；引用本脚本时请按此口径，不要外推）
+ * --------------------------------------------------------------------
+ *   ✅ **只**验证 `miniprogram/utils/glass.js::detectGlass()` 的**返回值契约**
+ *      （场景 S1~S9 + 边界对 S4b/S4c + 反向对照 R1~R3）。
+ *   ❌ **不**读取、**不**校验 `miniprogram/styles/glass.wxss` 与 `miniprogram/styles/tokens.wxss`：
+ *      实测改动这两个 WXSS 后本脚本**仍然 exit 0**。
+ *   ⇒ F10 的三个产物里，目前只有 `utils/glass.js` 有自动化校验；两个 WXSS
+ *     （令牌值、`.xj-glass` 声明、`.is-glass-fallback` / `.is-glass-reduced` 三级降级）
+ *     **仍属人工检查范围**：需目视 + 真机 / 开发者工具确认。
+ *   ⇒ 不要把「本脚本 PASS」读成「F10 整体已被验证」。
+ *
  * 文档依据：https://developers.weixin.qq.com/miniprogram/dev/api/base/system/wx.getAppBaseInfo.html
  */
 
@@ -107,6 +124,10 @@ const SYS_INFO_DEVTOOL_WIN = { platform: 'windows', system: 'Windows 10 x64', mo
 const DEVICE_INFO_IOS = { brand: 'apple', model: 'iPhone 13', platform: 'ios', system: 'iOS 15.4' }
 const DEVICE_INFO_ANDROID12 = { brand: 'google', model: 'PIXEL 5', platform: 'android', system: 'Android 12' }
 const DEVICE_INFO_ANDROID8 = { brand: 'xiaomi', model: 'MI 5', platform: 'android', system: 'Android 8.1.0' }
+/** 阈值下界：glass.js 规则是「Android ≥ 9」，9 本身必须为 true */
+const DEVICE_INFO_ANDROID9 = { brand: 'google', model: 'PIXEL 3', platform: 'android', system: 'Android 9' }
+/** 紧邻下界**之下**的合成版本号（8.9 非真实版本），只用于把阈值从下方夹死 */
+const DEVICE_INFO_ANDROID89 = { brand: 'synthetic', model: 'SYNTHETIC', platform: 'android', system: 'Android 8.9' }
 
 function loadModule(file) {
   delete require.cache[require.resolve(file)]
@@ -185,6 +206,24 @@ check(
   run(REAL_FILE, baseLibNew(DEVICE_INFO_ANDROID8)),
   false,
   '反向对照：修复也不该“过度开启”低版本 Android'
+)
+
+// ⭐ S4b / S4c：Android 阈值**边界对** —— 锁死 glass.js 的「Android 系统版本 ≥ 9」规则。
+//   加这对场景的原因（PR #109 独立评审 P2-1）：原脚本的 Android 采样点只有
+//   `Android 12` 与 `Android 8.1.0` 两个，于是**任何落在 (8.1, 12] 的阈值都能蒙混过关** ——
+//   实测把 `>= 9` 改成 `>= 10 / 11 / 12` 时，脚本仍 exit 0（假绿）。
+//   边界对把规则夹死：下界含（9 → true）+ 下界之下（8.9 → false）。
+check(
+  'S4b Android 9（阈值下界，**含**）+ 基础库 3.17.3 → 必须 true',
+  run(REAL_FILE, baseLibNew(DEVICE_INFO_ANDROID9)),
+  true,
+  '⭐ 边界锁：阈值 9→10 / 11 / 12 会在此 FAIL（否则 Android 9/10/11 被静默降级、CI 仍全绿）'
+)
+check(
+  'S4c Android 8.9（阈值下界**之下**，合成版本号）+ 基础库 3.17.3 → 必须 false',
+  run(REAL_FILE, baseLibNew(DEVICE_INFO_ANDROID89)),
+  false,
+  '⭐ 边界锁：防止阈值被下调（如 9→8.5）后低版本 Android 被过度开启'
 )
 
 // ⭐ S5 / S6：**只有 getDeviceInfo 可用** —— 新写法的“唯一通路”。
@@ -276,6 +315,10 @@ console.log(
   `  被测实现：${isFixed ? '修复后写法（getDeviceInfo）' : '原始写法（getAppBaseInfo）'}`
 )
 console.log(`  通过 ${pass} 项 / 失败 ${fail} 项`)
+console.log('  ⚠️ 验证范围：**仅** `miniprogram/utils/glass.js` 的 `detectGlass()` 返回值契约。')
+console.log('     本脚本**不读** `styles/glass.wxss`、`styles/tokens.wxss` —— 改动这两个 WXSS')
+console.log('     后本脚本**仍会 exit 0**；WXSS 相关内容（令牌值 / `.xj-glass` 声明 / 三级降级）')
+console.log('     **仍属人工检查范围**（目视 + 真机 / 开发者工具），不要用本脚本的 PASS 代替。')
 console.log('  ⚠️ 本工具**不复现**视觉问题，只验证 `detectGlass()` 的返回值契约。')
 console.log('  ⚠️ 另需人工确认：`.is-glass-fallback` / `.is-glass-reduced` 是**祖先选择器**')
 console.log('     （`.is-glass-fallback .xj-glass`），而小程序无法给 `page` 加 class，')
