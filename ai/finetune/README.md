@@ -106,6 +106,12 @@ python ai/eval/extract_bench.py --backend ollama --model xjt-extract-3b \
    `system_prompt_sha1` 直接对比。
 2. **留出集一条都不许进训练**：C34 评测集 24 条 + C34/C35 示例池 16 条（构建器有两道闸）。
 3. **基准日与评测集一致**（2026-09-16），否则相对时间的期望值就不是一回事。
+4. **train/dev 按 `tags.kind` 分层切，并且分布要自检**：构建器算两个维度（`tags.kind` /
+   `category`）的占比差，每个类型两边都得有、占比差 ≤ `max(5pp, 2/|dev|)`，超限直接退出码 2。
+   实测：800 条规模最大差 **0.004**；40 条规模实测 0.094 且 **2 类没进 dev** ⇒ 被拦。
+   明细写进 `data/extract_dataset.json` 的 `split.by_kind` / `split.by_category`。
+   为什么不能只看 test loss：若切分按生成顺序而非分层，dev 的分布就可能与 train 不同，
+   “dev 指标”就不代表泛化（回归见 `ai/dataset/tests/test_extract_dataset_split.py`）。
 
 ### 达标线（比任务书更严，建议按这个验收）
 - ① 同 prompt（`zero-shot`）下微调模型 ≥ **0.4767**（C35 的"基座 + 优 prompt"）——

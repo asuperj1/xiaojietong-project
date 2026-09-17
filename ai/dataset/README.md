@@ -191,6 +191,21 @@ python -m pytest ai/dataset/tests -q      # 40 passed（C31: 15 + C32: 25），�
 
 第二道闸在 `ai/finetune/build_extract_dataset.py`：写盘前再查一次，覆盖超阈值则退出码 2、不写任何文件。
 
+### train/dev 怎么切（依据 + 自检）
+**依据**：`stratified_split()` 按 `tags["kind"]`（生成器的 12 类模板族）分层 ——
+同层内用带种子的洗牌，再按 `dev_ratio`（默认 0.2）切，最后两边各自再洗一次。
+**不是**按生成顺序切（否则 dev 可能整类缺失，早停选的 checkpoint 就不可信）。
+
+**自检**（`split_report()`，构建器写盘前的闸门）：两个维度（`tags.kind` / `expected.category`）
+分别比两边**占比**（条数天然差 `dev_ratio` 倍，不可直接比），两条硬判据：
+1. 每个类型**两边都得有**；
+2. 占比最大差 ≤ `max(5 个百分点, 2/|dev|)`（阈值按实测标定：800 条规模实测最大差 **0.004**，
+   40 条规模实测 0.094 且**有 2 类没进 dev** → 被第 1 条拦下）。
+
+超限 ⇒ 退出码 2、不写文件；通过则把 `split.by_kind` / `split.by_category` / `dev_share_max_gap`
+写进 `ai/finetune/data/extract_dataset.json`，**证据可核对**，不靠口头声明。
+回归见 `tests/test_extract_dataset_split.py`（7 例，含 3 处反向对照 + 3 组变异全被杀）。
+
 ### 用法
 ```bash
 python ai/dataset/synth_notice.py --count 800 --json ai/eval/out/synth_stats.json   # 离线自检 + 统计

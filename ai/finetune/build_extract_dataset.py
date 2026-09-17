@@ -94,6 +94,97 @@ def stratified_split(samples: list, dev_ratio: float, seed: int) -> tuple[list, 
     return train, dev
 
 
+#: 容差下限：5 个百分点。稳健规模（dev ≥ 40 条）下的实测最大占比差只有 0.3~2.5 个百分点
+#: （见下面的标定表），5 个百分点足够宽松，真出现分布跑偏必然超限。
+SPLIT_SHARE_TOLERANCE = 0.05
+
+#: 容差上限随 dev 变小而放宽：小样本下"占比"本身是离散的，误差量级约 `1/|dev|`。
+#: 实测标定（`--count` 从 40 到 2400，同 seed）：
+#: ```
+#:   count   40    60   100    200    400    800   1200   2400
+#:   最大占比差 0.094 0.099 0.022  0.025  0.006  0.004  0.003  0.001
+#: ```
+#: ⇒ `2/|dev|` 能包住小样本的离散误差（60 条时 2/14 = 0.143 > 0.099），
+#: 而在稳健规模下退化为 0.05 下限。**不要**把固定阈值调到能容下 60 条的大差距 ——
+#: 那样 800 条规模下真正跑偏（比如按生成顺序切）也拦不住。
+SPLIT_SHARE_TOLERANCE_SMALL_N = 2.0
+
+
+def split_share_tolerance(n_dev: int) -> float:
+    """占比差容差 = `max(5 个百分点, 2/|dev|)`（标定依据见上面两个常量）。"""
+    if n_dev <= 0:
+        return 1.0            # 空 dev：任何占比差都不算"通过"，交给 missing 判定去拒
+    return max(SPLIT_SHARE_TOLERANCE, SPLIT_SHARE_TOLERANCE_SMALL_N / n_dev)
+
+
+def split_report(train: list, dev: list) -> dict:
+    """train/dev 分布自检：**用数字回答"分层切分有没有真的生效"**。
+
+    回应 PR #119 审查 P3-2（登记 `AI-11`）：切分依据不能只写在注释里 ——
+    若切分按生成顺序而非按类型，dev 的分布就会与 train 不同，"dev 指标"也就不能代表泛化。
+    这里对 `tags["kind"]`（分层键）与 `expected["category"]` 两个维度分别统计两边**占比**，
+    并给出最大占比差。
+
+    为什么比"占比"而不是"条数"：条数天然差 `dev_ratio` 倍，直接比毫无意义；
+    占比差才回答"dev 的分布是否等于 train 的分布"。
+
+    两条硬判据：
+    1. **每个类型两边都得有**（某类只进了一边 ⇒ dev 根本量不到它，正是要防的事）；
+    2. 占比最大差 ≤ `split_share_tolerance(|dev|)`（标定依据见该函数上方的实测表）。
+    """
+    def _shares(rows: list, key) -> tuple[dict, int]:
+        counts: dict = {}
+        for r in rows:
+            counts[key(r)] = counts.get(key(r), 0) + 1
+        return counts, len(rows)
+
+    def _compare(key) -> tuple[dict, float, str]:
+        tr, n_tr = _shares(train, key)
+        dv, n_dv = _shares(dev, key)
+        rows = {}
+        worst_gap, worst_key = 0.0, ""
+        for k in sorted(set(tr) | set(dv)):
+            tr_share = (tr.get(k, 0) / n_tr) if n_tr else 0.0
+            dv_share = (dv.get(k, 0) / n_dv) if n_dv else 0.0
+            rows[str(k)] = {"train": tr.get(k, 0), "dev": dv.get(k, 0),
+                            "train_share": round(tr_share, 4), "dev_share": round(dv_share, 4)}
+            gap = abs(dv_share - tr_share)
+            if gap > worst_gap:
+                worst_gap, worst_key = gap, str(k)
+        return rows, worst_gap, worst_key
+
+    by_kind, gap_kind, worst_kind = _compare(lambda s: s.tags["kind"])
+    by_cat, gap_cat, worst_cat = _compare(lambda s: s.expected["category"])
+    missing_dev = [k for k, v in by_kind.items() if v["dev"] == 0]
+    missing_train = [k for k, v in by_kind.items() if v["train"] == 0]
+    max_gap = max(gap_kind, gap_cat)
+    tolerance = round(split_share_tolerance(len(dev)), 4)
+    return {
+        "tolerance": tolerance,
+        "by_kind": by_kind,
+        "by_category": by_cat,
+        "dev_share_max_gap": round(max_gap, 4),
+        "worst_dimension": "kind" if gap_kind >= gap_cat else "category",
+        "worst_key": worst_kind if gap_kind >= gap_cat else worst_cat,
+        "missing_in_dev": missing_dev,
+        "missing_in_train": missing_train,
+        "passed": not missing_dev and not missing_train and max_gap <= tolerance,
+    }
+
+
+def _display_path(path: Path) -> str:
+    """仓内路径显示成相对形式，仓外（如 `--out-dir $env:TEMP/...`）回退为绝对路径。
+
+    ⚠️ 旧写法直接 `relative_to(REPO_ROOT)`：`--out-dir` 指到仓外时会在**写完文件之后**
+    抛 `ValueError`（退出码 1 但数据已落盘）—— 而"输出到仓外"正是小 count 试跑时
+    避免覆盖正式产物的推荐用法，不该崩。
+    """
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def write_jsonl(rows: list[dict], path: Path) -> tuple[int, str]:
     """写 JSONL，返回 (行数, sha256)。
 
@@ -157,6 +248,22 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     train, dev = stratified_split(samples, args.dev_ratio, args.seed)
+    split = split_report(train, dev)
+    print(f"  切分：train {len(train)} / dev {len(dev)}（按 tags.kind 分层，seed={args.seed}）")
+    print(f"    分布自检：类目占比最大差 {split['dev_share_max_gap']}"
+          f"（最差 {split['worst_dimension']}={split['worst_key']}；阈值 {split['tolerance']}）")
+    if not split["passed"]:
+        if split["missing_in_dev"]:
+            print(f"❌ 这些类型没进 dev：{split['missing_in_dev']} ⇒ dev 量不到它们"
+                  "（提高 --count，或减少类型数）")
+        if split["missing_in_train"]:
+            print(f"❌ 这些类型没进 train：{split['missing_in_train']}")
+        if split["dev_share_max_gap"] > split["tolerance"]:
+            print(f"❌ train/dev 分布不一致：最大占比差 {split['dev_share_max_gap']}"
+                  f" > {split['tolerance']}（{split['worst_dimension']}={split['worst_key']}）"
+                  "⇒ dev 指标不能代表泛化")
+        return 2
+
     out_dir = Path(args.out_dir)
     if not out_dir.is_absolute():
         out_dir = REPO_ROOT / out_dir
@@ -180,7 +287,15 @@ def main(argv: list[str] | None = None) -> int:
         "system_prompt_chars": len(system_prompt),
         "counts": {"total": stats["count"], "train": n_train, "dev": n_dev},
         "file_sha256": {"extract_train.jsonl": sha_train, "extract_dev.jsonl": sha_dev},
-        "split": {"strategy": "按 tags.kind 分层", "dev_ratio": args.dev_ratio},
+        "split": {
+            "strategy": "按 tags.kind 分层（同层内带种子的洗牌后再切 dev_ratio）",
+            "dev_ratio": args.dev_ratio,
+            "seed": args.seed,
+            "dev_share_max_gap": split["dev_share_max_gap"],
+            "tolerance": split["tolerance"],
+            "by_kind": split["by_kind"],
+            "by_category": split["by_category"],
+        },
         "coverage": {
             "by_category": stats["by_category"],
             "by_importance": stats["by_importance"],
@@ -217,7 +332,6 @@ def main(argv: list[str] | None = None) -> int:
     (out_dir / "extract_dataset.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"  切分：train {n_train} / dev {n_dev}（按类型分层）")
     print(f"  sha256：train {sha_train[:16]}… / dev {sha_dev[:16]}…")
     print(f"  system prompt：来自 {meta['system_prompt_source']}，"
           f"{len(system_prompt)} 字符，sha1={prompt_sha1[:12]}")
@@ -228,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"        {out_dir / 'extract_dev.jsonl'}")
     print(f"        {out_dir / 'extract_dataset.json'}")
     print("  下一步：python ai/finetune/train.py --base_model <基座> "
-          f"--data {out_dir.relative_to(REPO_ROOT).as_posix()}/extract_train.jsonl "
+          f"--data {_display_path(out_dir / 'extract_train.jsonl')} "
           "--output ai/finetune/out/xjt-extract-3b --epochs 3")
     return 0
 

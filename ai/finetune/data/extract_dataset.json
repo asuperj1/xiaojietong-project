@@ -18,8 +18,135 @@
     "extract_dev.jsonl": "1eec59702b0b304034acfb8fa58562b020dcb3442ebdcf0deb5bae695da5fb5c"
   },
   "split": {
-    "strategy": "按 tags.kind 分层",
-    "dev_ratio": 0.2
+    "strategy": "按 tags.kind 分层（同层内带种子的洗牌后再切 dev_ratio）",
+    "dev_ratio": 0.2,
+    "seed": 20260917,
+    "dev_share_max_gap": 0.004,
+    "tolerance": 0.05,
+    "by_kind": {
+      "activity_event": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      },
+      "activity_multi_window": {
+        "train": 58,
+        "dev": 14,
+        "train_share": 0.0905,
+        "dev_share": 0.0881
+      },
+      "activity_signup": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      },
+      "contest_result": {
+        "train": 28,
+        "dev": 7,
+        "train_share": 0.0437,
+        "dev_share": 0.044
+      },
+      "contest_round": {
+        "train": 58,
+        "dev": 14,
+        "train_share": 0.0905,
+        "dev_share": 0.0881
+      },
+      "contest_signup": {
+        "train": 36,
+        "dev": 9,
+        "train_share": 0.0562,
+        "dev_share": 0.0566
+      },
+      "lecture_preview": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      },
+      "lecture_required": {
+        "train": 36,
+        "dev": 9,
+        "train_share": 0.0562,
+        "dev_share": 0.0566
+      },
+      "notice_hard_deadline": {
+        "train": 36,
+        "dev": 9,
+        "train_share": 0.0562,
+        "dev_share": 0.0566
+      },
+      "notice_info_only": {
+        "train": 13,
+        "dev": 3,
+        "train_share": 0.0203,
+        "dev_share": 0.0189
+      },
+      "notice_multi_holiday": {
+        "train": 70,
+        "dev": 18,
+        "train_share": 0.1092,
+        "dev_share": 0.1132
+      },
+      "notice_service_window": {
+        "train": 36,
+        "dev": 9,
+        "train_share": 0.0562,
+        "dev_share": 0.0566
+      },
+      "scholarship_cutoff": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      },
+      "scholarship_notice_only": {
+        "train": 30,
+        "dev": 7,
+        "train_share": 0.0468,
+        "dev_share": 0.044
+      },
+      "scholarship_submit": {
+        "train": 48,
+        "dev": 12,
+        "train_share": 0.0749,
+        "dev_share": 0.0755
+      }
+    },
+    "by_category": {
+      "奖学金": {
+        "train": 126,
+        "dev": 31,
+        "train_share": 0.1966,
+        "dev_share": 0.195
+      },
+      "活动": {
+        "train": 154,
+        "dev": 38,
+        "train_share": 0.2402,
+        "dev_share": 0.239
+      },
+      "竞赛": {
+        "train": 122,
+        "dev": 30,
+        "train_share": 0.1903,
+        "dev_share": 0.1887
+      },
+      "讲座": {
+        "train": 84,
+        "dev": 21,
+        "train_share": 0.131,
+        "dev_share": 0.1321
+      },
+      "通知": {
+        "train": 155,
+        "dev": 39,
+        "train_share": 0.2418,
+        "dev_share": 0.2453
+      }
+    }
   },
   "coverage": {
     "by_category": {
