@@ -213,3 +213,18 @@ page {
 .stop-btn::after {
   border: none;
 }
+
+/* F12：本页是固定高度(flex column)布局，输入条原本贴在视口底部 —— 会被 110rpx 高的
+   自定义 TabBar 浮层盖住。给根容器留出底栏高度，整列（含输入条）就落在底栏之上。
+   （原生 tabBar 时代由框架预留，自定义不会，故必须显式处理。）
+   改动需同步 custom-tab-bar/index.wxss 的 .tabbar 高度。 */
+.chat-page {
+  padding-bottom: calc(110rpx + env(safe-area-inset-bottom));
+}
+
+/* F12：全屏态必须把这段留白**还回去**。否则"全屏"只是把底栏藏了，
+   输入条仍悬在离视口底部 110rpx 处 —— 等于没有真正让出空间。
+   （留白是"给底栏让位"，底栏没了就不该再让。） */
+.chat-page--fullscreen {
+  padding-bottom: 0;
+}

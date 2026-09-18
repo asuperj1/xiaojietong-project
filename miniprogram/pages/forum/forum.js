@@ -2,6 +2,7 @@
 // F16：搜索框 + 7 标签栏（全部/学习/生活/闲置/活动/热点/我的帖子）+ 帖子卡片玻璃化
 const { request } = require('../../services/request')
 const { formatTime } = require('../../utils/format')
+const { syncTabBar } = require('../../utils/tabbar')
 
 // 标签栏（F16）：7 项。
 // `kind` 决定请求口径；`value` 是**复用既有 forum category 参数**的取值（空串 = 全部），
@@ -92,6 +93,8 @@ Page({
   },
 
   onShow() {
+    // F12：同步自定义 TabBar 选中项
+    syncTabBar(this, 'forum')
     // Tab 每次进入刷新列表（发帖/点赞返回后保持最新）
     this.refresh()
   },

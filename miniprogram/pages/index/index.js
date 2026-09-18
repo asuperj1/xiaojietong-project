@@ -1,5 +1,6 @@
 // 首页（Tab）—— F3：10 宫格入口 + 快捷指令
 const { request } = require('../../services/request')
+const { syncTabBar } = require('../../utils/tabbar')
 
 Page({
   data: {
@@ -30,6 +31,8 @@ Page({
   },
 
   onShow() {
+    // F12：同步自定义 TabBar 选中项（自定义 TabBar 的实例按页各一份）
+    syncTabBar(this, 'index')
     // 每次回到首页刷新热门帖子
     this.fetchHot()
   },

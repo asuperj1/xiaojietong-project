@@ -107,3 +107,15 @@
   color: #1F2329;
   color: var(--xj-text-primary, #1F2329);
 }
+
+/* F12 × F15 语义合并：为 fixed 定位的自定义 TabBar 自留底部空间
+   （原生 tabBar 由框架预留，自定义不会）。
+   留白 = 底栏占用高度(110rpx + 安全区) + 24rpx 呼吸位；改动需同步 custom-tab-bar/index.wxss。
+
+   ⚠️ 选择器必须是 .svc-page（本页真正的根节点类），**不能**沿用 F12 原稿的 .xj-page：
+   F15 重构后根节点是 `svc-page xj-page-bg`，不再带 .xj-page（见文件头第 14~15 行的说明），
+   写 .xj-page 会让这条规则变成**永不生效的死规则**，本页内容就会被底栏压住。
+   这里只加**底部**留白，不引入 .xj-page 的 24rpx 上内边距，故不影响 F15 的吸顶几何。 */
+.svc-page {
+  padding-bottom: calc(134rpx + env(safe-area-inset-bottom));
+}

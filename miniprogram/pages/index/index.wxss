@@ -137,3 +137,11 @@
   font-size: 22rpx;
   color: #999999;
 }
+
+/* F12：自定义 TabBar 是 fixed 浮层，框架**不会**像原生 tabBar 那样为页面预留高度，
+   页面必须自留底部空间，否则最后一屏内容会被底栏压住。
+   留白 = 底栏占用高度(110rpx + 安全区) + 24rpx 呼吸位。
+   底栏高度定义在 custom-tab-bar/index.wxss 的 .tabbar，改动需同步此处。 */
+.page {
+  padding-bottom: calc(134rpx + env(safe-area-inset-bottom));
+}

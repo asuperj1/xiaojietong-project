@@ -1,0 +1,136 @@
+/* ============================================================
+   F12 POC：自定义 TabBar 样式
+   依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §1.4
+     - 5 项，AI 居中「圆形放大按钮」（直径约 96rpx，**上浮 20rpx**，玻璃底 + 蓝色描边）
+     - §1.5 TabBar 图标 48rpx（本 POC 预留槽位，见 .tabbar-icon-slot）
+   复用 F10 玻璃样式库（@import 使其在组件内自洽，不依赖宿主页面样式）：
+     - 默认态即「安全可读」，@supports 命中才升级为真毛玻璃
+     - .is-glass-fallback 由组件按 wx 能力探测结果自行挂载
+   所有 var() 均带 literal fallback：令牌层取不到也不会掉样式（详见 README §3.1）。
+
+   ⚠️ 页面需自留底部空间：本组件是 position:fixed 浮层，**框架不会像原生 tabBar 那样
+      自动为页面预留高度**。占用高度 = 110rpx + 安全区，各 Tab 页已按其上浮留白
+      （见 pages/*/*.wxss 的 padding-bottom）。该不变量由
+      tools/verify_f12_tabbar_poc.js 的 G 段按**数值**断言（页面留白 ≥ 底栏高度 + 安全区），
+      改这里的 height 会让断言失败并指出是哪一页没跟上。
+   ============================================================ */
+@import "../styles/glass.wxss";
+
+/* 占用高度（含底部安全区）：110rpx + env(safe-area-inset-bottom)
+   —— 页面底部留白与 forum 悬浮按钮都以此为准，改这里要同步页面。 */
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+
+  display: flex;
+  align-items: stretch;
+  height: 110rpx;
+  /* iOS 底部安全区（constant 在前，兼容旧版 WebView） */
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: content-box;
+
+  /* 玻璃底：默认走 glass.wxss 的「安全底」，@supports 命中时自动升级 */
+  background: rgba(255, 255, 255, 0.86);
+  background: var(--xj-glass-bg-reduced, rgba(255, 255, 255, 0.86));
+  border-top: 1rpx solid rgba(255, 255, 255, 0.55);
+  border-top: 1rpx solid var(--xj-glass-border, rgba(255, 255, 255, 0.55));
+  box-shadow: 0 -8rpx 24rpx rgba(31, 38, 135, 0.08);
+  /* FAB 需要溢出顶边，禁止裁剪 */
+  overflow: visible;
+
+  /* 动效时长/缓动走 F10 令牌（与全文件一致，均带 literal fallback） */
+  transition: transform var(--xj-duration-slow, 300ms) var(--xj-ease-standard, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    opacity var(--xj-duration-slow, 300ms) var(--xj-ease-standard, cubic-bezier(0.25, 0.1, 0.25, 1));
+}
+
+/* 全屏态：整体下移隐藏（保留 DOM，避免反复创建销毁组件） */
+.tabbar--hidden {
+  transform: translateY(110%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tabbar-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+/* 图标槽位：按方案 §1.5 的 48rpx 预留。
+   POC 暂不放图标（F11 图标集未合入 dev），但**先占住最终高度** ——
+   否则 F11 接入图标后每项高度会变，「真机凸起位置正确」的验证结论将不可迁移。 */
+.tabbar-icon-slot {
+  width: 48rpx;
+  height: 48rpx;
+  margin-bottom: 2rpx;
+}
+
+.tabbar-label {
+  font-size: 22rpx;
+  line-height: 1.2;
+  color: #8A9099;
+  color: var(--xj-text-secondary, #8A9099);
+  transition: color var(--xj-duration-fast, 150ms) var(--xj-ease-press, cubic-bezier(0.4, 0, 0.2, 1));
+}
+
+.tabbar-item.is-active .tabbar-label {
+  color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
+  font-weight: 600;
+  font-weight: var(--xj-font-weight-semibold, 600);
+}
+
+/* ---- AI 居中凸起圆形按钮 ----
+   用绝对定位让「上浮量」可精确控制：top 取负值即圆顶溢出 TabBar 顶边，
+   当前 -20rpx（方案 §1.4）。真机若觉得凸起不足/过多，**只改这一个值**。 */
+.tabbar-item--raised {
+  position: relative;
+  justify-content: flex-end;
+  padding-bottom: 6rpx;
+}
+
+.tabbar-fab {
+  position: absolute;
+  top: -20rpx;
+  left: 50%;
+  transform: translateX(-50%);
+
+  width: 96rpx;
+  height: 96rpx;
+  border-radius: 50%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30rpx;
+  font-weight: 600;
+  font-weight: var(--xj-font-weight-semibold, 600);
+  color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
+  /* 玻璃底由 xj-glass-strong 提供；此处只给描边宽度 */
+  border: 2rpx solid rgba(74, 144, 217, 0.55);
+  box-sizing: border-box;
+}
+
+/* 蓝色描边 / 圆形阴影用「更高权重 + 更晚声明」再写一次：
+   glass.wxss 的 `.is-glass-fallback .xj-glass-strong` 降级规则会重置 border-color 与
+   box-shadow（同权重 0,2,0，故靠声明顺序取胜）。这样在低端机降级态下，
+   「凸起圆形」仍是「白色实心圆 + 蓝色描边」，不会退化成一片白。 */
+.tabbar-item--raised .tabbar-fab {
+  border-color: rgba(74, 144, 217, 0.55);
+  box-shadow: 0 8rpx 20rpx rgba(74, 144, 217, 0.22),
+    inset 0 2rpx 0 rgba(255, 255, 255, 0.6);
+}
+
+/* 按下反馈（长按语音的即时视觉确认，配合震动） */
+.tabbar-item--raised:active .tabbar-fab {
+  transform: translateX(-50%) scale(0.96);
+  transition: transform var(--xj-duration-fast, 150ms) var(--xj-ease-press, cubic-bezier(0.4, 0, 0.2, 1));
+}

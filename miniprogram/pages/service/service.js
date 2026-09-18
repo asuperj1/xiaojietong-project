@@ -4,6 +4,10 @@
 //      tools/verify_f11_icon_set.js D 段逐条锁定 —— 本次只改视觉，不动业务。
 // ⚠️ 交接（不在本任务范围）：§2.3 备注「『外卖点餐』入口文案需改为『快递代收』」与 §2.7（外卖裁剪）
 //    联动，属 F19；届时需同时改本文件、pages/index/index.js 与上述校验脚本 D 段的 EXPECTED。
+// F12 追加（本页 TabBar 生命周期）：自定义 TabBar 的组件实例按页各一份，本页需在 onShow
+//    同步选中项；与上面的 onLoad（F15/F10 玻璃降级）互不干扰，两者都保留。
+const { syncTabBar } = require('../../utils/tabbar')
+
 Page({
   data: {
     // F10 运行时降级：能力探测判定不支持毛玻璃时置 true → 根节点挂 .is-glass-fallback
@@ -27,6 +31,11 @@ Page({
     this.setData({
       glassFallback: !(app && app.globalData && app.globalData.glassSupported),
     })
+  },
+
+  // F12：自定义 TabBar 需要在每个 Tab 页 onShow 同步选中项
+  onShow() {
+    syncTabBar(this, 'service')
   },
 
   onGridTap(e) {
