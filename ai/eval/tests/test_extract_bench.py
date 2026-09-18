@@ -539,6 +539,78 @@ def test_scripted_backend_reports_missing_answer(tmp_path):
     assert "E01" in err
 
 
+# ==================== 传输失败不能算成"模型很差"（C33 实测踩过）====================
+#
+# 背景：C33 注册模型时 Ollama 0.33 把纯 safetensors 导入的模型交给 MLX runner，
+# 每条请求都 HTTP 500。当时脚本只在控制台 print 一行 ⚠️，报告里只剩
+# 「micro-F1 = 0.0 / 解析失败 = 24」—— 16 个配置全被算成 0.0，
+# 而那一堆 0.0 看起来和"模型真的不会"一模一样。
+
+class _AlwaysFailingBackend:
+    """模拟“服务根本没法推理”：每条都报错、raw 为空。"""
+
+    name = "ollama"
+    model = "xjt-extract-3b"
+    num_ctx = 8192
+    last_prompt_tokens = 0
+
+    def generate(self, case, prompt):  # noqa: ARG002
+        return "", 0.01, "HTTPError 500: mlx runner failed: MLX not available"
+
+
+def test_transport_failure_on_every_case_aborts_instead_of_scoring_zero(tmp_path):
+    """全部请求失败时必须中止，并把原始错误带出来（而不是给一个 0.0 就算完）。"""
+    cases = json.loads(DATASET_PATH.read_text(encoding="utf-8"))["cases"][:4]
+    args = _make_args(tmp_path, mode="zero-shot", scripted=tmp_path / "x.json")
+
+    with pytest.raises(SystemExit) as exc:
+        eb.run_mode(args, {"cases": cases}, cases, _AlwaysFailingBackend())
+
+    msg = str(exc.value)
+    assert "MLX" in msg, "必须带上原始错误，否则排障还得再复现一次"
+    assert "4/4" in msg
+
+
+def test_transport_failure_minority_is_recorded_in_report(tmp_path):
+    """少数失败：不中止，但必须写进报告（以前只 print 一行，报告里毫无痕迹）。"""
+    cases = json.loads(DATASET_PATH.read_text(encoding="utf-8"))["cases"][:4]
+    answers = {c["id"]: json.dumps(c["expected"], ensure_ascii=False) for c in cases[:3]}
+    ans_file = tmp_path / "a.json"
+    ans_file.write_text(json.dumps({"answers": answers}, ensure_ascii=False), encoding="utf-8")
+    bad_id = cases[3]["id"]
+
+    class _OneFails(eb.ScriptedBackend):
+        def generate(self, case, prompt):
+            if case["id"] == bad_id:
+                return "", 0.01, "URLError: connection refused"
+            return super().generate(case, prompt)
+
+    args = _make_args(tmp_path, mode="zero-shot", scripted=ans_file)
+    report = eb.run_mode(args, {"cases": cases}, cases, _OneFails(ans_file))
+
+    assert report["transport_errors"] == 1
+    assert report["errors"][0]["id"] == bad_id
+    assert "connection refused" in report["errors"][0]["error"]
+    md = eb.render_markdown(report)
+    assert "请求失败：1 条" in md
+    assert "F1 含失败样本" in md, "报告本身要提醒数字不可尽信"
+
+
+def test_no_transport_failure_keeps_report_clean(tmp_path):
+    """反向对照：全成功时 transport_errors 必须是 0（否则上面两条测试等于空断言）。"""
+    cases = json.loads(DATASET_PATH.read_text(encoding="utf-8"))["cases"][:4]
+    answers = {c["id"]: json.dumps(c["expected"], ensure_ascii=False) for c in cases}
+    ans_file = tmp_path / "ok.json"
+    ans_file.write_text(json.dumps({"answers": answers}, ensure_ascii=False), encoding="utf-8")
+
+    args = _make_args(tmp_path, mode="zero-shot", scripted=ans_file)
+    report = eb.run_mode(args, {"cases": cases}, cases, eb.ScriptedBackend(ans_file))
+
+    assert report["transport_errors"] == 0
+    assert report["errors"] == []
+    assert "F1 含失败样本" not in eb.render_markdown(report)
+
+
 # ---------------------------------------------------------------- 工具 ----
 
 def _make_args(tmp_path, mode: str, scripted: Path):
