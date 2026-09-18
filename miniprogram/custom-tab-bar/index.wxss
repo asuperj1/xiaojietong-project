@@ -10,7 +10,7 @@
 
    ⚠️ 页面需自留底部空间：本组件是 position:fixed 浮层，**框架不会像原生 tabBar 那样
       自动为页面预留高度**。占用高度 = 110rpx + 安全区，各 Tab 页已按其上浮留白
-      （见 pages/*/*.wxss 的 padding-bottom）。该不变量由
+      （见 pages/<page>/<page>.wxss 的 padding-bottom）。该不变量由
       tools/verify_f12_tabbar_poc.js 的 G 段按**数值**断言（页面留白 ≥ 底栏高度 + 安全区），
       改这里的 height 会让断言失败并指出是哪一页没跟上。
    ============================================================ */
