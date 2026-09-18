@@ -1,0 +1,177 @@
+name: CI
+
+# 校捷通 CI（B34）—— 回归门禁。
+#
+# 设计原则：**宁可红灯，不要假绿**。
+# 本仓库的集成用例在环境缺失时会 `pytest.skip`（见 backend/tests/conftest.py），
+# 这在本地很友好，但会让流水线在"一个用例都没跑"的情况下也变绿。
+# 所以这里统一通过 `tools/ci_gate.py` 收口，并且：
+#   · pytest 走 `--junitxml` 取精确计数，`skipped > 0` 在 --strict 下直接红灯；
+#   · rag_bench 走 `--strict`，hit@3 < 80% / 向量检索未生效 / 题目集为空 都红灯；
+#   · preflight 拿"阻塞项：N 个"，N > 0 红灯；后端没起则明确记为 SKIP（未验证），
+#     在 --strict 下同样红灯 —— "没跑"永远不会伪装成"跑过了"。
+#
+# 两个 job：
+#   1) backend-tests —— GitHub 托管 Ubuntu：起 MySQL service、现场编译 jt_db、跑 G1。
+#      （pytest 不依赖 Ollama，已在无 Ollama 环境实测 72 passed。）
+#   2) full-gate —— 仅手动触发且勾选 full_gate 时，在 self-hosted runner 上跑 G1+G2+G3。
+
+on:
+  push:
+    branches: [dev, main]          # 分支上的验证交给 pull_request，避免每推一次就全量跑两遍
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+    inputs:
+      full_gate:
+        description: "在 self-hosted runner 上跑全量门禁 G1+G2+G3（需 Ollama 与运行中的后端）"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================ G1 · pytest ===
+  backend-tests:
+    name: G1 · pytest（后端）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: xjt_ci_root
+          MYSQL_DATABASE: xiaojietong
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxjt_ci_root"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    env:
+      XJT_DB_HOST: 127.0.0.1
+      XJT_DB_PORT: "3306"
+      XJT_DB_USER: root
+      XJT_DB_PASSWORD: xjt_ci_root
+      XJT_DB_NAME: xiaojietong
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: 系统依赖（C++ 扩展编译 + MySQL 客户端）
+        run: |
+          sudo apt-get update -qq
+          # 包名在不同 Ubuntu 版本上并不一致（如 mysql-client 在 24.04 上已改名），
+          # 因此逐个安装并保留每个包的结果 —— 避免"一个装不上、整步崩掉、却看不出是哪个"。
+          for p in cmake g++ libmysqlclient-dev default-mysql-client python3-dev; do
+            echo "—— apt-get install $p"
+            sudo apt-get install -y -qq "$p" || echo "::warning::安装 $p 失败（继续，影响会在后续步骤暴露）"
+          done
+          # 装完自检：把关键产物位置直接打出来，失败时一眼能看到缺什么
+          echo "mysql.h    : $(ls /usr/include/mysql/mysql.h 2>/dev/null || echo 缺失)"
+          echo "mysql 客户端: $(command -v mysql || echo 缺失)"
+          echo "Python.h   : $(ls /usr/include/python3*/Python.h 2>/dev/null | head -1 || echo '缺失（由 setup-python 提供，通常不必）')"
+          cmake --version | head -1
+
+      - name: Python 依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          python -m pip install pybind11
+
+      - name: 环境体检（10 秒，能省掉好几轮猜）
+        run: |
+          cmake --version | head -1
+          python -c "import sysconfig; print('python include:', sysconfig.get_paths()['include'])"
+          echo "pybind11 cmakedir: $(python -m pybind11 --cmakedir 2>&1)"
+          ls -l /usr/include/mysql/mysql.h 2>/dev/null || echo "mysql.h 缺失"
+          python -c "import glob,os,sysconfig; d=sysconfig.get_config_var('LIBDIR') or ''; print('LIBDIR:', d); print('libpython*:', sorted(os.path.basename(p) for p in glob.glob(os.path.join(d,'libpython*'))) or '（无 —— pybind11 经典模式会因此挂）')"
+
+      - name: CMake configure（只配置，不编译 —— 挂在这里就是配置期问题）
+        run: cmake -B db/cpp_driver/build -S db/cpp_driver -DCMAKE_BUILD_TYPE=Release
+
+      - name: 编译 jt_db（configure 已过，这里挂就是编译期问题）
+        run: cmake --build db/cpp_driver/build --config Release --target jt_db
+
+      - name: 导入建库脚本与种子数据
+        run: |
+          MYSQL="mysql -h127.0.0.1 -uroot -pxjt_ci_root --default-character-set=utf8mb4"
+          $MYSQL < db/sql/00_database.sql
+          # 顺序有讲究：01~14 建表/索引 → 99* 种子 → 15~19 扩展
+          # （17_user_student_no 给 user 建唯一索引，必须在 99_init_data 插完用户之后）
+          ORDER="01_user 02_ai_chat 03_agent 04_library 05_secondhand 06_job 07_forum \
+                 08_map 09_life 10_ai_train 11_audit 12_notice_delivery 13_index_optimize \
+                 14_notice_extend 99_init_data 99b_knowledge_faq 99c_agent_tool_schema \
+                 99d_knowledge_more 99e_poi_seed 15_home_banner 16_search_history \
+                 17_user_student_no 18_takeaway_pickup 19_topic_fulltext"
+          # ⚠️ 99f_beta_seed.sql 刻意不导入：它带硬闸门（需 --init-command="SET @xjt_beta_seed=1"）
+          #    且含 DELETE、文件头标注"仅用于封测 / 本地测试库"，直接进循环会让整步失败。
+          SKIP="99f_beta_seed"
+          # 自检：清单必须恰好覆盖 db/sql 下除 00_database 与被跳过项之外的全部 .sql
+          # —— 上次就是手抄清单漂移（漏了 15~19 与 99e），导致 CI 库里 topic 没有
+          #    FULLTEXT 索引，门禁第一次真正执行就红了 5 条。
+          expected=$(ls db/sql/*.sql | xargs -n1 basename | sed 's/\.sql$//' \
+                     | grep -v '^00_database$' | grep -v "^${SKIP}$" | sort)
+          actual=$(echo "$ORDER" | tr ' ' '\n' | grep -v '^$' | sort)
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::建库清单与 db/sql/ 不一致（清单漂移会让门禁在无关原因上变红）"
+            echo "--- db/sql 实际有而清单没有 ---"; comm -23 <(echo "$expected") <(echo "$actual")
+            echo "--- 清单有而 db/sql 没有 ---";     comm -13 <(echo "$expected") <(echo "$actual")
+            exit 1
+          fi
+          echo "✅ 清单与 db/sql/ 一致（$(echo "$actual" | wc -l) 个脚本）"
+          for f in $ORDER; do
+            echo "—— 导入 db/sql/$f.sql"
+            $MYSQL xiaojietong < "db/sql/$f.sql"
+          done
+
+      - name: 门禁 G1 · pytest（--strict：skip 即红灯）
+        run: python tools/ci_gate.py --only pytest --strict --json ci_gate_g1.json
+
+      - name: 上传门禁报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-gate-g1
+          path: ci_gate_g1.json
+          if-no-files-found: error
+
+  # ==================================================== 全量门禁（可选）===
+  full-gate:
+    name: 全量门禁 G1+G2+G3（self-hosted）
+    if: github.event_name == 'workflow_dispatch' && inputs.full_gate
+    runs-on: [self-hosted, xjt]
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 全量门禁（任何 SKIP 都算红灯）
+        run: python tools/ci_gate.py --strict --json ci_gate_report.json
+
+      - name: 上传门禁报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-gate-full
+          path: ci_gate_report.json
+          if-no-files-found: error

@@ -32,7 +32,18 @@ if(MSVC)
 endif()
 
 # ---------- Python / pybind11 ----------
-find_package(Python 3.8 COMPONENTS Interpreter Development REQUIRED)
+# 只要求 Development.Module：本目标编的是 **Python 扩展模块**，不需要链接 libpython
+# （那是 Embed 才需要的）。要求整包 Development 会连 libpython*.so 一起找，而 CI 上
+# actions/setup-python 装的 CPython 只有头文件、没有共享库 ⇒ CMake 直接报
+# "missing: Development"，编译步骤必失败。
+find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
+
+# ⚠️ 必须在 find_package(pybind11) **之前**：让 pybind11 走 Modern FindPython
+# （只要 Development.Module）。否则 pip 装的 pybind11 会走经典模式，自己去做
+# find_package(PythonLibs ... REQUIRED) —— 那**仍然要求 libpython*.so**，而 CI 上
+# actions/setup-python 只提供头文件、不提供共享库：这就是"我们收窄了组件、却还是挂"的原因
+# （收窄的是我们的请求，不是 pybind11 的请求）。
+set(PYBIND11_FINDPYTHON ON)
 
 find_package(pybind11 CONFIG QUIET)
 if(NOT pybind11_FOUND)
@@ -126,7 +137,19 @@ add_library(jt_db_core STATIC
     src/dao/job_dao.cpp
     src/dao/life_dao.cpp
     src/dao/favorite_dao.cpp
+    src/dao/home_dao.cpp
 )
+# Linux 必须：本静态库既要链进共享模块 jt_db.so，又要链进 PIE 可执行文件 jt_db_test。
+# gcc 默认不为静态库生成 PIC，而 src/db_session.cpp 的 thread_local 会引入 TLS 守卫
+# __tls_guard（R_X86_64_TPOFF32 重定位），该重定位在共享库 / PIE 中非法 ——
+# 链接时会直接报：
+#   relocation R_X86_64_TPOFF32 against `__tls_guard' can not be used when making
+#   a shared object; recompile with -fPIC
+# ⚠️ 必须设在 **jt_db_core** 上（不是 jt_db）：下文 jt_db_test 也链它，而 Ubuntu 的
+# gcc 默认生成 PIE，PIE 同样要求 PIC；只给 jt_db 加 -fPIC 链接参数解决不了。
+# MSVC 无 PIC 概念，此项对 Windows 构建无影响（这正是"本地绿、CI 红"的原因）。
+set_target_properties(jt_db_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 target_include_directories(jt_db_core PUBLIC include ${MYSQL_INCLUDE_DIR})
 target_link_libraries(jt_db_core PUBLIC ${MYSQL_LIBRARY})
 target_compile_definitions(jt_db_core PRIVATE MYSQL_DEPRECATED_NO_WARNINGS)

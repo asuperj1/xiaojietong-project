@@ -1,5 +1,10 @@
 -- ============================================================
--- B19 · 用户搜索历史表 `user_search_history`（成员4 分工 · 本 PR 由成员3 代为起草）
+-- C46 · 用户搜索历史表 `user_search_history`（原 `B19`）
+--
+-- ★ 唯一真源：本脚本的 `CREATE TABLE` 即 `user_search_history` 的**唯一权威定义**
+--   （与 `C23` 的 DAO `user_dao.cpp` 引用的列严格一致，由 `tools/verify_ddl_dao_contract.py` 把关）。
+--   旧环境形状不一致时用守卫补列/补索引收敛，**不得**反向改定义。
+--   规范：`docs/db-migration-convention.md`。
 --
 -- 目标：给搜索历史接口 `GET/POST/DELETE /search/history`（B22）与 `C23` 的 DAO 提供存储。
 --

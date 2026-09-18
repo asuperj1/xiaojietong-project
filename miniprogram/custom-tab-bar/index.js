@@ -9,9 +9,13 @@
 //   ⑤ 全屏页隐藏机制（配合 utils/tabbar.js）
 //
 // ⚠️ POC 边界（刻意不做，避免未经验证铺开）：
-//   - **不含图标**：F11 的线性 SVG 图标集尚未合入 dev；也刻意不复用即将被 F11 淘汰的彩色 PNG。
-//     图标接入待 F11 合入 dev 后跟进（或由 F12 正式实现一并完成）。
-//   - **不做转写**：POST /voice/transcribe（B28）未就绪，弹窗内只做「录音自检」，不上传。
+//   - **不含图标**：F11 的线性 SVG 图标集**已合入 dev**（`static/icons/*.svg`，由
+//     tools/verify_f11_icon_set.js 守护）；但本 POC 仍刻意不放图标 —— 接入图标会改变每项
+//     高度，"真机凸起位置正确"这条结论就不可迁移了（故只按 §1.5 预留 48rpx 槽位）。
+//     真正接图标属 F12 正式实现。
+//   - **不接入转写**：转写接口**已就绪**（`B32`，即方案 §3.4 所写的 `B28`：
+//     POST /voice/transcribe，契约见 docs/api.md §13），但本 POC **刻意不调用** ——
+//     这里只验证「长按 → 震动 → 弹窗」链路。弹窗内只做「录音自检」，不上传。
 //   - 真机布局 / 震动 / 弹窗 / 隐藏效果 = MANUAL CHECK REQUIRED。
 
 const { TAB_LIST } = require('../utils/tab-order')
@@ -46,7 +50,7 @@ Component({
         this._recorder.onStop((res) => {
           this._finishRecorderCheck(
             `录音成功：时长 ${Math.round((res.duration || 0) / 1000)} 秒，` +
-              `大小 ${res.fileSize || 0} 字节。\n转写待 B28（POST /voice/transcribe）就绪后接入。`
+              `大小 ${res.fileSize || 0} 字节。\n本 POC 不上传、不转写（转写接口 B32 已就绪，接入属下一步）。`
           )
         })
         this._recorder.onError((err) => {
@@ -108,7 +112,7 @@ Component({
         title: '语音输入（POC）',
         content:
           '长按触发链路已生效：震动 → 语音入口。\n' +
-          '转写需 POST /voice/transcribe（B28，未就绪）。\n' +
+          '转写接口已就绪（B32：POST /voice/transcribe），但本 POC 不接入 —— 只验证长按链路。\n' +
           '可点「录音自检」验证本机录音能力（' +
           `${RECORDER_CHECK_MS / 1000} 秒后自动停止，不上传）。`,
         confirmText: '录音自检',

@@ -102,6 +102,20 @@ const MUTATIONS = [
     expect: ['论坛 .fab 已抬到底栏之上'],
   },
   {
+    id: 'service-clearance-dead-selector',
+    file: 'miniprogram/pages/service/service.wxss',
+    why: '服务页留白规则退回 F12 原稿的 .xj-page（F15 重构后根类已是 .svc-page → 死规则）',
+    mutate: (t) => t.replace('.svc-page {\n  padding-bottom: calc(134rpx', '.xj-page {\n  padding-bottom: calc(134rpx'),
+    expect: ['pages/service/service.wxss 的 .svc-page 底部留白'],
+  },
+  {
+    id: 'root-class-renamed',
+    file: 'miniprogram/pages/service/service.wxml',
+    why: '根节点类被改名，留白规则挂在本页不用的类上（留白数值本身仍然"够大"）',
+    mutate: (t) => t.replace('class="svc-page ', 'class="svc-page-v2 '),
+    expect: ['根节点确实带 .svc-page 类'],
+  },
+  {
     id: 'index-clearance-too-small',
     file: 'miniprogram/pages/index/index.wxss',
     why: '首页底部留白 134rpx → 80rpx（小于底栏 110rpx）',
@@ -113,7 +127,7 @@ const MUTATIONS = [
     file: 'miniprogram/pages/service/service.wxss',
     why: '服务页留白不再叠加安全区（iPhone 上会被底栏压住）',
     mutate: (t) => t.replace('calc(134rpx + env(safe-area-inset-bottom))', '134rpx'),
-    expect: ['pages/service/service.wxss 的 .xj-page 底部留白'],
+    expect: ['pages/service/service.wxss 的 .svc-page 底部留白'],
   },
   {
     id: 'forum-fab-under-tabbar',
@@ -248,7 +262,7 @@ const MUTATIONS = [
     id: 'readme-count-stale',
     file: 'miniprogram/custom-tab-bar/README.md',
     why: 'README 里写死的断言条数与脚本不一致',
-    mutate: (t) => t.replace('80 项断言', '99 项断言'),
+    mutate: (t) => t.replace('85 项断言', '99 项断言'),
     expect: ['README 声明的断言条数'],
   },
   {

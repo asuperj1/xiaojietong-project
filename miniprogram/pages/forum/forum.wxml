@@ -1,15 +1,36 @@
-<!-- 论坛（F7） -->
-<view class="xj-page forum-page">
-  <view class="tabs">
-    <view
-      class="tab {{catIndex === index ? 'tab-active' : ''}}"
-      wx:for="{{cats}}"
-      wx:key="*this"
-      data-index="{{index}}"
-      bindtap="onCatChange"
-    >{{item}}</view>
-    <view class="tab-mine" bindtap="onMine">我的帖子</view>
+<!-- 论坛（F7 / F16）：搜索框 + 7 标签栏 + 帖子流 -->
+<view class="xj-page forum-page {{glassClass}}">
+  <!-- 顶部吸顶区：搜索框 + 标签栏 -->
+  <view class="forum-header">
+    <!-- F16：搜索框（回车提交 → GET /topics?keyword=） -->
+    <view class="search-bar">
+      <text class="search-icon">🔍</text>
+      <input
+        class="search-input"
+        placeholder="搜索帖子标题 / 正文"
+        confirm-type="search"
+        value="{{keyword}}"
+        bindinput="onSearchInput"
+        bindconfirm="onSearchConfirm"
+      />
+      <view wx:if="{{keyword}}" class="search-clear" bindtap="onSearchClear">×</view>
+    </view>
+
+    <!-- F16：7 标签（全部/学习/生活/闲置/活动/热点/我的帖子），窄屏横向滚动 -->
+    <scroll-view class="tabs" scroll-x>
+      <view
+        class="tab {{catIndex === index ? 'tab-active' : ''}}"
+        wx:for="{{cats}}"
+        wx:key="*this"
+        data-index="{{index}}"
+        bindtap="onCatChange"
+      >{{item}}</view>
+    </scroll-view>
   </view>
+
+  <!-- 搜索态提示：热点/我的帖子两栏后端不支持 keyword，这里说明实际检索口径 -->
+  <view wx:if="{{searchHint}}" class="search-hint">{{searchHint}}</view>
+  <view wx:elif="{{searchText}}" class="search-hint">搜索「{{searchText}}」的结果</view>
 
   <view wx:if="{{loading && items.length === 0}}" class="xj-loading">加载中…</view>
 
@@ -21,20 +42,33 @@
   </block>
 
   <block wx:elif="{{items.length === 0}}">
-    <view class="xj-empty"><text class="xj-empty-icon">💬</text>暂无帖子</view>
+    <view class="xj-empty">
+      <text class="xj-empty-icon">💬</text>{{searchText ? '没有找到相关帖子' : '暂无帖子'}}
+    </view>
   </block>
 
   <block wx:else>
-    <view class="xj-card topic-card" wx:for="{{items}}" wx:key="id" data-id="{{item.id}}" bindtap="onItemTap">
+    <view
+      class="xj-card xj-glass-card topic-card"
+      wx:for="{{items}}"
+      wx:key="id"
+      data-id="{{item.id}}"
+      bindtap="onItemTap"
+    >
       <view class="topic-top">
         <text class="topic-title">{{item.title}}</text>
         <text class="xj-tag tag-hot" wx:if="{{item.isHot}}">热</text>
       </view>
       <view class="topic-summary">{{item.summary}}</view>
       <view class="topic-meta">
-        <text class="meta-item">{{item.authorName}}</text>
-        <text class="meta-item" wx:if="{{item.category}}">{{item.category}}</text>
-        <text class="meta-item">{{item.time}}</text>
+        <!-- /topics/hot 不返回 author_name / created_at：空值时整项不渲染，避免留下空位 -->
+        <text class="meta-item" wx:if="{{item.authorName}}">{{item.authorName}}</text>
+        <text class="xj-tag cat-tag" wx:if="{{item.category}}">{{item.category}}</text>
+        <text
+          class="xj-tag audit-tag {{item.auditOk ? 'audit-ok' : ''}} {{item.auditBad ? 'audit-bad' : ''}}"
+          wx:if="{{item.auditText}}"
+        >{{item.auditText}}</text>
+        <text class="meta-item" wx:if="{{item.time}}">{{item.time}}</text>
         <text class="meta-right">👍{{item.likeCount}} · 💬{{item.commentCount}}</text>
       </view>
     </view>

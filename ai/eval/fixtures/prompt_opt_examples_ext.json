@@ -1,0 +1,186 @@
+{
+  "version": "1.0",
+  "created": "2026-09-17",
+  "purpose": "C35 提示工程实验的**扩充**示例池（k > 4 时接在 C34 示例池之后使用）",
+  "why_not_extend_c34_file": [
+    "C34 的 ai/eval/fixtures/few_shot_examples.json 里有 4 条，其 notes 明确写着「这 4 条是我自己编写的」。",
+    "直接往那个文件里追加会篡改 C34 的产物与它的结论口径（k=4 的对照就说不清了），",
+    "所以 C35 另开一个文件：k ≤ 4 时**完全使用 C34 原池**（保证能与 C34 的 0.4693 对齐），",
+    "k > 4 时「C34 的 4 条 + 本文件的前 (k-4) 条」。两个池子合起来即本实验的标注预算刻度。"
+  ],
+  "reference_date": "2026-09-16",
+  "labeling_guideline": [
+    "importance：5 = 报名/选课/放假/申请**截止**类硬期限（错过失去资格或影响学业）；",
+    "  4 = 需按指定时间办理或参加（提交材料、听讲座、系统调整、比赛）；3 = 信息通报或可自主参加的活动预告。",
+    "deadline：整条通知没有时间要求时填 null（不要硬编日期）。",
+    "entities：只抽 type=time；text 用原文片段；norm 用 YYYY-MM-DD；多个时间都抽。",
+    "⚠️ 这套口径是从 C34 示例的 notes 与任务书里抄来的**标注规范**，不是从评测集拟合出来的 ——",
+    "   评测集只用于最终度量，未被用来反推 prompt 文本（否则 F1 提升就是自证）。"
+  ],
+  "notes": [
+    "以下 12 条为 C35 新编，与 ai/eval/extract_cases.json 的 24 条 **id 与文本都不重合**（有测试守着）。",
+    "覆盖 5 个受控类目、importance 3/4/5、含 2 条 deadline=null 与多条多时间实体，",
+    "目的是让 k 增大时示例池能覆盖到评测集的各档取值，而不是清一色同类。",
+    "刻意包含一条跨年样本（元旦放假 → 2027-01-01），用来示范 V1 的跨年规则。"
+  ],
+  "examples": [
+    {
+      "id": "FS05",
+      "category": "奖学金",
+      "text": "关于开展2026年校级三好学生评选的通知：请于10月28日前将推荐表交至辅导员处，逾期视为放弃。",
+      "expected": {
+        "category": "奖学金",
+        "importance": 4,
+        "deadline": "2026-10-28",
+        "entities": [
+          {"type": "time", "text": "10月28日前", "norm": "2026-10-28"}
+        ]
+      }
+    },
+    {
+      "id": "FS06",
+      "category": "奖学金",
+      "text": "生源地信用助学贷款办理说明：申请截止时间为9月26日，逾期系统关闭，本学年不再受理。",
+      "expected": {
+        "category": "奖学金",
+        "importance": 5,
+        "deadline": "2026-09-26",
+        "entities": [
+          {"type": "time", "text": "9月26日", "norm": "2026-09-26"}
+        ]
+      }
+    },
+    {
+      "id": "FS07",
+      "category": "活动",
+      "text": "校园电影展映周将于10月12日至10月16日每晚19:00在大学生活动中心放映，免费入场。",
+      "expected": {
+        "category": "活动",
+        "importance": 3,
+        "deadline": "2026-10-12",
+        "entities": [
+          {"type": "time", "text": "10月12日", "norm": "2026-10-12"},
+          {"type": "time", "text": "10月16日", "norm": "2026-10-16"}
+        ]
+      }
+    },
+    {
+      "id": "FS08",
+      "category": "活动",
+      "text": "校园迷你马拉松参赛提示：10月10日7:30在体育场集合检录，参赛者需自备运动服与号码布。",
+      "expected": {
+        "category": "活动",
+        "importance": 4,
+        "deadline": "2026-10-10",
+        "entities": [
+          {"type": "time", "text": "10月10日7:30", "norm": "2026-10-10"}
+        ]
+      }
+    },
+    {
+      "id": "FS09",
+      "category": "讲座",
+      "text": "学术报告会预告：数字孪生与智慧城市，10月15日下午15:00，腾讯会议线上进行，无需报名。",
+      "expected": {
+        "category": "讲座",
+        "importance": 3,
+        "deadline": "2026-10-15",
+        "entities": [
+          {"type": "time", "text": "10月15日下午15:00", "norm": "2026-10-15"}
+        ]
+      }
+    },
+    {
+      "id": "FS10",
+      "category": "讲座",
+      "text": "就业指导讲座：求职面试礼仪，定于下周五14:00在就业中心202室举办，名额有限需提前预约。",
+      "expected": {
+        "category": "讲座",
+        "importance": 4,
+        "deadline": "2026-09-25",
+        "entities": [
+          {"type": "time", "text": "下周五14:00", "norm": "2026-09-25"}
+        ]
+      }
+    },
+    {
+      "id": "FS11",
+      "category": "竞赛",
+      "text": "全国大学生电子设计竞赛报名启动：报名通道10月8日24:00关闭，参赛队须完成网上注册与材料上传。",
+      "expected": {
+        "category": "竞赛",
+        "importance": 5,
+        "deadline": "2026-10-08",
+        "entities": [
+          {"type": "time", "text": "10月8日24:00", "norm": "2026-10-08"}
+        ]
+      }
+    },
+    {
+      "id": "FS12",
+      "category": "竞赛",
+      "text": "校园创新创业大赛复赛安排：复赛答辩定于11月6日13:30在双创基地进行，请各团队提前30分钟到场。",
+      "expected": {
+        "category": "竞赛",
+        "importance": 4,
+        "deadline": "2026-11-06",
+        "entities": [
+          {"type": "time", "text": "11月6日13:30", "norm": "2026-11-06"}
+        ]
+      }
+    },
+    {
+      "id": "FS13",
+      "category": "通知",
+      "text": "关于元旦放假调休的通知：1月1日至1月3日放假，1月4日恢复正常上课。",
+      "expected": {
+        "category": "通知",
+        "importance": 5,
+        "deadline": "2027-01-01",
+        "entities": [
+          {"type": "time", "text": "1月1日", "norm": "2027-01-01"},
+          {"type": "time", "text": "1月3日", "norm": "2027-01-03"},
+          {"type": "time", "text": "1月4日", "norm": "2027-01-04"}
+        ]
+      }
+    },
+    {
+      "id": "FS14",
+      "category": "通知",
+      "text": "关于校园网络出口带宽升级完成的通告：本次升级已覆盖全部宿舍区，学生无需任何操作。",
+      "expected": {
+        "category": "通知",
+        "importance": 3,
+        "deadline": null,
+        "entities": []
+      }
+    },
+    {
+      "id": "FS15",
+      "category": "通知",
+      "text": "关于校医院门诊时间调整的通知：自10月1日起，门诊时间调整为每日8:00至17:30，急诊24小时开放。",
+      "expected": {
+        "category": "通知",
+        "importance": 4,
+        "deadline": "2026-10-01",
+        "entities": [
+          {"type": "time", "text": "10月1日起", "norm": "2026-10-01"}
+        ]
+      }
+    },
+    {
+      "id": "FS16",
+      "category": "通知",
+      "text": "关于毕业生图像信息采集的通知：采集时间为9月28日至9月29日，地点在行政楼一层大厅，未按时采集将影响证书发放。",
+      "expected": {
+        "category": "通知",
+        "importance": 5,
+        "deadline": "2026-09-28",
+        "entities": [
+          {"type": "time", "text": "9月28日", "norm": "2026-09-28"},
+          {"type": "time", "text": "9月29日", "norm": "2026-09-29"}
+        ]
+      }
+    }
+  ]
+}

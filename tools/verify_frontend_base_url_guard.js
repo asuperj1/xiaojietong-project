@@ -46,19 +46,32 @@ function check(name, ok, detail) {
 /**
  * 建一个隔离沙箱：复制真实源码，并把 env.js 的 RELEASE_BASE_URL 换成指定值。
  * （RELEASE_BASE_URL 是模块级 const，只能靠改源码来模拟「已配置」的正式包）
+ *
+ * ⚠️ 沙箱必须镜像 app.js 的 require 图。**整目录拷贝**而不是逐文件列举：
+ * 本脚本只关心 env/request，但 `app.js` 是产品入口，后续任务（F13~F18）随时可能
+ * 给它加新的 require。曾经漏拷 `utils/`（F10 的 `require('./utils/glass')`），
+ * 结果沙箱里 app.js 直接 MODULE_NOT_FOUND，脚本在 S1 就崩 —— 一个与本用例
+ * 要测的地址解析行为完全无关的假失败。写死文件清单会把这个坑留给下一个任务。
  */
 function makeSandbox(releaseUrl) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xjt-env-'))
   sandboxes.push(dir)
-  fs.mkdirSync(path.join(dir, 'config'), { recursive: true })
-  fs.mkdirSync(path.join(dir, 'services'), { recursive: true })
 
+  for (const sub of ['config', 'services', 'utils']) {
+    const from = path.join(MP, sub)
+    if (!fs.existsSync(from)) {
+      throw new Error(`[sandbox] 缺少前提目录 miniprogram/${sub} —— 沙箱无法镜像 app.js 的 require 图`)
+    }
+    fs.cpSync(from, path.join(dir, sub), { recursive: true })
+  }
+  fs.copyFileSync(path.join(MP, 'app.js'), path.join(dir, 'app.js'))
+
+  // 只有 env.js 需要改写（模拟「正式包已配置地址」）；其余文件保持真实源码原样
   const envSrc = fs
     .readFileSync(path.join(MP, 'config', 'env.js'), 'utf8')
     .replace(/const RELEASE_BASE_URL = .*/, `const RELEASE_BASE_URL = ${JSON.stringify(releaseUrl)}`)
   fs.writeFileSync(path.join(dir, 'config', 'env.js'), envSrc)
-  fs.copyFileSync(path.join(MP, 'services', 'request.js'), path.join(dir, 'services', 'request.js'))
-  fs.copyFileSync(path.join(MP, 'app.js'), path.join(dir, 'app.js'))
+
   return dir
 }
 
@@ -167,11 +180,14 @@ async function main() {
   console.log('\n[S3] release + RELEASE_BASE_URL 合法')
   {
     const url = 'https://api.x.edu.cn/api/v1'
-    const { requestMod, sentUrls } = loadSandbox(url, 'release', {
-      xjt_api_base_url: 'http://evil.local/api/v1', // 必须被忽略
-    })
+    const storage = { xjt_api_base_url: 'http://evil.local/api/v1' } // 必须被忽略
+    const { requestMod, sentUrls } = loadSandbox(url, 'release', storage)
     check('解析结果正确', requestMod.getBaseUrl() === url)
-    check('release 忽略 storage 覆盖（测试地址不会带上线）', requestMod.getBaseUrl() === url)
+    check(
+      'release 忽略 storage 覆盖（测试地址不会带上线）',
+      requestMod.getBaseUrl() !== storage.xjt_api_base_url && requestMod.getBaseUrl() === url,
+      '实际=' + requestMod.getBaseUrl() + ' / storage=' + storage.xjt_api_base_url
+    )
 
     requestMod.request('/topics/hot')
     check('请求 URL 拼接正确', sentUrls[0] === url + '/topics/hot', sentUrls[0])

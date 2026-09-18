@@ -21,7 +21,7 @@
 一键自查（无需微信开发者工具、无需网络）：
 
 ```bash
-node tools/verify_f12_tabbar_poc.js              # 80 项断言
+node tools/verify_f12_tabbar_poc.js              # 85 项断言
 node tools/negative_control_f12_tabbar_poc.js    # 反向对照：证明上面这套断言真的会 FAIL
 ```
 
@@ -52,8 +52,8 @@ node tools/negative_control_f12_tabbar_poc.js    # 反向对照：证明上面�
 
 | 边界 | 原因 |
 |---|---|
-| **不含任何图标**（AI 圆内是文字「AI」） | F11 的线性 SVG 图标集**尚未合入 `dev`**；且刻意**不叠 F11 分支、不复用将被 F11 淘汰的彩色 PNG**。图标接入待 F11 合入 `dev` 后由 F12 正式实现完成。 |
-| **不做语音转写** | 转写有两条路，**当前一条都未接通**：<br>① **B28 · 自建后端**（方案 §3.4 路线 B）：`POST /voice/transcribe` 在 `origin/dev` 上不存在（已核查：`backend/` 下无任何 `voice` 模块，`routers/` 只有 admin/agent/auth/chat/favorite/forum/health/job/library/life/map_api/secondhand/upload/user）。<br>② **微信原生 · 零后端路线**（方案 §3.4 **推荐路线 A**）：`wx.getRecorderManager()` 录音 + 微信同声传译插件 / `wx.serviceMarket` —— **不需要后端成本**、延迟低，代价是依赖微信配额，且需在小程序后台开通插件；属 F12 之后的独立接入决策。<br>因此本 POC 弹窗内只做**录音自检**（本地录音、不上传、不假装能转写）；**长按 → 震动 → 弹窗**这条链路本身已端到端可验证，转写只是它的下游。 |
+| **不含任何图标**（AI 圆内是文字「AI」） | F11 的线性 SVG 图标集**已合入 `dev`**（`static/icons/*.svg`，由 `tools/verify_f11_icon_set.js` 守护）；但本 POC 仍**刻意不放图标** —— 接入图标会改变每项高度，今天在真机上得到的「凸起位置」结论就不可迁移（故只按 §1.5 预留 48rpx 槽位）。真正接图标属 F12 正式实现。 |
+| **不做语音转写**（POC **刻意不接入**，不是"接口不存在"） | 方案 §3.4 的转写接口**已实现并合入 `dev`**：`backend/app/routers/voice.py` → `POST /api/v1/voice/transcribe`（**现编号 `B32`**，即方案 §3.4 正文里写的 `B28`；任务单「改号对照」已注明 `B32 ← B28`），契约见 `docs/api.md` §13（v1.23）。<br>但本 POC **刻意不调用**它：本 POC 只验证「长按 → 震动 → 弹窗」这条链路，**接入转写是下一步**（真正的消费方是 F14 的「长按语音」）；且该接口为**配置驱动**（`XJT_ASR_BACKEND` = `none` / `http` / `whisper`），未配置 ASR 后端时返回 `5002`/503 而非静默失败。<br>方案 §3.4 的另一条路（**推荐路线 A**：`wx.getRecorderManager()` + 微信同声传译插件 / `wx.serviceMarket`，零后端成本）**仍未评估**，同样属后续独立决策。<br>因此本 POC 弹窗内只做**录音自检**（本地录音、不上传）。 |
 | **全屏隐藏用「顶栏按钮」触发** | 让「全屏隐藏」这条验收**在真机上可反复验证且可逆**，而不是留一个永不触发的机制。F14 接入侧边栏后应删除该按钮，改由侧边栏/全屏会话状态驱动。 |
 | **不调整宫格图标尺寸等视觉细节** | 属 F15 服务页重构范围。 |
 
@@ -107,8 +107,8 @@ progressive enhancement 的「安全默认态」原则。
 | `miniprogram/utils/tabbar.js` | 选中态同步 + 显隐助手（含 `getTabBar()` 容错） |
 | `miniprogram/app.json` | 打开 `tabBar.custom`、调整 Tab 顺序 |
 | `miniprogram/pages/*/`（5 个 Tab 页） | `onShow` 同步选中项；AI 页额外提供 POC 全屏开关 |
-| `tools/verify_f12_tabbar_poc.js` | 80 项自动化断言（含反向对照） |
-| `tools/negative_control_f12_tabbar_poc.js` | 变异测试：故意改坏副本，证明上面 80 项断言不是「只会 PASS」 |
+| `tools/verify_f12_tabbar_poc.js` | 85 项自动化断言（含反向对照） |
+| `tools/negative_control_f12_tabbar_poc.js` | 变异测试：故意改坏副本，证明上面 85 项断言不是「只会 PASS」 |
 
 > `app.json` 的 `tabBar.list` 是**必要副本**（JSON 无法 import，且框架要求声明），
 > 与 `utils/tab-order.js` 的顺序/路径一致性由校验脚本断言。

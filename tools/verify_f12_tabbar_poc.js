@@ -30,7 +30,7 @@
  *     node tools/verify_f12_tabbar_poc.js
  * 退出码：0 = 全部通过；1 = 有失败
  *
- * 配套：`node tools/negative_control_f12_tabbar_poc.js` —— 在临时副本里注入 31 个已知缺陷，
+ * 配套：`node tools/negative_control_f12_tabbar_poc.js` —— 在临时副本里注入 33 个已知缺陷，
  *      要求每一个都被本脚本的**指定断言**抓到（证明本脚本不是只会 PASS）。
  *
  * 注意：脚本会故意打印 `[tabbar] 未知的 Tab key： nope`（那是「未知 key 被拒绝」这条
@@ -91,6 +91,22 @@ function headerComment(src) {
     else if (out.length > 0 || line.trim() !== '') break
   }
   return out.join('\n')
+}
+
+/**
+ * 取页面 WXML **根元素** class 属性里的类名 token（去掉 `{{...}}` 插值部分）。
+ *
+ * 为什么需要：页面留白那条断言只证明"某个选择器声明了足够大的 padding-bottom"，
+ * 并不证明那个类**真的被这个页面用着**。F15 把服务页根类从 `.xj-page` 换成 `.svc-page`
+ * 之后，`.xj-page{padding-bottom:134rpx}` 就成了永不生效的死规则，而旧断言照样通过。
+ */
+function rootClassTokens(src) {
+  const m = src.match(/^[ \t]*<view\b[^>]*\bclass="([^"]*)"/m)
+  if (!m) return []
+  return m[1]
+    .replace(/\{\{[\s\S]*?\}\}/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
 }
 
 /**
@@ -471,9 +487,12 @@ check('全屏入口调用 setTabBarHidden 并如实反馈失败', /setTabBarHidd
 console.log('\nF. POC 边界（不依赖未合并的 F11、不冒充正式实现）')
 
 const barJs = read('custom-tab-bar/index.js')
+// 断言"不渲染图标"这个**可观测事实**，而不是搜源码里有没有出现 `/static/icons` 字样 ——
+// 后者会被注释误伤（本文件头部就会提到 F11 的 `static/icons/*.svg`）。
 check(
-  '自定义 TabBar 未引用 /static/icons（不依赖尚未合入 dev 的 F11 图标集）',
-  !/static\/icons/.test(barJs) && !/static\/icons/.test(wxml)
+  'TabBar 不渲染任何图标、Tab 清单也不带 icon 字段（POC 刻意不接 F11 图标集）',
+  !/<image\b/.test(wxml) && !/static\/icons/.test(wxml) && TAB_LIST.every((i) => i.icon === undefined),
+  `wxml 含 <image>=${/<image\b/.test(wxml)}；wxml 含 static/icons=${/static\/icons/.test(wxml)}；list 含 icon=${TAB_LIST.some((i) => i.icon !== undefined)}`
 )
 check(
   '组件与助手在**文件头**声明 POC 边界（不是"文件里随便哪儿出现过 POC"）',
@@ -482,11 +501,11 @@ check(
 // 「不假装完成转写」拆成两条**各自能失败**的断言。
 // （旧写法 `!有转写调用 || 提到未就绪` 里第二项被文件自己的注释满足 → 永远为真，等于没测。）
 check(
-  '组件不发起任何网络请求（转写未就绪，不假装能转写）',
+  '组件不发起任何网络请求（POC 刻意不接入转写，不上传录音）',
   !/wx\.request\s*\(/.test(barJs) && !/services\/request/.test(barJs),
   '组件内出现了网络调用，POC 不应上传任何东西'
 )
-check('面向用户的文案如实说明转写未就绪', /未就绪|待 B28/.test(barJs))
+check('面向用户的文案如实说明「本 POC 不接入转写」', /本 POC 不接入/.test(barJs))
 
 // ------------------------------------ G. 底栏不遮挡页面（遮挡回归）
 
@@ -512,15 +531,19 @@ check(
   `规则体=${tabbarBlock.trim().replace(/\s+/g, ' ')}`
 )
 
+// 页面根节点类 → 该页负责「给底栏让位」的选择器。
+// key 用页面路径（不带后缀），以便同时读出 .wxss 与 .wxml 两份来判断"规则是否挂在真实类上"。
 const CLEARANCE = {
-  'pages/index/index.wxss': '.page',
-  'pages/service/service.wxss': '.xj-page',
-  'pages/user/user.wxss': '.xj-page',
-  'pages/chat/chat.wxss': '.chat-page',
-  'pages/forum/forum.wxss': '.forum-page',
+  'pages/index/index': '.page',
+  'pages/service/service': '.svc-page',
+  'pages/user/user': '.xj-page',
+  'pages/chat/chat': '.chat-page',
+  'pages/forum/forum': '.forum-page',
 }
-for (const [rel, selector] of Object.entries(CLEARANCE)) {
-  const src = stripComments(read(rel))
+for (const [pagePath, selector] of Object.entries(CLEARANCE)) {
+  const cssRel = `${pagePath}.wxss`
+  const wxmlRel = `${pagePath}.wxml`
+  const src = stripComments(read(cssRel))
   // 取该选择器最后一次声明（同权重后声明生效），检查 padding-bottom 是否含底栏高度
   const rules = [...src.matchAll(new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`, 'g'))].map((m) => m[1])
   const last = rules[rules.length - 1] || ''
@@ -531,9 +554,20 @@ for (const [rel, selector] of Object.entries(CLEARANCE)) {
   const hasSafeArea = SAFE_AREA.test(pb)
   const enough = Number.isFinite(base) && base >= barHeight && hasSafeArea
   check(
-    `${rel} 的 ${selector} 底部留白 ≥ 底栏高度(${barHeight}rpx) + 安全区`,
+    `${cssRel} 的 ${selector} 底部留白 ≥ 底栏高度(${barHeight}rpx) + 安全区`,
     enough,
     `padding-bottom=${pb.trim() || '未声明'}（解析 ${base}rpx，安全区=${hasSafeArea}）`
+  )
+
+  // ★ 上面那条断言单独存在时会给出**假 PASS**：规则可以挂在一个本页根本不用的类上。
+  //   真实事故：F15 把服务页根类从 .xj-page 换成 .svc-page 后，F12 的 `.xj-page{padding-bottom}`
+  //   变成永不生效的死规则，而"留白 ≥ 底栏高度"照样通过 —— 页面实际被底栏压住。
+  //   所以必须证明：被加留白的类，确实是本页根元素真的带的类。
+  const rootTokens = rootClassTokens(read(wxmlRel))
+  check(
+    `${wxmlRel} 根节点确实带 ${selector} 类（留白规则不会退化成死规则）`,
+    rootTokens.includes(selector.slice(1)),
+    `根节点类=[${rootTokens.join(' ') || '未解析出'}]，规则挂在 ${selector}`
   )
 }
 
