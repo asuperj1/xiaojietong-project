@@ -145,7 +145,18 @@ def summarize(rows: list[dict], k: int) -> dict:
     false_hit_rate = (sum(1 for r in negatives if r["n_hits"] > 0) / len(negatives)) if negatives else 0.0
 
     latencies = [r["latency_ms"] for r in rows]
-    vector_used = sum(1 for r in rows if r["vector_used"])
+    vector_used = sum(1 for r in rows if r.get("vector_used"))
+    keyword_rows = sum(
+        1 for r in rows if r["n_hits"] and not r.get("vector_used")
+    )
+    if not rows or (vector_used == 0 and keyword_rows == 0):
+        mode = "none(无检索结果)"
+    elif vector_used and keyword_rows:
+        mode = "vector+fallback"
+    elif vector_used:
+        mode = "vector"
+    else:
+        mode = "keyword(降级)"
 
     return {
         "n_total": len(rows),
@@ -159,7 +170,8 @@ def summarize(rows: list[dict], k: int) -> dict:
         "latency_avg_ms": round(statistics.mean(latencies), 1) if latencies else 0.0,
         "latency_p50_ms": round(statistics.median(latencies), 1) if latencies else 0.0,
         "vector_hit_rows": vector_used,
-        "retrieval_mode": "vector+fallback" if vector_used else "keyword(降级)",
+        "keyword_hit_rows": keyword_rows,
+        "retrieval_mode": mode,
     }
 
 
@@ -182,6 +194,34 @@ def by_category(rows: list[dict]) -> list[dict]:
 
 
 # ------------------------------------------------------------------ 执行 ----
+
+def build_row(item: dict, hits: list[dict], latency_ms: float, error: str = "") -> dict:
+    """把一次检索结果整理成报告里的一行（**纯函数**，可无 DB 单测）。
+
+    ⚠️ C41 修复：原判据是 `any("score" in h for h in hits)`，但关键词分支
+    （`rag.py::_format_keyword_rows`）**也会写 `score`**（值是「命中词元占比」），
+    于是 `vector_used` **恒为 True** —— 报告里的「检索模式」与 `--strict` 的
+    「向量检索完全未生效」检查一起失效（典型的假绿）。
+    真正能区分两条路的是 C29 加的 `retrieval` 字段（`vector` / `keyword`）。
+    """
+    titles = [(h.get("title") or "").strip() for h in hits]
+    modes = sorted({str(h.get("retrieval") or "").strip() for h in hits} - {""})
+    return {
+        "id": item["id"],
+        "category": item["category"],
+        "question": item["question"],
+        "expected_titles": item.get("expected_titles") or [],
+        "got_titles": titles,
+        "n_hits": len(titles),
+        "rank": first_rank(titles, item.get("expected_titles") or []),
+        "retrieval_modes": modes,
+        "vector_used": "vector" in modes,
+        # 逐题分数必须落盘：没有分数就只能「猜」阈值，谈不上校准（C41）
+        "scores": [round(float(h.get("score") or 0.0), 4) for h in hits],
+        "latency_ms": round(latency_ms, 1),
+        "error": error,
+    }
+
 
 async def run_benchmark(dataset: dict, top_k: int, clear_cache: bool) -> list[dict]:
     """逐题调用 RAG 检索。进程内直连（不依赖后端 HTTP 服务）。"""
@@ -207,20 +247,8 @@ async def run_benchmark(dataset: dict, top_k: int, clear_cache: bool) -> list[di
         else:
             err = ""
         latency = (time.perf_counter() - t0) * 1000
-
-        titles = [(h.get("title") or "").strip() for h in hits]
-        rows.append({
-            "id": item["id"],
-            "category": item["category"],
-            "question": item["question"],
-            "expected_titles": item.get("expected_titles") or [],
-            "got_titles": titles,
-            "n_hits": len(titles),
-            "rank": first_rank(titles, item.get("expected_titles") or []),
-            "vector_used": any("score" in h for h in hits),
-            "latency_ms": round(latency, 1),
-            "error": err,
-        })
+        rows.append(build_row(item, hits, latency, err))
+    return rows
     return rows
 
 
@@ -232,7 +260,8 @@ def render_console(summary: dict, cats: list[dict], rows: list[dict]) -> None:
     print("=" * 78)
     print(f"  题目数：{summary['n_total']}（可命中 {summary['n_positive']} / 负样本 {summary['n_negative']}）"
           f"    top_k = {summary['k']}")
-    print(f"  检索模式：{summary['retrieval_mode']}（含 score 的题数 {summary['vector_hit_rows']}）")
+    print(f"  检索模式：{summary['retrieval_mode']}（向量命中 {summary['vector_hit_rows']} 题"
+          f" / 关键词降级 {summary.get('keyword_hit_rows', 0)} 题）")
     print("-" * 78)
     print(f"  hit@1 = {summary['hit@1']:.1%}    hit@3 = {summary['hit@3']:.1%}    "
           f"hit@5 = {summary['hit@5']:.1%}    MRR@5 = {summary['mrr']:.3f}")
@@ -329,6 +358,26 @@ def compare_with_baseline(baseline_path: Path, summary: dict) -> None:
 
 # ------------------------------------------------------------------ 入口 ----
 
+def vector_store_info() -> dict:
+    """取当前进程实际用的向量库（目录 / 后端 / 条数），作为报告证据。
+
+    为什么要写进报告：C41 之前没人发现「评测跑在**空库**上、向量检索全程未生效」——
+    因为报告里没有任何关于向量库本身的信息。指标必须能回答「它量的是什么东西」。
+    """
+    try:
+        from app.services.vector_store import _persist_dir, get_vector_store  # noqa: PLC0415
+
+        store = get_vector_store()
+        return {
+            "dir": str(_persist_dir()),
+            "backend": type(store).__name__,
+            "available": bool(store.available()),
+            "count": int(store.count()),
+        }
+    except Exception as exc:  # noqa: BLE001 - 环境不全时不阻断主流程
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="RAG 检索质量评估（C14）")
     parser.add_argument("--dataset", default=str(DEFAULT_DATASET), help="标注问答集 JSON 路径")
@@ -351,6 +400,8 @@ def main() -> int:
     print(f"标注集：{args.dataset}（{len(dataset['questions'])} 题）")
     rows = asyncio.run(run_benchmark(dataset, args.top_k, not args.no_clear_cache))
     summary = summarize(rows, args.top_k)
+    store_info = vector_store_info()
+    summary["vector_store"] = store_info
     cats = by_category(rows)
 
     render_console(summary, cats, rows)
@@ -361,7 +412,9 @@ def main() -> int:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "meta": {"dataset": args.dataset, "top_k": args.top_k, "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")},
+            "meta": {"dataset": args.dataset, "top_k": args.top_k,
+                     "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                     "vector_store": store_info},
             "summary": summary,
             "by_category": cats,
             "rows": rows,
@@ -385,8 +438,11 @@ def main() -> int:
             problems.append("可命中题目数为 0 —— hit@3 恒为 0，指标无意义")
         if summary["vector_hit_rows"] == 0:
             problems.append(
-                "向量检索完全未生效（全部走关键词降级）—— "
-                "bge-m3 / Ollama 可能不可用，指标不具参考性"
+                "向量检索完全未生效（全部走关键词降级）—— 指标不具参考性。\n"
+                f"      向量库：{store_info.get('dir')}（{store_info.get('backend')}，"
+                f"{store_info.get('count')} 条）\n"
+                "      先查：① Ollama 是否在跑且已 pull `bge-m3`；"
+                "② 向量库是否为空（空库必然全部降级，需重建索引）"
             )
         if problems:
             for p in problems:
