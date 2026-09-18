@@ -10,6 +10,8 @@
 
 `check` 退出码：`0` = 所有启用中的源都可抓；`1` = 存在被 robots 拒绝或参数非法的源。
 `run` 退出码：`0` = 每个源都没有错误；`1` = 至少一个源报错或被拒绝。
+「列表页一条都没匹配到」（站点改版 / 选择器写错）默认只在 **stderr** 打 ⚠️ 而不判失败
+—— 页面本来可能就是空的；要让定时任务据此报警就加 `--fail-on-empty`。
 
 用法：
     cd backend
@@ -37,7 +39,7 @@ from .limiter import RateLimiter
 from .pipeline import NoticeStore, load_sources, run_config
 from .robots import RobotsGate
 
-OK, FAIL, SKIP = "✅", "❌", "⏭"
+OK, FAIL, WARN, SKIP = "✅", "❌", "⚠️", "⏭"
 
 
 def _validate(src: dict[str, Any]) -> list[str]:
@@ -176,6 +178,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     bad = 0
+    empty = 0
     for r in results:
         if r.blocked:
             print(f"  {FAIL} {r.key:<20} 被拒绝：{r.blocked}")
@@ -187,9 +190,16 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"        · {err}")
         if not r.ok:
             bad += 1
+        if r.empty_list:
+            # 走 stderr：退出码可能仍是 0，但日志里必须留下显式痕迹，
+            # 否则站点改版后采集会**安静地停止工作**而无人察觉。
+            empty += 1
+            print(f"  {WARN} {r.key:<20} 列表选择器匹配到 0 条 —— 确认站点结构未变"
+                  f"（selectors.list: {r.list_selector or '（未配置）'}）", file=sys.stderr)
 
     print("-" * 78)
-    print(f"共 {len(results)} 个源；新增 {sum(r.inserted for r in results)} 条；异常 {bad} 个")
+    print(f"共 {len(results)} 个源；新增 {sum(r.inserted for r in results)} 条；"
+          f"异常 {bad} 个" + (f"；空列表 {empty} 个" if empty else ""))
     if args.json:
         Path(args.json).write_text(
             json.dumps({"config": str(path), "dry_run": args.dry_run,
@@ -198,9 +208,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"结果已落盘：{args.json}")
     print("=" * 78)
 
-    if bad:
+    if bad or (args.fail_on_empty and empty):
         print(f"{FAIL} 有源执行失败，详见上方错误与采集日志")
         return 1
+    if empty:
+        print(f"{WARN} 有 {empty} 个源列表为空 —— 已按非失败处理；"
+              f"定时任务可加 --fail-on-empty 据此报警")
     print(f"{OK} 采集完成")
     return 0
 
@@ -224,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
                      help="只跑指定的源 key（可重复；默认跑全部启用源）")
     run.add_argument("--limit", type=int, default=20, help="每个源最多抓多少条详情（默认 20）")
     run.add_argument("--dry-run", action="store_true", help="试跑：抓取并解析，但不写数据库")
+    run.add_argument("--fail-on-empty", action="store_true",
+                     help="列表页一条都没匹配到时以退出码 1 结束（默认只在 stderr 告警）")
     run.add_argument("--timeout", type=float, default=10.0, help="单次请求超时秒数（默认 10）")
     run.add_argument("--qps", type=float, default=0.5,
                      help="源里没写 rate_limit_qps 时用的默认值（默认 0.5）")

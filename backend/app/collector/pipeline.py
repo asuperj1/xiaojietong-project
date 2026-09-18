@@ -51,14 +51,26 @@ class SourceResult:
     inserted: int = 0                 # 新入库
     skipped: int = 0                  # 已存在（幂等跳过）
     dry_run: bool = False
+    list_selector: str = ""           # 便于"空列表"告警时直接指出是哪个选择器
     errors: list[str] = field(default_factory=list)
+
+    @property
+    def empty_list(self) -> bool:
+        """请求成功、解析也没报错，却**一条都没匹配到**。
+
+        这既可能是站点改版，也可能是配置里选择器写错了 —— 两者都会让采集
+        **安静地停止工作**，所以必须给出显式信号，不能只混在统计行里。
+        被 robots 拒绝或抓取失败**不算**空列表：那些已经有明确的错误原因了。
+        """
+        return self.listed == 0 and not self.blocked and not self.errors
 
     def as_dict(self) -> dict:
         return {
             "key": self.key, "name": self.name, "ok": self.ok, "blocked": self.blocked,
             "listed": self.listed, "fetched": self.fetched,
             "inserted": self.inserted, "skipped": self.skipped,
-            "dry_run": self.dry_run, "errors": self.errors,
+            "dry_run": self.dry_run, "empty_list": self.empty_list,
+            "list_selector": self.list_selector, "errors": self.errors,
         }
 
 
@@ -202,7 +214,8 @@ def collect_source(
     name = str(_field(source, "name", "") or key)
     url = str(_field(source, "url", "") or "")
     category = str(_field(source, "category", "") or "综合")
-    result = SourceResult(key=key, name=name, dry_run=dry_run)
+    result = SourceResult(key=key, name=name, dry_run=dry_run,
+                          list_selector=_selectors(source).get("list", ""))
 
     if not url:
         result.ok = False

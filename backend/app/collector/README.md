@@ -112,9 +112,22 @@ python -m app.collector run <config.yml> --json result.json   # 结果落盘
 | `--dry-run` | 试跑：真实抓取与解析，但**不构造 `NoticeStore`** —— 连数据库模块都不导入，没配 DB 的机器也能预览 |
 | `--timeout` | 单请求超时秒数（默认 10） |
 | `--qps` | 源里没写 `rate_limit_qps` 时的默认值（默认 0.5） |
+| `--fail-on-empty` | 列表页一条都没匹配到时**以退出码 1 结束**（默认只在 stderr 告警） |
 
 退出码：`0` = 每个源都没错误；`1` = 至少一个源报错或被 robots 拒绝
 （便于接定时任务 / CI）。被拒绝的源会打印**具体原因**，且**一条业务请求都不会发出去**。
+
+**"空列表"怎么处理**：选择器语法写错会抛 `ValueError`（见 §4.3），但
+**语法正确却匹配不到元素**（站点改版、类名换了）不会有任何异常 —— 于是
+`列表 0 条` 只会混在统计行里被忽略。所以：
+
+- **默认**：在 **stderr** 打一条显式 `⚠️ 列表选择器匹配到 0 条`（附上实际使用的
+  `selectors.list`），但**不判失败** —— 页面本来就可能暂时没有新内容；
+- **接定时任务时加 `--fail-on-empty`**，把"没采到"变成"任务失败"，避免站点改版后
+  采集**安静地停止工作**，直到有人发现库里不再有新通知。
+
+被 robots 拒绝或抓取失败**不算**空列表（那些已经有明确的错误原因）。
+`--json` 报告里也有 `empty_list` 与 `list_selector` 两个字段，便于事后排查。
 
 ### 4.3 新增一个源要改什么
 
@@ -183,17 +196,18 @@ python -m app.collector run <config.yml> --json result.json   # 结果落盘
 
 ```bash
 cd backend
-python -m pytest tests/test_collector.py tests/test_collector_b27.py -q    # 67 项，纯离线
+python -m pytest tests/test_collector.py tests/test_collector_b27.py -q    # 71 项，纯离线
 ```
 
 `test_collector.py`（B26，30 项）覆盖：robots 允许/禁止/404 放行/5xx 保守拒绝/网络故障、
 缓存与过期、`Crawl-delay` 解析、限速取更严值、注册表复用、JSONL 落盘与坏行容错、
 `FetchGuard` 的拒绝路径 / 等待路径 / `respect_robots=false` 绕过路径 / 结果记录。
 
-`test_collector_b27.py`（B27，37 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
+`test_collector_b27.py`（B27，41 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
 列表页去重与相对链接补全、缺 `content` 选择器时退化为 body、
 **详情页逐条过 robots**（被禁的那条一条请求都不发、其余照常入库）、
 限速作用于每一次请求、`Crawl-delay` 压过 qps、单条失败不拖累其余、
-幂等重跑、`--dry-run` 不碰数据库、`--limit`、CLI 退出码与 `check` 回归。
+幂等重跑、`--dry-run` 不碰数据库、`--limit`、
+**空列表告警与 `--fail-on-empty`**、CLI 退出码与 `check` 回归。
 
 作者：成员2（后端+AI）· B26 / B27

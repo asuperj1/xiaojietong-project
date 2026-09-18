@@ -465,6 +465,29 @@ def test_source_result_is_json_serialisable():
     assert payload["dry_run"] is True
 
 
+EMPTY_LIST_HTML = '<html><body><ul class="news-list"></ul></body></html>'
+
+
+def test_empty_list_is_flagged_but_not_an_error():
+    """"语法对、但一条都匹配不到"必须能看出来 —— 否则站点改版后采集会安静停掉。"""
+    result, _, _, _ = _run(pages={LIST_URL: (200, EMPTY_LIST_HTML, LIST_URL)})
+    assert (result.listed, result.ok) == (0, True)     # 默认不判失败：页面可能本来就空
+    assert result.empty_list is True
+    payload = result.as_dict()
+    assert payload["empty_list"] is True
+    assert payload["list_selector"] == "ul.news-list li a"   # 告警要指出是哪个选择器
+
+
+def test_empty_list_flag_ignores_blocked_and_failed_sources():
+    """被 robots 拒绝 / 抓取失败都已经有明确原因，不该再报"空列表"。"""
+    blocked, _, _, _ = _run(routes={ROBOTS_URL: (200, ROBOTS_DENY_PRIVATE)},
+                            source={**SOURCE, "url": ORIGIN + "/notice/private/idx.htm"})
+    assert blocked.empty_list is False
+
+    failed, _, _, _ = _run(pages={})
+    assert failed.empty_list is False
+
+
 # ================================================================= 日志 ====
 
 
@@ -509,3 +532,27 @@ def test_cli_check_offline_still_works(tmp_path):
     """回归：`check` 复用了 pipeline.load_sources，行为不变。"""
     path = _write_config(tmp_path, [SOURCE])
     assert cli_main(["check", str(path), "--offline"]) == 0
+
+
+def test_cli_warns_on_empty_list_to_stderr(tmp_path, monkeypatch, capsys):
+    """空列表默认不判失败，但必须在 **stderr** 留下显式信号（stdout 统计行太容易漏看）。"""
+    path = _write_config(tmp_path, [{**SOURCE, "respect_robots": False}])
+    http = FakeHttp({LIST_URL: (200, EMPTY_LIST_HTML, LIST_URL)})
+    monkeypatch.setattr("app.collector.__main__.HttpFetcher",
+                        lambda **kw: HttpFetcher(opener=http))
+
+    assert cli_main(["run", str(path), "--dry-run"]) == 0     # 默认退出码仍是 0
+    err = capsys.readouterr().err
+    assert "列表选择器匹配到 0 条" in err
+    assert "ul.news-list li a" in err                         # 指出实际用的选择器
+
+
+def test_cli_fail_on_empty_returns_1(tmp_path, monkeypatch, capsys):
+    """定时任务用 --fail-on-empty 把"没采到"变成"任务失败"。"""
+    path = _write_config(tmp_path, [{**SOURCE, "respect_robots": False}])
+    http = FakeHttp({LIST_URL: (200, EMPTY_LIST_HTML, LIST_URL)})
+    monkeypatch.setattr("app.collector.__main__.HttpFetcher",
+                        lambda **kw: HttpFetcher(opener=http))
+
+    assert cli_main(["run", str(path), "--dry-run", "--fail-on-empty"]) == 1
+    capsys.readouterr()                                       # 吃掉输出，别污染其它用例
