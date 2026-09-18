@@ -62,14 +62,38 @@
  *
  * 用法
  * ----
- *     node tools/verify_miniprogram_static_rules.js              # 只读扫描 miniprogram/
- *     node tools/verify_miniprogram_static_rules.js --self-test   # 六条规则的阴性对照
+ *     node tools/verify_miniprogram_static_rules.js                  # 门禁模式（默认读 baseline）
+ *     node tools/verify_miniprogram_static_rules.js --strict         # 严格模式：忽略 baseline，任何违规都失败
+ *     node tools/verify_miniprogram_static_rules.js --baseline <f>   # 指定 baseline 文件
+ *     node tools/verify_miniprogram_static_rules.js --list-candidates # R2 候选清单（人工核对）
+ *     node tools/verify_miniprogram_static_rules.js --print-baseline  # 打印 baseline 片段（只打印，不写文件）
+ *     node tools/verify_miniprogram_static_rules.js --self-test       # 六条规则 + baseline 的阴性对照
  *     node tools/verify_miniprogram_static_rules.js --src <repo-root>
  *
- * 退出码：0 = 六条规则全部通过；1 = 至少一条违规（或脚本/自检自身异常、
- * 或**扫描面无覆盖** —— 扫不到页面入口时拒绝报 PASS，见 docs/CI.md「宁可红灯，不要假绿」）。
- * 输出两档：**违规**（决定退出码）与**覆盖提示 INFO**（说明某处为什么没被判违规，
- * 例如"有 `X.f || []` 兜底但没有 `X &&` 守卫""渲染列表但请求未带分页参数"）。
+ * 门禁与 baseline（评审 P2）
+ * ------------------------
+ *  `dev` 上本来就有历史违规（`FRONT-08` 的 3 处 R2）。为了让 CI 门禁"红得有意义"，
+ *  脚本把结果分成三类，**只有后两类决定退出码**：
+ *
+ *    KNOWN  已登记在 `tools/miniprogram_static_rules_baseline.json` 的历史违规 → 打印，不阻塞；
+ *    NEW    本次扫描新出现的违规                                        → **阻塞**；
+ *    STALE  baseline 里登记、但现在已经不存在的条目                     → **阻塞**（强制清理）。
+ *
+ *  STALE 也阻塞是刻意的：baseline 一旦"只进不出"就会退化成永久白名单，
+ *  修好页面后没人删条目，下一个人还会以为这些页面仍然有问题。
+ *  让 STALE 失败 = 强制"修页面"与"删条目"发生在同一个 PR 里（代价是删 1 个 JSON 块）。
+ *
+ *  匹配身份 = `rule + file + identity`，**不含行号**（行号会随无关改动漂移）。
+ *  `identity` 是每条 finding 的稳定身份（如 R1 的 `handler:onCatTap`、
+ *  R4 的 `list-array-use:res.items`）；R2 一个页面最多一条，故 identity 为空串。
+ *  条目必须写明 `reason`（格式校验会拦住"无理由白名单"）。
+ *
+ * 退出码：0 = 无违规，或门禁模式下 NEW=0 且 STALE=0；
+ *         1 = 有 NEW / 有 STALE / 严格模式下有违规 / **扫描面无覆盖** / baseline 格式错误 / 脚本异常。
+ *         （扫不到页面入口时拒绝报 PASS，见 docs/CI.md「宁可红灯，不要假绿」）
+ * 输出三档：**违规（KNOWN/NEW/STALE）**、**覆盖提示 INFO**（说明某处为什么没被判违规）、
+ *           **R2 候选清单**（`--list-candidates`，与历史走查报告的"12 个列表页"不是同一口径，
+ *           见 tools/README.md §「12 vs 17」）。
  * 文件名：任务单写的是 `verify_miniprogram_rules.js`，本仓实际文件是
  * `verify_miniprogram_static_rules.js`（接 CI 时用实际路径）。
  *
@@ -450,6 +474,9 @@ function scan(mpDir) {
   const pages = jsFiles.filter((f) => f.rel.startsWith('pages/') && !!byRel[f.rel.replace(/\.js$/, '.wxml')])
 
   const ctx = { mpDir, jsFiles, wxmlFiles, byRel, pages }
+  // 每条规则的"检查计数"：只有规则函数真的走过扫描面才会 > 0 ——
+  // 用来堵住"规则被删/没被调用 → 0 命中 → 假绿"（评审实测过的假绿路径）
+  ctx.checks = {}
   ctx.collectionNames = collectCollectionNames(jsFiles)
   ctx.responseBindings = {}
   jsFiles.forEach((f) => {
@@ -458,8 +485,9 @@ function scan(mpDir) {
 
   const violations = []
   const notes = [] // 覆盖提示：不计入退出码，只暴露静态分析的边界（见 README「盲区」）
+  const r2Candidates = [] // R2 的"渲染列表但请求未带分页参数"候选（人工核对清单，不判违规）
   rule1TapDetailValue(ctx, violations, notes)
-  rule2MissingLowerTrigger(ctx, violations, notes)
+  rule2MissingLowerTrigger(ctx, violations, notes, r2Candidates)
   rule3DatetimeStringParse(ctx, violations)
   rule4ListFieldNoFallback(ctx, violations, notes)
   rule5HardcodedBaseUrl(ctx, violations)
@@ -467,8 +495,11 @@ function scan(mpDir) {
 
   violations.sort((a, b) => (a.rule === b.rule ? a.file.localeCompare(b.file) || a.line - b.line : a.rule.localeCompare(b.rule)))
   return {
-    violations,
+    // 同一 rule/file/line 的多个证据合并成一条，避免"违规处数"被重复计数
+    violations: mergeFindings(disambiguateIdentities(violations)),
     notes,
+    r2Candidates,
+    checks: ctx.checks,
     stats: {
       js: jsFiles.length,
       wxml: wxmlFiles.length,
@@ -484,14 +515,75 @@ function code(file) {
   return codeCache.get(file)
 }
 
-/** 违规项（决定退出码）。line = 0 表示"该违规不属于某一行"（如 app.json 级别的注册问题、聚合项） */
-function violation(rule, file, line, evidence, kind) {
-  return { rule, file, line, evidence: clip(evidence), kind, fix: RULE_BY_ID[rule].fix }
+/**
+ * 违规项（决定退出码 / 进入 baseline 分类）。
+ *
+ * - `line`：1-based；`0` 表示"不属于某一行"（app.json 级问题、聚合项）
+ * - `identity`：**稳定身份**（跨行号漂移不变），baseline 用它精确登记某一条 finding；
+ *   同一文件同一规则可能有多条（如两个 tap 处理器），只按 `(rule, file)` 登记会互相掩盖
+ */
+function violation(rule, file, line, evidence, kind, identity) {
+  return {
+    rule,
+    file,
+    line,
+    evidence: clip(evidence),
+    kind,
+    identity: identity === undefined || identity === null ? '' : String(identity),
+    fix: RULE_BY_ID[rule].fix,
+  }
 }
 
 /** 覆盖提示（INFO）：说明某处为什么没被判违规 —— 不参与退出码（line = 0 同上） */
 function note(rule, file, line, text, kind) {
   return { rule, file, line, text: clip(text, 220), kind }
+}
+
+/**
+ * 同一 `rule + file + identity` 出现多条时（例如同一文件里两行写了同一个地址字面量），
+ * 给第 2 条起追加 `#2`/`#3`… —— 否则两条 finding 会共用同一个 baseline key，
+ * 一条条目只能豁免其中一条，另一条永远 NEW（且 `--print-baseline` 会打印重复条目）。
+ *
+ * ⚠️ 顺序口径：按 `rule/file/行号` 排序后的出现次序。同一文件里插入一条**同身份**的
+ * finding 会让后续编号位移（此时 baseline 条目会报 STALE，提示重新登记）。
+ */
+function disambiguateIdentities(violations) {
+  const seen = new Map()
+  for (const v of violations) {
+    const base = v.identity || ''
+    const key = `${v.rule}|${v.file}|${base}`
+    const n = (seen.get(key) || 0) + 1
+    seen.set(key, n)
+    if (n > 1) v.identity = base ? `${base}#${n}` : `#${n}`
+  }
+  return violations
+}
+
+/**
+ * 合并"同一 rule + file + line"的多条证据（评审 P3-1）。
+ * 典型场景：一行里同时有静态 `BASE_URL` 与写死的地址字面量 —— 那是**一处**缺陷，
+ * 不该在"违规处数"里算两次。合并后 evidence 并列展示，identities/kinds 保留全部。
+ */
+function mergeFindings(violations) {
+  const byKey = new Map()
+  const merged = []
+  for (const v of violations) {
+    const key = v.line > 0 ? `${v.rule}|${v.file}|${v.line}` : `${v.rule}|${v.file}|#${v.evidence}`
+    const hit = byKey.get(key)
+    if (!hit) {
+      const copy = Object.assign({}, v, { evidenceAll: [v.evidence], identities: [v.identity], kinds: [v.kind] })
+      byKey.set(key, copy)
+      merged.push(copy)
+      continue
+    }
+    if (hit.evidenceAll.indexOf(v.evidence) === -1) {
+      hit.evidenceAll.push(v.evidence)
+      hit.evidence = hit.evidenceAll.join(' ;; ')
+    }
+    if (hit.identities.indexOf(v.identity) === -1) hit.identities.push(v.identity)
+    if (hit.kinds.indexOf(v.kind) === -1) hit.kinds.push(v.kind)
+  }
+  return merged
 }
 
 // ---------------------------------------------------------------- R1 ----
@@ -508,7 +600,9 @@ function tapHandlers(wxmlSrc) {
 }
 
 function rule1TapDetailValue(ctx, out, notes) {
+  let examined = 0
   for (const page of ctx.pages) {
+    examined += 1 // 工作单元 = 页面（与是否命中无关，保证"规则真的跑过扫描面"可验证）
     const wxmlFile = ctx.byRel[page.rel.replace(/\.js$/, '.wxml')]
     if (!wxmlFile) continue
     const handlers = tapHandlers(stripWxmlComments(readText(wxmlFile.abs)))
@@ -526,7 +620,14 @@ function rule1TapDetailValue(ctx, out, notes) {
       if (!hit) continue
       const at = fn.start + hit.index
       out.push(
-        violation('R1_TAP_DETAIL_VALUE', page.rel, lineAt(src, at), `${name} 内：${lineTextAt(src, at)}`, 'tap-detail-value')
+        violation(
+          'R1_TAP_DETAIL_VALUE',
+          page.rel,
+          lineAt(src, at),
+          `${name} 内：${lineTextAt(src, at)}`,
+          'tap-detail-value',
+          `handler:${name}` // 稳定身份：同一页可能有多个 tap 处理器
+        )
       )
     }
     if (unresolved.length) {
@@ -541,6 +642,7 @@ function rule1TapDetailValue(ctx, out, notes) {
       )
     }
   }
+  ctx.checks.R1_TAP_DETAIL_VALUE = examined
 }
 
 // ---------------------------------------------------------------- R2 ----
@@ -569,28 +671,46 @@ function hasPaginationParam(args) {
   return /\b(?:page|pageNo|pageNum|pageIndex|page_no|page_num|offset|skip)\b/.test(codeOnly)
 }
 
-function rule2MissingLowerTrigger(ctx, out, notes) {
+/** 从 request 调用实参里取第一个字符串字面量路径（用于 R2 候选清单展示） */
+function requestPathOf(callText) {
+  const m = /(['"])([^'"]{1,80})\1/.exec(callText)
+  return m ? m[2] : ''
+}
+
+function rule2MissingLowerTrigger(ctx, out, notes, candidates) {
   const unverifiable = []
+  let examined = 0
   for (const page of ctx.pages) {
+    examined += 1
     const src = code(page.abs)
-    const hasRequest = findCalls(src, 'request').length > 0
-    const paginated = findCalls(src, 'request').find((c) => hasPaginationParam(c.args))
-    if (!paginated) {
-      // 不传分页参数的列表页无法静态判定"能不能加载更多"（可能后端根本不支持分页）→ 只登记盲区
-      if (hasRequest && rendersList(ctx, page)) unverifiable.push(page.rel.replace(/^pages\//, '').replace(/\.js$/, ''))
-      continue
-    }
-    if (/(?:^|[\s,{])onReachBottom\s*[:(]/.test(src)) continue
+    const calls = findCalls(src, 'request')
+    const hasRequest = calls.length > 0
+    const paginated = calls.find((c) => hasPaginationParam(c.args))
     const wxmlFile = ctx.byRel[page.rel.replace(/\.js$/, '.wxml')]
     const wxmlSrc = wxmlFile ? stripWxmlComments(readText(wxmlFile.abs)) : ''
-    if (/(?:bind|catch)[:]?scrolltolower\s*=/.test(wxmlSrc)) continue
+    const hasHook =
+      /(?:^|[\s,{])onReachBottom\s*[:(]/.test(src) || /(?:bind|catch)[:]?scrolltolower\s*=/.test(wxmlSrc)
+    if (!paginated) {
+      // 不传分页参数的列表页无法静态判定"能不能加载更多"（可能后端根本不支持分页）→ 只登记盲区
+      if (hasRequest && rendersList(ctx, page)) {
+        unverifiable.push(page.rel.replace(/^pages\//, '').replace(/\.js$/, ''))
+        candidates.push({
+          file: page.rel,
+          hasHook,
+          paths: calls.map((c) => requestPathOf(c.text)).filter(Boolean).slice(0, 3),
+        })
+      }
+      continue
+    }
+    if (hasHook) continue
     out.push(
       violation(
         'R2_MISSING_LOWER_TRIGGER',
         page.rel,
         lineAt(src, paginated.index),
         `分页拉取但无触底钩子：${clip(paginated.text, 120)}`,
-        'missing-hook'
+        'missing-hook',
+        '' // 一个页面最多一条 R2：身份就是 (rule, file)
       )
     )
   }
@@ -600,11 +720,12 @@ function rule2MissingLowerTrigger(ctx, out, notes) {
         'R2_MISSING_LOWER_TRIGGER',
         '(多页)',
         0,
-        `另有 ${unverifiable.length} 个页面渲染列表但请求未带分页参数，R2 不判定（属静态盲区，需人工确认后端是否支持分页）：${unverifiable.join(', ')}`,
+        `另有 ${unverifiable.length} 个页面渲染列表但请求未带分页参数，R2 不判定（属静态盲区，需人工确认后端是否支持分页）：${unverifiable.join(', ')}。可跑 --list-candidates 看逐页清单`,
         'r2-unverifiable'
       )
     )
   }
+  ctx.checks.R2_MISSING_LOWER_TRIGGER = examined
 }
 
 // ---------------------------------------------------------------- R3 ----
@@ -614,7 +735,9 @@ function rule3DatetimeStringParse(ctx, out) {
     { re: /\bnew\s+Date\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g, kind: 'new-date' },
     { re: /\bDate\s*\.\s*parse\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g, kind: 'date-parse' },
   ]
+  let examined = 0
   for (const file of ctx.jsFiles) {
+    examined += 1
     const src = code(file.abs)
     for (const p of patterns) {
       for (const m of findAll(src, p.re)) {
@@ -629,7 +752,14 @@ function rule3DatetimeStringParse(ctx, out) {
           // 只判「日期与时间用空格分隔」的经典 iOS 失败形式；ISO 的 `T` 形式是安全的
           if (/^\d{4}-\d{1,2}-\d{1,2}[ ]+\d{1,2}:\d{2}/.test(value)) {
             out.push(
-              violation('R3_DATETIME_STRING_PARSE', file.rel, line, `字符串时间直解：${evidenceOf()}`, 'date-literal')
+              violation(
+                'R3_DATETIME_STRING_PARSE',
+                file.rel,
+                line,
+                `字符串时间直解：${evidenceOf()}`,
+                'date-literal',
+                `date-literal:${clip(value, 40)}#${shortHash(value)}`
+              )
             )
           }
           continue
@@ -638,13 +768,21 @@ function rule3DatetimeStringParse(ctx, out) {
         if (/^[\w$]+$/.test(arg) || /^[\w$]+(\s*\.\s*[\w$]+)+$/.test(arg)) {
           if (BACKEND_TIME_FIELDS.indexOf(last) !== -1) {
             out.push(
-              violation('R3_DATETIME_STRING_PARSE', file.rel, line, `后端时间字段直解：${evidenceOf()}`, 'date-field')
+              violation(
+                'R3_DATETIME_STRING_PARSE',
+                file.rel,
+                line,
+                `后端时间字段直解：${evidenceOf()}`,
+                'date-field',
+                `date-field:${clip(arg, 60)}#${shortHash(arg)}`
+              )
             )
           }
         }
       }
     }
   }
+  ctx.checks.R3_DATETIME_STRING_PARSE = examined
 }
 
 // ---------------------------------------------------------------- R4 ----
@@ -692,6 +830,21 @@ function esc(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/**
+ * 32 位 FNV-1a（8 位十六进制）。用途：长字面量被 `clip` 截断后仍要能区分彼此 ——
+ * 两条 >80 字符、前 80 字符相同的地址字面量若只按截断值做身份，会塌成同一个 key，
+ * 一条 baseline 条目就能把两条都豁免掉（评审实测）。
+ */
+function shortHash(s) {
+  let h = 0x811c9dc5
+  const str = String(s)
+  for (let i = 0; i < str.length; i += 1) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
 /** 取 index 之前的**同一条语句**片段（以 `;` `{` `}` 或换行为界） */
 function sameStatementBefore(src, index) {
   const window = src.slice(Math.max(0, index - 240), index)
@@ -733,7 +886,9 @@ function enclosingGuardText(src, index, guardTest) {
 function rule4ListFieldNoFallback(ctx, out, notes) {
   const colls = Array.from(ctx.collectionNames)
   const weakGuards = []
+  let examined = 0
   for (const file of ctx.jsFiles) {
+    examined += 1
     const src = code(file.abs)
     const binds = Array.from(ctx.responseBindings[file.rel] || [])
     if (!binds.length || !colls.length) continue
@@ -798,11 +953,29 @@ function rule4ListFieldNoFallback(ctx, out, notes) {
         const directUse = ARRAY_USE_RE.test(afterS)
         const parenUse = /^\)/.test(afterS) && ARRAY_USE_RE.test(afterS.replace(/^\)+[ \t]*/, ''))
         if (directUse && !guarded) {
-          out.push(violation('R4_LIST_FIELD_NO_FALLBACK', file.rel, line, `直接当数组用：${evidence}`, 'list-array-use'))
+          out.push(
+            violation(
+              'R4_LIST_FIELD_NO_FALLBACK',
+              file.rel,
+              line,
+              `直接当数组用：${evidence}`,
+              'list-array-use',
+              `list-array-use:${bind}.${field}`
+            )
+          )
           continue
         }
         if (parenUse) {
-          out.push(violation('R4_LIST_FIELD_NO_FALLBACK', file.rel, line, `守卫后仍当数组用：${evidence}`, 'list-array-use'))
+          out.push(
+            violation(
+              'R4_LIST_FIELD_NO_FALLBACK',
+              file.rel,
+              line,
+              `守卫后仍当数组用：${evidence}`,
+              'list-array-use',
+              `list-array-use:${bind}.${field}`
+            )
+          )
           continue
         }
         if (guarded) continue // ④
@@ -811,7 +984,16 @@ function rule4ListFieldNoFallback(ctx, out, notes) {
         if (endsValue && /[:=]\s*$/.test(before)) {
           // ⑤ 整块赋值：若被 `if (X && X.f ...) {` 这种单一守卫块包着，块内取值是安全的
           if (enclosingGuardText(src, start, (cond) => guardRe.test(cond))) continue
-          out.push(violation('R4_LIST_FIELD_NO_FALLBACK', file.rel, line, `整块赋值未兜底：${evidence}`, 'list-assign'))
+          out.push(
+            violation(
+              'R4_LIST_FIELD_NO_FALLBACK',
+              file.rel,
+              line,
+              `整块赋值未兜底：${evidence}`,
+              'list-assign',
+              `list-assign:${bind}.${field}`
+            )
+          )
         }
       }
     }
@@ -827,6 +1009,7 @@ function rule4ListFieldNoFallback(ctx, out, notes) {
       )
     )
   }
+  ctx.checks.R4_LIST_FIELD_NO_FALLBACK = examined
 }
 
 // ---------------------------------------------------------------- R5 ----
@@ -834,24 +1017,41 @@ function rule4ListFieldNoFallback(ctx, out, notes) {
 function rule5HardcodedBaseUrl(ctx, out) {
   const ENV_REL = 'config/env.js'
   if (!ctx.byRel[ENV_REL]) {
-    out.push(violation('R5_HARDCODED_BASE_URL', ENV_REL, 0, '缺少统一地址解析模块 config/env.js', 'missing-env'))
+    out.push(violation('R5_HARDCODED_BASE_URL', ENV_REL, 0, '缺少统一地址解析模块 config/env.js', 'missing-env', 'missing-env'))
   }
+  let examined = 0
   for (const file of ctx.jsFiles) {
+    examined += 1
     if (file.rel === ENV_REL) continue // env.js 是地址的唯一事实来源（http://127.0.0.1 为 develop 默认值）
     const src = code(file.abs)
     for (const m of findAll(src, /\bBASE_URL\b/g)) {
       out.push(
-        violation('R5_HARDCODED_BASE_URL', file.rel, lineAt(src, m.index), `静态 BASE_URL：${lineTextAt(src, m.index)}`, 'base-url-ident')
+        violation(
+          'R5_HARDCODED_BASE_URL',
+          file.rel,
+          lineAt(src, m.index),
+          `静态 BASE_URL：${lineTextAt(src, m.index)}`,
+          'base-url-ident',
+          'base-url-ident:BASE_URL'
+        )
       )
     }
     for (const m of findAll(src, /(['"])(https?:\/\/[^'"\s]*)\1/g)) {
       const url = m[2]
       if (URL_LITERAL_ALLOWLIST.indexOf(url) !== -1) continue
       out.push(
-        violation('R5_HARDCODED_BASE_URL', file.rel, lineAt(src, m.index), `写死的地址字面量：${url}`, 'url-literal')
+        violation(
+          'R5_HARDCODED_BASE_URL',
+          file.rel,
+          lineAt(src, m.index),
+          `写死的地址字面量：${url}`,
+          'url-literal',
+          `url-literal:${clip(url, 60)}#${shortHash(url)}`
+        )
       )
     }
   }
+  ctx.checks.R5_HARDCODED_BASE_URL = examined
 }
 
 // ---------------------------------------------------------------- R6 ----
@@ -859,15 +1059,23 @@ function rule5HardcodedBaseUrl(ctx, out) {
 function rule6PageRegistration(ctx, out) {
   const appFile = ctx.byRel['app.json']
   if (!appFile) {
-    out.push(violation('R6_PAGE_REGISTRATION', 'app.json', 0, '缺少 app.json（无法校验页面注册）', 'missing-app-json'))
+    ctx.checks.R6_PAGE_REGISTRATION = ctx.jsFiles.length + ctx.wxmlFiles.length
+    out.push(
+      violation('R6_PAGE_REGISTRATION', 'app.json', 0, '缺少 app.json（无法校验页面注册）', 'missing-app-json', 'missing-app-json')
+    )
     return
   }
+  let examined = 0
   const appSrc = readText(appFile.abs)
   let cfg
   try {
     cfg = JSON.parse(appSrc)
   } catch (e) {
-    out.push(violation('R6_PAGE_REGISTRATION', 'app.json', 0, `app.json 不是合法 JSON：${e.message}`, 'app-json-parse'))
+    // 解析失败已经是一条 R6 违规 —— 规则确实跑过，检查计数照记，避免被误报成"规则未执行"
+    ctx.checks.R6_PAGE_REGISTRATION = (ctx.jsFiles.length + ctx.wxmlFiles.length) || 1
+    out.push(
+      violation('R6_PAGE_REGISTRATION', 'app.json', 0, `app.json 不是合法 JSON：${e.message}`, 'app-json-parse', 'app-json-parse')
+    )
     return
   }
 
@@ -880,10 +1088,18 @@ function rule6PageRegistration(ctx, out) {
 
   // (a) 页面文件存在但没注册
   for (const page of ctx.pages) {
+    examined += 1
     const key = page.rel.replace(/\.js$/, '')
     if (!registered.has(key)) {
       out.push(
-        violation('R6_PAGE_REGISTRATION', page.rel, 1, `页面未在 app.json#pages 注册：${key}`, 'page-unregistered')
+        violation(
+          'R6_PAGE_REGISTRATION',
+          page.rel,
+          1,
+          `页面未在 app.json#pages 注册：${key}`,
+          'page-unregistered',
+          `page-unregistered:${key}`
+        )
       )
     }
   }
@@ -893,7 +1109,14 @@ function rule6PageRegistration(ctx, out) {
     const wxml = ctx.byRel[key + '.wxml']
     if (!js || !wxml) {
       out.push(
-        violation('R6_PAGE_REGISTRATION', 'app.json', 0, `app.json 注册了不存在的页面：${key}（缺 ${!js ? '.js ' : ''}${!wxml ? '.wxml' : ''}）`, 'page-missing-file')
+        violation(
+          'R6_PAGE_REGISTRATION',
+          'app.json',
+          0,
+          `app.json 注册了不存在的页面：${key}（缺 ${!js ? '.js ' : ''}${!wxml ? '.wxml' : ''}）`,
+          'page-missing-file',
+          `page-missing-file:${key}`
+        )
       )
     }
   }
@@ -903,27 +1126,152 @@ function rule6PageRegistration(ctx, out) {
     if (!item || !item.pagePath) continue
     if (!registered.has(item.pagePath)) {
       out.push(
-        violation('R6_PAGE_REGISTRATION', 'app.json', 0, `tabBar 项未在 pages 注册：${item.pagePath}`, 'tabbar-unregistered')
+        violation(
+          'R6_PAGE_REGISTRATION',
+          'app.json',
+          0,
+          `tabBar 项未在 pages 注册：${item.pagePath}`,
+          'tabbar-unregistered',
+          `tabbar-unregistered:${item.pagePath}`
+        )
       )
     }
   }
   // (d) 跳转目标必须是已注册页面（字符串字面量形式 `/pages/x/y`，允许后面跟 ?query 或继续拼接）
   const targetRe = /(['"])(\/pages\/[A-Za-z0-9_-]+\/[A-Za-z0-9_/-]*)/g
   for (const file of ctx.jsFiles.concat(ctx.wxmlFiles)) {
+    examined += 1
     const src = file.rel.endsWith('.wxml') ? stripWxmlComments(readText(file.abs)) : code(file.abs)
     for (const m of findAll(src, targetRe)) {
       const target = m[2].slice(1).replace(/\/$/, '')
       if (registered.has(target)) continue
       out.push(
-        violation('R6_PAGE_REGISTRATION', file.rel, lineAt(src, m.index), `跳转目标未注册：${m[2]}`, 'nav-target-unregistered')
+        violation(
+          'R6_PAGE_REGISTRATION',
+          file.rel,
+          lineAt(src, m.index),
+          `跳转目标未注册：${m[2]}`,
+          'nav-target-unregistered',
+          `nav-target-unregistered:${m[2]}`
+        )
       )
     }
   }
+  ctx.checks.R6_PAGE_REGISTRATION = examined + registered.size
+}
+
+/** 六条规则是否**真的执行过**（每条规则的工作单元 > 0）；返回未执行的规则 ID 列表 */
+function rulesNotExecuted(checks) {
+  const c = checks || {}
+  return RULES.filter((r) => !(c[r.id] > 0)).map((r) => r.id)
 }
 
 // ============================================================== 报告 ====
 
 const WIDTH = 88
+
+// -------------------------------------------------------------- baseline ----
+//
+// 门禁语义（评审 P2）：
+//   KNOWN（已登记）→ 打印，不阻塞；NEW（新增）→ 阻塞；STALE（基线条目已失效）→ **也阻塞**。
+//
+// 为什么 STALE 也阻塞（而不是只 warn）：baseline 一旦"只进不出"，就会退化成永久白名单，
+// 历史欠账修好了也没人删条目，下一个人还会以为这些页面仍然有问题。
+// 让 STALE 失败，等于强制"修好页面"和"删掉条目"发生在同一个 PR 里 —— 代价只是删 1 个 JSON 块。
+
+const BASELINE_DEFAULT_REL = 'tools/miniprogram_static_rules_baseline.json'
+
+/** finding 的稳定身份：rule + file + identity（**不含行号**，行号会随无关改动漂移） */
+function findingKey(rule, file, identity) {
+  return `${rule}|${file}|${identity || ''}`
+}
+
+/**
+ * 解析 baseline 文本（纯函数，便于 self-test 直接喂 CRLF 文本做对照）。
+ * 返回 { entries, errors }：格式错误一律进 errors（由调用方决定是否硬失败），不静默忽略。
+ */
+function parseBaselineText(text) {
+  const errors = []
+  let data = null
+  try {
+    data = JSON.parse(normalizeEol(text))
+  } catch (e) {
+    return { entries: [], errors: [`baseline 不是合法 JSON：${e.message}`] }
+  }
+  const list = data && Array.isArray(data.entries) ? data.entries : null
+  if (!list) return { entries: [], errors: ['baseline 缺少 entries 数组'] }
+  const entries = []
+  list.forEach((raw, i) => {
+    const at = `entries[${i}]`
+    if (!raw || typeof raw !== 'object') return errors.push(`${at} 不是对象`)
+    if (!raw.rule || !RULE_BY_ID[raw.rule]) return errors.push(`${at}.rule 缺失或不是已知规则：${raw.rule}`)
+    if (!raw.file || typeof raw.file !== 'string') return errors.push(`${at}.file 缺失`)
+    if (typeof raw.identity !== 'string') return errors.push(`${at}.identity 必须是字符串（无稳定身份时写空串 ""）`)
+    if (!raw.reason || String(raw.reason).trim().length < 4) return errors.push(`${at}.reason 必须写明登记原因`)
+    entries.push({
+      rule: raw.rule,
+      file: raw.file,
+      identity: raw.identity,
+      reason: String(raw.reason),
+      evidence: raw.evidence ? String(raw.evidence) : '', // 可选：登记时的证据，用于提醒"证据已变化"
+      registered: raw.registered ? String(raw.registered) : '',
+      ref: raw.ref ? String(raw.ref) : '',
+      owner: raw.owner ? String(raw.owner) : '',
+      key: findingKey(raw.rule, raw.file, raw.identity),
+    })
+  })
+  const seen = new Set()
+  entries.forEach((e) => {
+    if (seen.has(e.key)) errors.push(`重复条目：${e.key}`)
+    seen.add(e.key)
+  })
+  return { entries, errors }
+}
+
+/**
+ * 门禁判定（纯函数，self-test 直接调用 —— 这就是生产用的判定逻辑）。
+ * 匹配规则：finding 的 `rule + file + identity` 命中一条**未被占用**的 baseline 条目 → KNOWN；
+ * 否则 NEW。未被任何 finding 命中的条目 → STALE。
+ */
+function evaluateGate(violations, entries) {
+  const pool = new Map()
+  entries.forEach((e) => {
+    if (!pool.has(e.key)) pool.set(e.key, [])
+    pool.get(e.key).push(e)
+  })
+  const known = []
+  const fresh = []
+  violations.forEach((v) => {
+    const ids = v.identities && v.identities.length ? v.identities : [v.identity || '']
+    const matched = []
+    let allMatched = true
+    for (const id of ids) {
+      const bucket = pool.get(findingKey(v.rule, v.file, id))
+      if (bucket && bucket.length) matched.push(bucket.shift())
+      else allMatched = false
+    }
+    // 合并了多条证据的 finding 必须**全部身份**都已登记才算 KNOWN：
+    // 否则同一行新增的另一条缺陷会被已登记的那条顺带掩盖（实测过的洗白路径）。
+    // 已命中的条目照常消费掉（不再报 STALE），剩余的按 NEW 处理。
+    if (allMatched && matched.length) {
+      known.push({
+        violation: v,
+        entry: matched[0],
+        entries: matched,
+        evidenceChanged: !!matched[0].evidence && matched[0].evidence !== v.evidence,
+      })
+    } else {
+      fresh.push(v)
+    }
+  })
+  const stale = []
+  pool.forEach((bucket) => bucket.forEach((e) => stale.push(e)))
+  return { known, fresh, stale, exitCode: fresh.length > 0 || stale.length > 0 ? 1 : 0 }
+}
+
+function baselineStatusLabel(gate) {
+  return `NEW=${gate.fresh.length} STALE=${gate.stale.length} KNOWN=${gate.known.length}`
+}
 
 function bar(title) {
   console.log('\n' + '='.repeat(WIDTH))
@@ -942,9 +1290,12 @@ function printRuleInventory() {
   }
 }
 
-function printReport(result, mpLabel) {
-  const { violations, notes, stats } = result
-  bar(`F22 小程序端静态检查 · 只读扫描 ${mpLabel}`)
+function printReport(result, mpLabel, opts) {
+  const { violations, notes, stats, checks } = result
+  const options = opts || {}
+  const gate = options.gate || null // 有 baseline 时才做 KNOWN/NEW/STALE 分类
+  const modeLabel = gate ? `门禁模式（baseline: ${options.baselineLabel}）` : options.strict ? '严格模式（忽略 baseline）' : '只读扫描'
+  bar(`F22 小程序端静态检查 · ${modeLabel} · ${mpLabel}`)
   console.log(`文件：${stats.js} js / ${stats.wxml} wxml / 页面入口 ${stats.pages}`)
   console.log(`行尾已归一化（CRLF→LF）、BOM 已去；注释不参与断言`)
   console.log(`R4 集合字段口径（自校准）：${stats.collectionNames.join(', ') || '（空）'}`)
@@ -960,8 +1311,31 @@ function printReport(result, mpLabel) {
     return 1
   }
 
+  // 每条规则必须真的跑过扫描面：规则函数被删/没被调用时，命中数会是 0 —— 那不是"干净"，是"没跑"
+  const notRun = rulesNotExecuted(checks)
+  if (notRun.length) {
+    bar()
+    console.log(`[FAIL] 规则未执行（检查计数为 0）：${notRun.join(', ')}`)
+    console.log('       —— 命中 0 不等于没有问题；请检查 scan() 是否仍在调用这些规则。')
+    bar()
+    return 1
+  }
+
+  if (options.baselineWarning) {
+    console.log(`\n⚠️ ${options.baselineWarning}`)
+  }
+
   if (!violations.length) {
-    printRuleSummary({})
+    printRuleSummary({}, gate)
+    // 0 违规但 baseline 还有残留条目 = 页面已修好、条目没删 → 必须 STALE 阻塞，不能静默通过
+    if (gate && gate.stale.length) {
+      printStale(gate, mpLabel)
+      printNotes(notes, mpLabel)
+      bar()
+      console.log(`[FAIL] 基线条目过期（STALE）${gate.stale.length} 条 —— 对应违规已修复，请从 ${options.baselineLabel} 删除这些条目`)
+      bar()
+      return 1
+    }
     printNotes(notes, mpLabel)
     bar()
     console.log(`[PASS] 六条规则全部通过：6/6 无违规${notes.length ? `（另有 ${notes.length} 条覆盖提示，见上，不计入退出码）` : ''}`)
@@ -969,32 +1343,118 @@ function printReport(result, mpLabel) {
     return 0
   }
 
-  bar(`违规明细（${violations.length} 处）`)
-  violations.forEach((v, i) => {
-    console.log(`\n[违规 ${i + 1}/${violations.length}] ${v.rule}`)
-    console.log(`  文件: ${mpLabel}/${v.file}${v.line ? ':' + v.line : ''}`)
-    console.log(`  证据: ${v.evidence}`)
-    console.log(`  建议: ${v.fix}`)
-  })
-
   const counts = {}
+  const newCounts = {}
   violations.forEach((v) => {
     counts[v.rule] = (counts[v.rule] || 0) + 1
   })
+  if (gate) gate.fresh.forEach((v) => { newCounts[v.rule] = (newCounts[v.rule] || 0) + 1 })
+
+  if (gate) {
+    printKnown(gate, mpLabel)
+    printNew(gate, mpLabel)
+    printStale(gate, mpLabel)
+  } else {
+    bar(`违规明细（${violations.length} 处）`)
+    violations.forEach((v, i) => {
+      console.log(`\n[违规 ${i + 1}/${violations.length}] ${v.rule}`)
+      console.log(`  文件: ${mpLabel}/${v.file}${v.line ? ':' + v.line : ''}`)
+      console.log(`  身份: ${v.identity || '(rule+file)'}`)
+      console.log(`  证据: ${v.evidence}`)
+      console.log(`  建议: ${v.fix}`)
+    })
+  }
+
   bar('汇总')
-  printRuleSummary(counts)
-  console.log(`\n[FAIL] ${violations.length} 处违规，涉及 ${Object.keys(counts).length}/${RULES.length} 条规则`)
+  printRuleSummary(counts, gate)
+  if (gate) {
+    console.log(`\n  基线状态：${baselineStatusLabel(gate)}`)
+    if (gate.fresh.length === 0 && gate.stale.length === 0) {
+      console.log(`\n[PASS] 门禁通过：无新增违规（KNOWN ${gate.known.length} 处已登记，不阻塞）`)
+      printNotes(notes, mpLabel)
+      bar()
+      return 0
+    }
+    if (gate.fresh.length) console.log(`\n[FAIL] 新增（NEW）${gate.fresh.length} 处违规 —— 必须修复，或在同一 PR 里登记进 baseline 并写明原因`)
+    if (gate.stale.length) {
+      console.log(`\n[FAIL] 过期基线条目（STALE）${gate.stale.length} 条 —— 对应违规已不存在，请在 ${options.baselineLabel} 里删除这些条目`)
+    }
+    printNotes(notes, mpLabel)
+    console.log('\n⚠️ 六条规则只覆盖"已知坑类"；视觉/真机/运行期行为仍需人工与各特性 verifier。')
+    return 1
+  }
+
+  const ruleCount = Object.keys(counts).length
+  console.log(`\n[FAIL] ${violations.length} 处违规，涉及 ${ruleCount}/${RULES.length} 条规则`)
   printNotes(notes, mpLabel)
   console.log('\n⚠️ 六条规则只覆盖"已知坑类"；视觉/真机/运行期行为仍需人工与各特性 verifier。')
   return 1
 }
 
+function formatFinding(v, mpLabel) {
+  return `${v.rule}  ${mpLabel}/${v.file}${v.line ? ':' + v.line : ''}${v.identity ? `  [${v.identity}]` : ''}`
+}
+
+/** 已登记的历史违规（KNOWN）：打印且不阻塞门禁 */
+function printKnown(gate, mpLabel) {
+  if (!gate.known.length) return
+  bar(`已知违规 KNOWN（${gate.known.length} 处 · 已登记 · 不阻塞门禁）`)
+  gate.known.forEach((k, i) => {
+    console.log(`\n[已知 ${i + 1}/${gate.known.length}] ${formatFinding(k.violation, mpLabel)}`)
+    console.log(`  登记原因: ${k.entry.reason}`)
+    if (k.entry.ref) console.log(`  依据: ${k.entry.ref}${k.entry.owner ? ` · 责任: ${k.entry.owner}` : ''}`)
+    console.log(`  证据: ${k.violation.evidence}`)
+    if (k.evidenceChanged) {
+      console.log(`  ⚠️ 证据已变化（登记时：${clip(k.entry.evidence, 120)}）—— 请复核登记是否仍然准确`)
+    }
+  })
+  const changed = gate.known.filter((k) => k.evidenceChanged).length
+  if (changed) console.log(`\n  ⚠️ 其中 ${changed} 条的证据文本与登记时不同（不阻塞，但建议在 PR 里复核）`)
+}
+
+/** 新增违规（NEW）：必须阻塞 */
+function printNew(gate, mpLabel) {
+  bar(`新增违规 NEW（${gate.fresh.length} 处 · 阻塞门禁）`)
+  if (!gate.fresh.length) {
+    console.log('  （无）')
+    return
+  }
+  gate.fresh.forEach((v, i) => {
+    console.log(`\n[新增 ${i + 1}/${gate.fresh.length}] ${formatFinding(v, mpLabel)}`)
+    console.log(`  证据: ${v.evidence}`)
+    console.log(`  建议: ${v.fix}`)
+    if (v.identities && v.identities.length > 1) {
+      console.log(`  说明: 该处由同一行 ${v.identities.length} 条证据合并（身份 ${v.identities.join(' / ')}）—— 全部登记后才算 KNOWN`)
+    }
+    console.log(`  （如确属历史遗留：在 baseline 里登记 rule+file+identity 并写明 reason）`)
+  })
+}
+
+/** 过期基线条目（STALE）：对应违规已消失，必须清理，否则 baseline 会退化成永久白名单 */
+function printStale(gate, mpLabel) {
+  bar(`过期基线条目 STALE（${gate.stale.length} 条 · 阻塞门禁 · 请清理）`)
+  if (!gate.stale.length) {
+    console.log('  （无）')
+    return
+  }
+  gate.stale.forEach((e, i) => {
+    console.log(`\n[过期 ${i + 1}/${gate.stale.length}] ${e.rule}  ${mpLabel}/${e.file}${e.identity ? `  [${e.identity}]` : ''}`)
+    console.log(`  原登记原因: ${e.reason}`)
+    console.log(`  → 该违规已不存在（多半是已修好）：请从 baseline 删除此条目`)
+  })
+}
+
 /** 每条规则一行结论（PASS / FAIL 两条路径都打，口径与其它 verify_*.js 一致） */
-function printRuleSummary(counts) {
+function printRuleSummary(counts, gate) {
   RULES.forEach((r) => {
     const n = counts[r.id] || 0
-    console.log(`  ${n ? '[NG]' : '[OK]'} ${r.id}${n ? '  → ' + n + ' 处' : ''}`)
+    const fresh = gate ? gate.fresh.filter((v) => v.rule === r.id).length : n
+    const known = gate ? gate.known.filter((k) => k.violation.rule === r.id).length : 0
+    const tag = fresh ? '[NG]' : n ? '[OK*]' : '[OK]'
+    const detail = gate ? `  → 新增 ${fresh} / 已知 ${known}` : n ? `  → ${n} 处` : ''
+    console.log(`  ${tag} ${r.id}${detail}`)
   })
+  if (gate) console.log('  （[OK*] = 该规则只有已登记的历史违规，不阻塞门禁）')
 }
 
 /** 覆盖提示（INFO）：说明静态分析在哪里"看不见"，不参与退出码 */
@@ -1006,6 +1466,23 @@ function printNotes(notes, mpLabel) {
     console.log(`  位置: ${n.file === '(多页)' || n.file === '(多文件)' ? n.file : `${mpLabel}/${n.file}${n.line ? ':' + n.line : ''}`}`)
     console.log(`  说明: ${n.text}`)
   })
+}
+
+/**
+ * R2 候选清单（评审 P3-2）：渲染了 `wx:for` 列表、但请求里没有分页参数 → R2 **不判定**。
+ * 这类页面"要不要加载更多"取决于后端是否分页，属人工核对范围（`F13`/`F17` 的活），
+ * 与历史走查报告说的"12 个列表页"不是同一口径 —— 见 tools/README.md §「12 vs 17」。
+ */
+function printR2Candidates(result, mpLabel) {
+  const list = result.r2Candidates || []
+  bar(`R2 候选清单（INFO · ${list.length} 个 · 渲染列表但请求未带分页参数 · R2 不判定）`)
+  console.log('  口径：静态启发式（WXML 有 wx:for + 有 request 调用 + 请求参数无 page/offset 类字段）')
+  console.log('  ⚠️ 与历史走查报告的"12 个列表页"**不是同一口径**，不可直接对号入座（见 tools/README.md）\n')
+  list.forEach((c, i) => {
+    console.log(`  ${String(i + 1).padStart(2)}. ${mpLabel}/${c.file}`)
+    console.log(`      触底钩子: ${c.hasHook ? '已有' : '无'}    请求: ${c.paths.length ? c.paths.join(', ') : '(动态路径)'}`)
+  })
+  console.log('\n  → 需人工确认后端是否分页；确认需要的，另行补 onReachBottom（属页面任务，不在 F22 工具范围内）')
 }
 
 // ============================================================ self-test ====
@@ -1167,6 +1644,18 @@ function runOnFixture(files, opts) {
 let stPass = 0
 let stFail = 0
 
+/** 静音跑一段会打印的函数（只用于直接断言生产报告路径的退出码） */
+function withSilentConsole(fn) {
+  const orig = console.log
+  const lines = []
+  console.log = (...a) => lines.push(a.map((x) => String(x)).join(' '))
+  try {
+    return { code: fn(), lines }
+  } finally {
+    console.log = orig
+  }
+}
+
 function stCheck(name, ok, detail) {
   if (ok) {
     stPass += 1
@@ -1183,7 +1672,8 @@ function expectSingleRule(label, files, ruleId, kinds) {
   const result = runOnFixture(files)
   const mine = result.violations.filter((v) => v.rule === ruleId)
   const others = result.violations.filter((v) => v.rule !== ruleId)
-  const kindOk = !kinds || kinds.every((k) => mine.some((v) => v.kind === k))
+  // 合并后的 finding 可能带多个 kind（同一行多条证据），按 kinds 集合判断
+  const kindOk = !kinds || kinds.every((k) => mine.some((v) => (v.kinds || [v.kind]).indexOf(k) !== -1))
   const otherText = others.map((v) => `${v.rule}@${v.file}:${v.line} ${v.evidence}`).join(' | ')
   return stCheck(
     `${label} → ${ruleId} 命中（且无其它规则误报）`,
@@ -1413,6 +1903,240 @@ function runSelfTest() {
     )
   }
 
+  // ---------------------------------------------- P3-1：同一行不重复计数 ----
+  console.log('\n[P3-1 对照] 同一 rule/file/line 的多条证据必须合并成 1 处')
+  {
+    const m = mutate(
+      'pages/demo/demo.js',
+      "const { request } = require('../../services/request')",
+      "const { request } = require('../../services/request')\nconst BASE_URL = 'http://127.0.0.1:8000/api/v1'"
+    )
+    if (stCheck('D1 突变可用', m.applied, m.note)) {
+      const r = runOnFixture(m.files)
+      const r5 = r.violations.filter((v) => v.rule === 'R5_HARDCODED_BASE_URL')
+      stCheck(
+        'D1 同一行的「静态 BASE_URL + 地址字面量」只算 1 处违规',
+        r5.length === 1,
+        `R5 处数=${r5.length}（${r5.map((v) => v.kind).join(',')}）`
+      )
+      stCheck(
+        'D1 证据已合并（两条都在同一处里展示）',
+        !!r5[0] && /静态 BASE_URL/.test(r5[0].evidence) && /写死的地址字面量/.test(r5[0].evidence),
+        r5[0] && r5[0].evidence
+      )
+      stCheck('D1 两条稳定身份都被保留（baseline 仍可分别登记）', !!r5[0] && r5[0].identities.length === 2, r5[0] && JSON.stringify(r5[0].identities))
+    }
+  }
+
+  // ---------------------------------------------- baseline（评审 P2）----
+  console.log('\n[baseline 对照] KNOWN 不阻塞 / NEW 阻塞 / STALE 被发现 / 不掩盖其它规则')
+  const R2_RULE = 'R2_MISSING_LOWER_TRIGGER'
+  const entryOf = (rule, file, identity, reason) => ({
+    rule,
+    file,
+    identity,
+    reason: reason || '对照用登记原因',
+    registered: '2026-09-18',
+    ref: '',
+    owner: '',
+    key: findingKey(rule, file, identity),
+  })
+  {
+    const dropHook = mutate('pages/demo/demo.js', '  onReachBottom() {\n    this.fetch(this.data.page + 1)\n  },', '')
+    const r2only = runOnFixture(dropHook.files)
+    const r2hits = r2only.violations.filter((v) => v.rule === R2_RULE)
+    stCheck('B0 对照夹具产出 1 条 R2（作为 KNOWN 样本）', dropHook.applied && r2hits.length === 1, r2only.violations.map((v) => v.rule).join(' | '))
+
+    // B1 已登记 → 不阻塞
+    const g1 = evaluateGate(r2only.violations, [entryOf(R2_RULE, 'pages/demo/demo.js', '')])
+    stCheck(
+      'B1 已登记的历史违规不阻塞门禁（KNOWN=1 → exit 0）',
+      g1.exitCode === 0 && g1.known.length === 1 && g1.fresh.length === 0 && g1.stale.length === 0,
+      `NEW=${g1.fresh.length} STALE=${g1.stale.length} exit=${g1.exitCode}`
+    )
+
+    // B2/B4 新违规（同一文件里的另一条规则）必须阻塞，baseline 不得掩盖它
+    const mixed = Object.assign({}, dropHook.files)
+    mixed['pages/demo/demo.js'] = dropHook.files['pages/demo/demo.js'].replace(
+      'Number(e.currentTarget.dataset.index)',
+      'Number(e.detail.value)'
+    )
+    const rmixed = runOnFixture(mixed)
+    const g2 = evaluateGate(rmixed.violations, [entryOf(R2_RULE, 'pages/demo/demo.js', '')])
+    stCheck(
+      'B2 同文件里的新增违规（R1）必须阻塞（NEW>=1 → exit 1）',
+      g2.exitCode === 1 && g2.fresh.some((v) => v.rule === 'R1_TAP_DETAIL_VALUE'),
+      `NEW=${g2.fresh.map((v) => v.rule).join(',')} exit=${g2.exitCode}`
+    )
+    stCheck(
+      'B4 baseline 只豁免登记过的那一条，不掩盖同文件其它规则',
+      g2.known.length === 1 && g2.known[0].violation.rule === R2_RULE && g2.fresh.length === 1,
+      `KNOWN=${g2.known.map((k) => k.violation.rule).join(',')} NEW=${g2.fresh.map((v) => v.rule).join(',')}`
+    )
+
+    // B5 同一规则、同一文件、不同 identity：只登记 A 时 B 仍然是新增
+    const twoHandlers = Object.assign({}, mixed)
+    twoHandlers['pages/demo/demo.js'] = mixed['pages/demo/demo.js'].replace(
+      "onGoExtra() {\n    wx.navigateTo({ url: '/pages/demo/extra' })\n  },",
+      'onGoExtra(e) {\n    this.setData({ other: Number(e.detail.value) })\n  },'
+    )
+    const rtwo = runOnFixture(twoHandlers)
+    const r1hits = rtwo.violations.filter((v) => v.rule === 'R1_TAP_DETAIL_VALUE')
+    stCheck('B5 对照夹具产出 2 条 R1（不同 handler 身份）', r1hits.length === 2, r1hits.map((v) => v.identity).join(' | '))
+    const g5 = evaluateGate(rtwo.violations, [
+      entryOf(R2_RULE, 'pages/demo/demo.js', ''),
+      entryOf('R1_TAP_DETAIL_VALUE', 'pages/demo/demo.js', 'handler:onCatTap'),
+    ])
+    stCheck(
+      'B5 同一文件同一规则的**另一条** finding 仍是新增（identity 生效）',
+      g5.exitCode === 1 && g5.fresh.length === 1 && g5.fresh[0].identity === 'handler:onGoExtra',
+      `NEW=${g5.fresh.map((v) => v.identity).join(',')} exit=${g5.exitCode}`
+    )
+
+    // B3 基线条目已过期 → STALE 且阻塞
+    const g3 = evaluateGate(r2only.violations, [
+      entryOf(R2_RULE, 'pages/demo/demo.js', ''),
+      entryOf('R6_PAGE_REGISTRATION', 'app.json', 'page-missing-file:pages/demo/ghost'),
+    ])
+    stCheck(
+      'B3 已消失的基线条目报 STALE 且阻塞（防止 baseline 退化成永久白名单）',
+      g3.exitCode === 1 && g3.stale.length === 1 && g3.fresh.length === 0,
+      `STALE=${g3.stale.length} NEW=${g3.fresh.length} exit=${g3.exitCode}`
+    )
+
+    // B6 CRLF：同一份 baseline 用 CRLF 写，结论必须一致（本仓 Windows 检出是 CRLF）
+    const baselineText = JSON.stringify({ schema: 1, entries: [entryOf(R2_RULE, 'pages/demo/demo.js', '')] }, null, 2)
+    const lfParse = parseBaselineText(baselineText)
+    const crlfParse = parseBaselineText(baselineText.replace(/\n/g, '\r\n'))
+    stCheck(
+      'B6 baseline 文本 CRLF/LF 解析一致（含 BOM）',
+      lfParse.errors.length === 0 &&
+        crlfParse.errors.length === 0 &&
+        parseBaselineText('\uFEFF' + baselineText.replace(/\n/g, '\r\n')).entries.length === 1 &&
+        crlfParse.entries.length === lfParse.entries.length &&
+        crlfParse.entries[0].key === lfParse.entries[0].key
+    )
+    const g6 = evaluateGate(r2only.violations, crlfParse.entries)
+    stCheck('B6 CRLF baseline 的判定与 LF 相同（KNOWN=1 → exit 0）', g6.exitCode === 0 && g6.known.length === 1, baselineStatusLabel(g6))
+
+    // B7 baseline 必须可审计：格式错误一律报错，不能变成"无理由白名单"
+    const badReason = parseBaselineText(JSON.stringify({ entries: [{ rule: R2_RULE, file: 'pages/demo/demo.js', identity: '' }] }))
+    const badRule = parseBaselineText(JSON.stringify({ entries: [{ rule: 'R9_NOPE', file: 'a.js', identity: '', reason: '随便写写' }] }))
+    const dup = parseBaselineText(
+      JSON.stringify({
+        entries: [
+          { rule: R2_RULE, file: 'pages/demo/demo.js', identity: '', reason: '第一条原因' },
+          { rule: R2_RULE, file: 'pages/demo/demo.js', identity: '', reason: '第二条原因' },
+        ],
+      })
+    )
+    const broken = parseBaselineText('{ not json')
+    stCheck(
+      'B7 缺 reason / 未知规则 / 重复条目 / 非法 JSON 都报错',
+      badReason.errors.length === 1 && badRule.errors.length === 1 && dup.errors.length === 1 && broken.errors.length === 1,
+      JSON.stringify({ badReason: badReason.errors, badRule: badRule.errors, dup: dup.errors, broken: broken.errors })
+    )
+
+    // B8 页面都修好了但 baseline 没删条目 → 必须 STALE 阻塞（直接断言生产报告路径的退出码）
+    const cleanStats = { js: 2, wxml: 1, pages: 1, collectionNames: [] }
+    const cleanResult = { violations: [], notes: [], r2Candidates: [], checks: r2only.checks, stats: cleanStats }
+    const staleGate = evaluateGate([], [entryOf(R2_RULE, 'pages/demo/demo.js', '')])
+    const cleanRun = withSilentConsole(() =>
+      printReport(cleanResult, 'miniprogram', { gate: staleGate, baselineLabel: 'baseline.json' })
+    )
+    stCheck(
+      'B8 零违规但 baseline 有残留条目 → 报 STALE 且退出码 1（不允许静默通过）',
+      cleanRun.code === 1 && cleanRun.lines.join('\n').indexOf('STALE') !== -1,
+      `exit=${cleanRun.code}`
+    )
+    const pristineGate = evaluateGate([], [])
+    const pristineRun = withSilentConsole(() =>
+      printReport(cleanResult, 'miniprogram', { gate: pristineGate, baselineLabel: 'baseline.json' })
+    )
+    stCheck('B8b 零违规且 baseline 为空 → 正常 PASS（exit 0）', pristineRun.code === 0, `exit=${pristineRun.code}`)
+
+    // C 规则"真的跑过"的不变量：删掉某条规则的调用 → 检查计数为 0 → 必须红（评审实测过的假绿路径）
+    stCheck(
+      'C1 六条规则在 fixture 上都有检查计数（工作单元 > 0）',
+      rulesNotExecuted(r2only.checks).length === 0,
+      JSON.stringify(r2only.checks)
+    )
+    const brokenChecks = Object.assign({}, r2only.checks)
+    delete brokenChecks[R2_RULE]
+    const notRun = withSilentConsole(() =>
+      printReport(Object.assign({}, cleanResult, { checks: brokenChecks }), 'miniprogram', {
+        gate: pristineGate,
+        baselineLabel: 'baseline.json',
+      })
+    )
+    stCheck(
+      'C2 某条规则检查计数为 0（例如调用被删）→ 门禁失败，绝不报 PASS',
+      notRun.code === 1 && notRun.lines.join('\n').indexOf('规则未执行') !== -1,
+      `exit=${notRun.code}`
+    )
+    // C3 app.json 坏掉时：R6 既报违规、又必须记为"执行过"（否则会被误报成"规则未执行"）
+    const brokenJson = cloneFixture()
+    brokenJson['app.json'] = '{ "pages": [ oops\n'
+    const rBroken = runOnFixture(brokenJson)
+    stCheck(
+      'C3 app.json 非法 JSON → 报 R6 违规，且 R6 仍计为已执行',
+      rBroken.violations.some((v) => v.kind === 'app-json-parse') && rulesNotExecuted(rBroken.checks).length === 0,
+      JSON.stringify(rBroken.checks)
+    )
+
+    // B9 登记证据变化 → 只提醒（不阻塞），便于复核"条目还准不准"
+    const changedEntry = Object.assign(entryOf(R2_RULE, 'pages/demo/demo.js', ''), { evidence: '登记时的旧证据文本' })
+    const g9 = evaluateGate(r2only.violations, [changedEntry])
+    stCheck(
+      'B9 登记证据与当前不同 → 提示 evidenceChanged 但仍不阻塞',
+      g9.exitCode === 0 && g9.known.length === 1 && g9.known[0].evidenceChanged === true,
+      `exit=${g9.exitCode} changed=${g9.known[0] && g9.known[0].evidenceChanged}`
+    )
+  }
+
+  // ---------------------------------------------- 合并/身份：不得互相掩盖 ----
+  console.log('\n[合并身份对照] 同一行多证据 / 同身份跨行 不得互相掩盖')
+  {
+    // D2：同一行两条证据，baseline 只登记其中一条 → 整体仍判 NEW（登记的条目被消费，不额外报 STALE）
+    const m = mutate(
+      'pages/demo/demo.js',
+      "const { request } = require('../../services/request')",
+      "const { request } = require('../../services/request')\nconst BASE_URL = 'http://127.0.0.1:8000/api/v1'"
+    )
+    const r = runOnFixture(m.files)
+    const r5 = r.violations.filter((v) => v.rule === 'R5_HARDCODED_BASE_URL')
+    if (stCheck('D2 突变可用（同一行两条 R5 证据）', m.applied && r5.length === 1 && r5[0].identities.length === 2, `R5=${r5.length}`)) {
+      const partial = evaluateGate(r.violations, [
+        Object.assign(entryOf('R5_HARDCODED_BASE_URL', 'pages/demo/demo.js', 'base-url-ident:BASE_URL'), {
+          key: findingKey('R5_HARDCODED_BASE_URL', 'pages/demo/demo.js', 'base-url-ident:BASE_URL'),
+        }),
+      ])
+      stCheck(
+        'D2 只登记部分身份时，该处仍判 NEW（另一条不得被掩盖），且不额外报 STALE',
+        partial.exitCode === 1 && partial.fresh.length === 1 && partial.stale.length === 0,
+        `NEW=${partial.fresh.length} STALE=${partial.stale.length} exit=${partial.exitCode}`
+      )
+      const full = evaluateGate(r.violations, r5[0].identities.map((id) => entryOf('R5_HARDCODED_BASE_URL', 'pages/demo/demo.js', id)))
+      stCheck('D2b 两条身份都登记后 → KNOWN（exit 0）', full.exitCode === 0 && full.known.length === 1, baselineStatusLabel(full))
+    }
+  }
+  {
+    // D3：同一文件两行写了同一个地址字面量 → 身份必须区分（否则一条 baseline 只能豁免一条）
+    const m = mutate(
+      'pages/demo/demo.js',
+      "const { request } = require('../../services/request')",
+      "const { request } = require('../../services/request')\nconst A = 'http://10.0.0.9:8000/api/v1'\nconst B = 'http://10.0.0.9:8000/api/v1'"
+    )
+    const r = runOnFixture(m.files)
+    const r5 = r.violations.filter((v) => v.rule === 'R5_HARDCODED_BASE_URL')
+    const ids = r5.map((v) => v.identity)
+    if (stCheck('D3 突变可用（两行同一地址字面量）', m.applied && r5.length === 2, `R5=${r5.length}`)) {
+      stCheck('D3 同名身份自动消歧（`…#2`），不再互相占用', new Set(ids).size === 2 && ids.some((x) => /#2$/.test(x)), ids.join(' | '))
+      const g3 = evaluateGate(r.violations, ids.map((id) => entryOf('R5_HARDCODED_BASE_URL', 'pages/demo/demo.js', id)))
+      stCheck('D3 两条都登记后一次通过（exit 0）', g3.exitCode === 0 && g3.known.length === 2, baselineStatusLabel(g3))
+    }
+  }
+
   bar('self-test 汇总')
   const controlsOk = controlsPassed === controls.length
   if (stFail === 0 && controlsOk) {
@@ -1435,13 +2159,49 @@ function argValue(name, fallback) {
 function printHelp() {
   console.log('F22 小程序端静态检查（6 条规则）')
   console.log('')
-  console.log('  node tools/verify_miniprogram_static_rules.js              只读扫描 miniprogram/')
-  console.log('  node tools/verify_miniprogram_static_rules.js --self-test   六条规则的阴性对照（TEMP fixture）')
-  console.log('  node tools/verify_miniprogram_static_rules.js --src <root>  指定仓库根目录')
+  console.log('  node tools/verify_miniprogram_static_rules.js                 门禁模式（有 baseline 时判 KNOWN/NEW/STALE）')
+  console.log('  node tools/verify_miniprogram_static_rules.js --strict        严格模式：忽略 baseline，任何违规都失败')
+  console.log('  node tools/verify_miniprogram_static_rules.js --baseline <f>  指定 baseline 文件（默认 tools/miniprogram_static_rules_baseline.json）')
+  console.log('  node tools/verify_miniprogram_static_rules.js --list-candidates 打印 R2 候选清单（渲染列表但无分页参数）')
+  console.log('  node tools/verify_miniprogram_static_rules.js --print-baseline  打印当前违规对应的 baseline 片段（只打印，不写文件）')
+  console.log('  node tools/verify_miniprogram_static_rules.js --self-test     六条规则 + baseline 的阴性对照（TEMP fixture）')
+  console.log('  node tools/verify_miniprogram_static_rules.js --src <root>    指定仓库根目录')
   console.log('  node tools/verify_miniprogram_static_rules.js --help')
   console.log('')
-  console.log('退出码：0 = 六条规则全部通过；1 = 至少一条违规 / 脚本异常')
+  console.log('退出码：')
+  console.log('  0 = 无任何违规；或门禁模式下 NEW=0 且 STALE=0（已知的历史违规不阻塞）')
+  console.log('  1 = 有新增违规（NEW）/ 基线条目过期（STALE）/ 严格模式下有违规 / 扫描面无覆盖 / 脚本异常')
+  console.log('')
+  console.log('baseline 匹配口径：rule + file + identity（**不含行号**）。条目格式见 tools/README.md。')
   printRuleInventory()
+}
+
+/** 打印当前违规对应的 baseline 片段（供人工粘贴；**不写文件**，避免自动把新违规洗白） */
+function printBaselineSnippet(result, baselineLabel) {
+  const today = new Date().toISOString().slice(0, 10)
+  // ⚠️ 一个 finding 可能带多条身份（同一行多条证据被合并）→ **逐身份**各给一条条目，
+  //    否则漏掉的那条身份在粘贴后仍会判 NEW（评审实测踩到过）
+  const entries = []
+  result.violations.forEach((v) => {
+    const ids = v.identities && v.identities.length ? v.identities : [v.identity || '']
+    ids.forEach((id) => {
+      entries.push({
+        rule: v.rule,
+        file: v.file,
+        identity: id || '',
+        reason: 'TODO：写明为什么这条历史违规先登记、谁负责修（少于 4 字会被判格式错误）',
+        evidence: v.evidence,
+        registered: today,
+        ref: '',
+        owner: '',
+      })
+    })
+  })
+  bar(`baseline 片段（${entries.length} 条 · 当前扫描到的全部违规与身份 · 只打印不写文件）`)
+  console.log('  ⚠️ 登记 = 承认这是**既有**债务；请先确认它不是本次改动引入的，再补 reason/负责人。')
+  console.log('  ⚠️ 目标文件：' + baselineLabel + '\n')
+  console.log(JSON.stringify({ schema: 1, entries }, null, 2))
+  return 0
 }
 
 function main() {
@@ -1461,7 +2221,65 @@ function main() {
     return 1
   }
   const result = scan(mpDir)
-  return printReport(result, 'miniprogram')
+
+  // 互斥的 flag 组合必须硬失败：`--list-candidates` 是**信息模式**（恒 0），
+  // 与它一起写 `--strict` 会得到"有 3 处违规却 exit 0"的假绿（评审实测过）
+  const infoMode = argv.includes('--list-candidates')
+  if (infoMode && (argv.includes('--strict') || argv.includes('--print-baseline') || argv.includes('--baseline'))) {
+    console.error('[FAIL] --list-candidates 是信息模式（恒退出 0），不能与 --strict / --baseline / --print-baseline 同时使用。')
+    console.error('       CI 门禁请直接用：node tools/verify_miniprogram_static_rules.js')
+    return 1
+  }
+
+  if (infoMode) {
+    printR2Candidates(result, 'miniprogram')
+    console.log('\n（信息模式：不参与门禁判定；CI 请使用默认门禁模式）')
+    return 0
+  }
+  const strict = argv.includes('--strict')
+  const baselineArg = argValue('--baseline', '')
+  // 相对路径按**被扫描的仓库根目录**（--src）解析 —— baseline 属于它描述的那棵树
+  const baselineRel = baselineArg || BASELINE_DEFAULT_REL
+  const baselineAbs = path.isAbsolute(baselineRel) ? baselineRel : path.join(root, baselineRel.replace(/^[\\/]+/, ''))
+
+  if (argv.includes('--print-baseline')) {
+    return printBaselineSnippet(result, baselineRel)
+  }
+
+  if (strict) {
+    return printReport(result, 'miniprogram', { strict: true })
+  }
+
+  let baselineLabel = baselineRel
+  let entries = []
+  if (fs.existsSync(baselineAbs)) {
+    const parsed = parseBaselineText(readText(baselineAbs))
+    if (parsed.errors.length) {
+      console.error(`[FAIL] baseline 文件格式错误（${baselineRel}）：`)
+      parsed.errors.forEach((e) => console.error('   - ' + e))
+      return 1
+    }
+    entries = parsed.entries
+  } else if (baselineArg) {
+    console.error(`[FAIL] 指定的 baseline 文件不存在：${baselineAbs}`)
+    return 1
+  } else {
+    baselineLabel = `${BASELINE_DEFAULT_REL}（不存在）`
+  }
+
+  // baseline 缺失/为空本身不能"藏住"违规（未登记的违规一定是 NEW → 红），但会让 KNOWN/NEW 失去意义
+  // —— 这会削弱门禁的可读性，所以要**大声**说出来，而不是只体现在标题行里
+  let baselineWarning = ''
+  if (!fs.existsSync(baselineAbs)) {
+    baselineWarning =
+      `未找到 baseline 文件：${baselineRel}（相对 ${root}）—— 历史违规无法区分，全部按 NEW 处理；` +
+      `若这是误删，请从 git 恢复（它应当随仓库一起提交）`
+  } else if (entries.length === 0) {
+    baselineWarning = `baseline 文件为空（entries: []）：所有违规都会按 NEW 处理；历史欠账未被登记`
+  }
+
+  const gate = evaluateGate(result.violations, entries)
+  return printReport(result, 'miniprogram', { gate, baselineLabel, baselineWarning })
 }
 
 try {

@@ -8,14 +8,20 @@
 ## F22 · 小程序端静态检查
 
 ```bash
-node tools/verify_miniprogram_static_rules.js             # 只读扫描 miniprogram/（退出码 0/1）
-node tools/verify_miniprogram_static_rules.js --self-test  # 六条规则的阴性对照（TEMP fixture）
+node tools/verify_miniprogram_static_rules.js                   # 门禁模式（读 baseline）
+node tools/verify_miniprogram_static_rules.js --strict          # 严格模式：忽略 baseline
+node tools/verify_miniprogram_static_rules.js --baseline <file> # 指定 baseline 文件（相对路径按 --src 解析）
+node tools/verify_miniprogram_static_rules.js --list-candidates # R2 候选清单（信息模式，恒 0；不能与 --strict/--baseline 同用）
+node tools/verify_miniprogram_static_rules.js --print-baseline  # 打印 baseline 片段（只打印，不写文件）
+node tools/verify_miniprogram_static_rules.js --self-test       # 六条规则 + baseline 的阴性对照
 node tools/verify_miniprogram_static_rules.js --src <repo-root>
 ```
 
-> 📌 **文件名说明**：任务单（`docs/成员1任务单-20260918.md` §2.3 / §5 第 7 项）里写的是
-> `tools/verify_miniprogram_rules.js`；本仓实际落地文件是
-> **`tools/verify_miniprogram_static_rules.js`**。接 CI（`B34`）时请用实际路径。
+> ⚠️ `--list-candidates` 是**信息模式**（恒退出 0，不参与门禁）；与 `--strict` / `--baseline` /
+> `--print-baseline` 同时使用会**直接报错退出 1**（否则会出现"有 3 处违规却 exit 0"的假绿）。
+
+> 📌 **文件名说明**：任务单最初写的是 `tools/verify_miniprogram_rules.js`；实际落地文件是
+> **`tools/verify_miniprogram_static_rules.js`**（任务单分支已同步该文件名）。接 CI（`B34`）时用实际路径。
 
 覆盖的六条规则（来源见脚本头部注释，逐条给出仓内证据）：
 
@@ -28,12 +34,111 @@ node tools/verify_miniprogram_static_rules.js --src <repo-root>
 | `R5_HARDCODED_BASE_URL` | 除 `config/env.js` 外不得出现写死的接口地址 / 静态 `BASE_URL` |
 | `R6_PAGE_REGISTRATION` | 页面须注册进 `app.json#pages`；TabBar 项与跳转目标须与 `pages` 一致 |
 
-### 输出里的两档结论
+### 门禁语义：KNOWN / NEW / STALE（决定退出码）
 
-1. **违规（决定退出码）**：`RULE ID` + 文件:行 + 证据 + 修复建议。
+`dev` 上本来就有历史违规（`FRONT-08` 的 3 处 R2）。为了不让门禁"红着出生"、随后被当噪声忽略，
+脚本把结果分成三类，**只有后两类决定退出码**：
+
+| 分类 | 含义 | 退出码 |
+|---|---|---|
+| **KNOWN** | 已登记在 `tools/miniprogram_static_rules_baseline.json` 的历史违规 | 打印，**不阻塞** |
+| **NEW** | 本次扫描新出现的违规 | **阻塞**（exit 1） |
+| **STALE** | baseline 里登记、但现在已经不存在的条目 | **阻塞**（exit 1，强制清理） |
+
+**为什么 STALE 也阻塞**（而不是只 warning）：baseline 一旦"只进不出"就会退化成永久白名单 ——
+页面修好了没人删条目，下一个人还会以为这些页面仍然有问题，技术债静默残留。
+让 STALE 失败 = 强制"修页面"与"删条目"发生在**同一个 PR** 里；代价只是删 1 个 JSON 块。
+
+**匹配身份**：`rule + file + identity`，**不含行号**（行号会随无关改动漂移）。
+`identity` 是每条 finding 的稳定身份（`R1` → `handler:onCatTap`、`R4` → `list-array-use:res.items`、
+`R5` → `url-literal:http://…#<hash>`、`R6` → `nav-target-unregistered:/pages/x/y`；`R2` 一页最多一条，故为空串）。
+被 `clip` 截断的长字面量一律追加 8 位 FNV-1a 短哈希 —— 否则两条 >60 字符、前缀相同的地址字面量会塌成同一个身份，
+一条 baseline 条目就能把两条都豁免掉（评审实测）。
+
+两条细节：
+
+- **同一文件里同名身份自动消歧**：两行写了同一个地址字面量时，第 2 条起是 `…#2`/`#3`，
+  否则一条 baseline 只能豁免其中一条，另一条永远 NEW（`--print-baseline` 也会打出重复条目）。
+  编号按 `rule/file/行号` 排序后的出现次序；
+- **同一行多条证据被合并成一条 finding**（见下），此时要求它的**全部身份**都登记才算 KNOWN ——
+  否则"已登记的那条"会把同一行新增的另一条缺陷顺带掩盖。
+- 未登记的条目不会被"猜"着匹配；`R2` 命中某文件的**另一处**分页请求不会被已登记条目覆盖（同文件同规则第二条 finding 仍需登记）。
+
+同文件同规则的**另一条** finding 不会被一条 baseline 条目掩盖（self-test B4/B5/D2/D3 对照）。
+
+**证据漂移提醒**：条目可写可选的 `evidence`（登记时的证据文本）；若某次扫描该处证据变了，
+门禁会打 `⚠️ 证据已变化…` 提示（**不阻塞**），提醒复核这条登记是否还准确（self-test B9）。
+
+**baseline 文件**：`tools/miniprogram_static_rules_baseline.json`，格式极简、逐条可审计：
+
+```json
+{
+  "schema": 1,
+  "entries": [
+    {
+      "rule": "R2_MISSING_LOWER_TRIGGER",
+      "file": "pages/life/index.js",
+      "identity": "",
+      "reason": "FRONT-08 遗留：/life/merchants 是服务端分页但页面无触底钩子",
+      "evidence": "分页拉取但无触底钩子：request('/life/merchants', { data: { category: cat.value, page: 1, size: 20 }, })",
+      "registered": "2026-09-18",
+      "ref": "docs/项目审计报告20260912序1.md:826",
+      "owner": "成员1（页面修复任务，非 F22 tooling）"
+    }
+  ]
+}
+```
+
+规则：`reason` 必填（少于 4 字或缺失 = 格式错误，脚本直接失败）；未知 `rule`、重复条目、非法 JSON 同样直接失败。
+`identity` 必须是字符串（无稳定身份时写 `""`）；`evidence`/`ref`/`owner` 可选。
+**没有"自动灌入 baseline"的开关** —— 新增条目必须手工编辑并在 PR 里说明理由，
+`--print-baseline` 只打印片段（**逐身份**、不写文件），避免把新违规一键洗成历史债务。
+`--baseline` 的相对路径按**被扫描的仓库根目录**（`--src`）解析（baseline 属于它描述的那棵树）。
+
+### 12 vs 17：两个数字不是一回事（评审 P3-2）
+
+| 数字 | 出处 | 口径 |
+|---|---|---|
+| **12** | 人工走查报告 `docs/验收测试/A-执行报告-前端体验走查260912.md:21,65,103`（任务单 `docs/成员任务单-二阶段整改260912.md:363` 引用了它） | 2026-09-12 人工走查时"长列表只能看第一页"的页面数（当时全仓只有 3 个页面有 `onReachBottom`） |
+| **17** | 本脚本 `--list-candidates` 的静态启发式候选 | 当前 `dev` 上「WXML 有 `wx:for` + 有 `request(` 调用 + 请求参数里**没有** `page`/`offset` 类字段」的页面数 |
+
+**为什么不能直接等价**：走查是人工判断（含"列表会长到需要分页"的业务判断），
+启发式只看语法（`wx:for` 也包含购物车、座位表这类**本来就不分页**的小列表，
+例如 `life/order`、`library/seat`）；反过来，走查漏掉的页面启发式可能覆盖到。
+所以 17 只是**待人工核对的候选集**，不是"17 个缺陷"。
+
+**当前真正被 R2 判违规的**，仍然只有"**请求里带页/偏移类分页证据、却没有任何触底加载钩子**"的页面
+（当前 `dev` = 3 处，全部已登记进 baseline）。要看这 17 个候选的清单与它们的请求路径：
+
+```bash
+node tools/verify_miniprogram_static_rules.js --list-candidates
+```
+
+**这 17 个页面本 PR 一律不动**：谁真需要分页要人工确认（属 `F13`/`F17` 等页面任务的活）。
+
+### 输出里的三档结论
+
+1. **违规**：`RULE ID` + 文件:行 + 身份 + 证据 + 修复建议，并按 KNOWN / NEW / STALE 分列（见上）。
 2. **覆盖提示（INFO，不计入退出码）**：说明某处**为什么没被判违规** —— 例如
    "有 `X.f || []` 兜底但没有 `X &&` 守卫"、"渲染列表但请求未带分页参数"、
    "某个 tap 处理器未能在页面 JS 中定位"。它们不会让 CI 变红，但把静态分析的边界摆到台面上。
+3. **R2 候选清单**（`--list-candidates`）：见上「12 vs 17」。
+
+同一 `rule + file + line` 的多条证据会**合并成一条**（如一行里同时有静态 `BASE_URL` 与写死的地址字面量），
+"违规处数"因此不会重复计数；两条稳定身份仍然各自保留（`#2` 消歧），baseline 需**逐身份**登记才算 KNOWN（self-test D1/D2/D3 对照）。
+
+### 自证规模与"真的跑过"的不变量
+
+`--self-test` 当前 **69 项断言**（原 43 + baseline/去重/身份/覆盖对照 26），其中 6/6 negative controls 必须全过；
+实际断言数每次运行都会打印（`合计 N 项断言全过`），以运行时输出为准。
+
+门禁另有三条**防假绿**不变量（都直接断言生产路径）：
+
+1. **扫描面下限**：`pages/**/*.js + 同名 .wxml` 一个都没扫到 → `[FAIL] 扫描面无覆盖`，不给 PASS；
+2. **规则真的执行过**：每条规则记录"工作单元"检查计数（R1/R2 = 页面数，R3/R4/R5 = js 文件数，R6 = 页面 + 注册项 + 跳转扫描）；
+   任何一条为 0 → `[FAIL] 规则未执行`。防的是"规则函数被删/没被调用 → 0 命中 → 假绿"（评审实测过这条路）；
+3. **baseline 缺失/为空** → 大声 `⚠️` 告警（不阻塞）：删掉 baseline 并不能藏住违规
+   （未登记的违规一定是 NEW → 红），但会让 KNOWN/NEW 失去意义，所以必须显式提示。
 
 另外：**扫不到任何页面入口时脚本会直接红脸报错**（`[FAIL] 扫描面无覆盖`），
 不会在"没检查"的情况下给出 `[PASS]` —— 口径与 `docs/CI.md`「宁可红灯，不要假绿」一致。
@@ -64,14 +169,26 @@ node tools/verify_miniprogram_static_rules.js --src <repo-root>
 - ✗ **R1** 只解析页面自身 JS 里"可定位"的处理器；箭头函数属性 / `behaviors` / 混入对象里的
   处理器不做判定（有这类情况会在**覆盖提示**里点名）。当前 29 页 83 个 tap 处理器全部可定位。
 - ✗ **R2** 的"替代分页触发"只认 `onReachBottom` 与 `scroll-view` 的 `bindscrolltolower`；
-  **请求不带分页参数的列表页一律不判定**（可能后端根本不支持分页），只在覆盖提示里列出
-  —— 任务单/走查报告说的"12 个列表页"就是这一类，需人工确认后再补钩子或补后端分页。
+  **请求不带分页参数的列表页一律不判定**（可能后端根本不支持分页），只在覆盖提示里列出、
+  并可用 `--list-candidates` 逐个人工核对 —— 与走查报告的"12 个列表页"不是同一口径（见上「12 vs 17」）。
 - ✗ **R3** 变量来自数字时间戳时会误判为"后端时间字段直解"，需人工确认字段真实类型。
 - ✗ **R4** 的"集合字段"口径由仓内既有写法**自校准**（`X.f || []`、`this.data.f.*`、
   响应变量上的 `X.f.map(...)`）：全新命名的列表字段若全仓都没出现过数组用法，则不在口径内。
 - ✗ **R5** 只扫 JS 字面量与 `BASE_URL` 标识符；WXML/WXSS 里的外链图片地址不判定。
 - ✗ **R6** 只认字符串字面量形式的跳转目标（`'/pages/x/y'`，允许带 `?query`）；
   由变量拼出来的动态路径不判定。
+
+### 已登记的口径欠账（待下批次统一，勿当成漏检）
+
+| # | 事项 | 位置 | 现状与理由 |
+|---|---|---|---|
+| D-1 | `R4` 接受 `X.f \|\| []`（任务单原文的写法是 `(X && X.f) \|\| []`） | `miniprogram/pages/forum/detail.js:29`（`commentList: (res.comments \|\| []).map(...)`） | **评审已裁决「不收紧」**：该写法已兜住"后端字段缺失 → 白屏"这一**有记录**的坑；收紧会与仓内 30 处既有写法冲突。`res` 本身为 null 的残余风险由脚本 INFO 提示登记（每次运行都会打印该处）。统一口径属**下批次的跨页面任务**（成员1）。 |
+| D-2 | `R2` 的"无分页参数列表页"不判定 | 17 个候选（`--list-candidates`） | 见上「12 vs 17」：需人工确认后端是否分页；属 `F13`/`F17` 页面任务。 |
+
+> 📌 这两条**只登记在本文档 + PR 描述**里，**没有**写进 `docs/技术方向待处理问题.md`：
+> 那份是**跨成员共享的编号登记表**（近期已发生过 `CAC-30 → CAC-31` 撞号改号），
+> 在 tooling PR 里占用编号容易与队友的 docs 改动冲突。若协调者希望进总表，
+> 请分配编号后告知，我再补一条最小登记。
 
 ## 相邻脚本索引（同目录）
 
