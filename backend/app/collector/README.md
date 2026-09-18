@@ -70,10 +70,17 @@ RateLimiter("lib", 0.5).interval(crawl_delay=7)   # → 7.0s，而不是 2.0s
 RateLimiter("lib", 0.1).interval(crawl_delay=3)   # → 10.0s，配置更严就用配置
 ```
 
-### 3.3 身份要诚实
+### 3.3 身份要诚实，但**只能用 ASCII**
 
 `DEFAULT_USER_AGENT` 带 `XJTCampusBot/1.0` 与联系方式，**不伪装浏览器**；
 可通过 `FetchGuard(user_agent=...)` 覆盖。
+
+⚠️ 自定义 UA 时**只能放 ASCII**：HTTP 头字段在 `http.client` 里按 latin-1 编码，
+混进中文会让**每一次**请求在发出去之前就抛 `UnicodeEncodeError`
+—— B26 曾因此 100% 抓不到任何页面（robots.txt 与业务页面一起失效，报错还被包成
+"抓取失败"，看起来像对方站点的问题），而当时单测全程注入假 opener，一次真请求都没发过。
+现在有三项测试专门钉住这一点：一项检查常量可 latin-1 编码，
+一项**真起本地 HTTP 服务发一次请求**并核对服务端收到的 UA，一项让 `RobotsGate` 真去取 robots.txt。
 
 ---
 
@@ -196,18 +203,23 @@ python -m app.collector run <config.yml> --json result.json   # 结果落盘
 
 ```bash
 cd backend
-python -m pytest tests/test_collector.py tests/test_collector_b27.py -q    # 71 项，纯离线
+python -m pytest tests/test_collector.py tests/test_collector_b27.py -q    # 74 项（其中 3 项真发本地 HTTP 请求）
 ```
 
 `test_collector.py`（B26，30 项）覆盖：robots 允许/禁止/404 放行/5xx 保守拒绝/网络故障、
 缓存与过期、`Crawl-delay` 解析、限速取更严值、注册表复用、JSONL 落盘与坏行容错、
 `FetchGuard` 的拒绝路径 / 等待路径 / `respect_robots=false` 绕过路径 / 结果记录。
 
-`test_collector_b27.py`（B27，41 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
+`test_collector_b27.py`（B27，44 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
 列表页去重与相对链接补全、缺 `content` 选择器时退化为 body、
 **详情页逐条过 robots**（被禁的那条一条请求都不发、其余照常入库）、
 限速作用于每一次请求、`Crawl-delay` 压过 qps、单条失败不拖累其余、
 幂等重跑、`--dry-run` 不碰数据库、`--limit`、
 **空列表告警与 `--fail-on-empty`**、CLI 退出码与 `check` 回归。
+
+**其中最后 3 项是"真发请求"的**（起一个只监听 `127.0.0.1` 随机端口的
+`http.server`，不注入 opener）：校验默认 UA 可 latin-1 编码、HTTP 请求能真的把 UA
+送达服务端、`RobotsGate` 能真的取到 robots.txt。它们防的是同一类问题 ——
+**假 opener 让"请求根本发不出去"永远不会被测到**。
 
 作者：成员2（后端+AI）· B26 / B27

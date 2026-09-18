@@ -14,6 +14,9 @@
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -37,6 +40,7 @@ from app.collector.pipeline import (
     load_sources,
     run_config,
 )
+from app.collector.robots import DEFAULT_USER_AGENT
 
 # ------------------------------------------------------------------ 夹具 ----
 
@@ -556,3 +560,74 @@ def test_cli_fail_on_empty_returns_1(tmp_path, monkeypatch, capsys):
 
     assert cli_main(["run", str(path), "--dry-run", "--fail-on-empty"]) == 1
     capsys.readouterr()                                       # 吃掉输出，别污染其它用例
+
+
+# ========================================================== 真实请求 ====
+#
+# 上面所有用例都注入假 opener（这是刻意的：离线、确定、CI 跑得动），
+# 但也正因为如此，"请求头到底能不能发出去"从来没被验证过 —— B26 的默认 UA 里
+# 带了中文，而 `http.client` 按 latin-1 编码头字段，于是**每一次**请求都在
+# 发出去之前抛 UnicodeEncodeError，采集器 100% 抓不到任何东西，71 项单测却全绿。
+# 下面三条专门真发请求，把这个盲区钉死。
+
+
+class _Handler(BaseHTTPRequestHandler):
+    """记录收到的 User-Agent，并回一个最小 HTML 页面。"""
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib 命令式命名
+        self.server.seen_ua = self.headers.get("User-Agent")  # type: ignore[attr-defined]
+        body = (b"<html><body><ul class='news-list'>"
+                b"<li><a href='/1.html'>ok</a></li></ul></body></html>")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args) -> None:
+        pass                                              # 别把访问日志打到 stderr
+
+
+@contextmanager
+def _local_site():
+    """起一个只监听 127.0.0.1 随机端口的 HTTP 服务。"""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_default_user_agent_is_header_safe():
+    """默认 UA 必须能塞进 HTTP 头：头字段按 latin-1 编码，非 ASCII 会直接抛异常。"""
+    DEFAULT_USER_AGENT.encode("latin-1")
+
+
+def test_real_http_request_carries_default_user_agent():
+    """**真发一次请求**（不注入 opener），默认 UA 得能原样到达服务端。
+
+    这是上一条的端到端版本：它能抓住"任何请求头非法"，而不只是 UA 这个常量。
+    """
+    with _local_site() as server:
+        url = f"http://127.0.0.1:{server.server_port}/notice/"
+        resp = HttpFetcher(timeout=5).get(url)            # 真的走 urllib
+        seen = server.seen_ua
+
+    assert resp.status == 200
+    assert "news-list" in resp.text
+    assert seen == DEFAULT_USER_AGENT
+
+
+def test_robots_gate_really_fetches_robots_txt():
+    """robots.txt 也走真实请求 —— UA 不合法会让它一律"保守拒绝"，把 check 变成假红。"""
+    with _local_site() as server:
+        origin = f"http://127.0.0.1:{server.server_port}"
+        decision = RobotsGate(timeout=5).check(origin + "/notice/")
+        seen = server.seen_ua
+
+    assert decision.allowed is True       # 该路径返回的不是 robots 规则 → 无限制
+    assert seen == DEFAULT_USER_AGENT

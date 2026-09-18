@@ -183,7 +183,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         if r.blocked:
             print(f"  {FAIL} {r.key:<20} 被拒绝：{r.blocked}")
         else:
-            mark = OK if r.ok else FAIL
+            # 空列表用 ⚠️ 而不是 ✅：退出码语义不变，但别让一个"✅"把上面的告警盖过去
+            mark = FAIL if not r.ok else (WARN if r.empty_list else OK)
             print(f"  {mark} {r.key:<20} 列表 {r.listed} 条 → 详情 {r.fetched} 条 → "
                   f"新增 {r.inserted}，跳过 {r.skipped}")
         for err in r.errors:
