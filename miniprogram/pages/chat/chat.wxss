@@ -1,4 +1,4 @@
-/* AI 对话页（F4） */
+/* AI 对话页（F4 / F14-A） */
 page {
   height: 100%;
 }
@@ -11,7 +11,7 @@ page {
   background: #f5f5f5;
 }
 
-/* 顶部操作条（F4：【+ 新会话】/【历史】） */
+/* 顶部操作条（F4：【+ 新会话】/【历史】；F14-A：左侧新增【菜单】） */
 .top-bar {
   position: relative;
   z-index: 10;
@@ -22,6 +22,16 @@ page {
   padding: 16rpx 24rpx;
   background: #ffffff;
   border-bottom: 1rpx solid #eeeeee;
+}
+.top-bar-left {
+  display: flex;
+  align-items: center;
+}
+.top-bar-left .top-btn {
+  margin-right: 16rpx;
+}
+.top-bar-left .top-btn:last-child {
+  margin-right: 0;
 }
 /* 按钮控件：重置 button 默认样式，保留蓝色描边胶囊外观 */
 .top-btn {
@@ -212,4 +222,168 @@ page {
 }
 .stop-btn::after {
   border: none;
+}
+
+/* ============================================================
+   F14-A：AI 助手侧边栏（遮罩 + 从左滑出的玻璃面板）
+   动效令牌取 F10 的 --xj-duration-* / --xj-ease-*，均带字面量兜底。
+   ============================================================ */
+
+/* ---- 遮罩：点击关闭 ---- */
+.sidebar-mask {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  /* 收起态必须不可点：只靠 opacity:0 仍会吃掉整页的点击 */
+  visibility: hidden;
+  transition: opacity var(--xj-duration-base, 240ms) var(--xj-ease-standard, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    visibility 0s linear var(--xj-duration-base, 240ms);
+}
+.sidebar-mask--open {
+  opacity: 1;
+  visibility: visible;
+  /* 展开时立即可见，收起时才延迟到淡出结束 */
+  transition: opacity var(--xj-duration-base, 240ms) var(--xj-ease-standard, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    visibility 0s linear 0s;
+}
+
+/* ---- 面板 ----
+   必须用复合选择器：.xj-glass 自带 position: relative（同为单类选择器），
+   面板的 position 取值不该依赖 app.wxss 与本文件的加载顺序。 */
+.chat-page .sidebar-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 100;
+  width: 560rpx;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  border-radius: 0 28rpx 28rpx 0;
+  border-radius: 0 var(--xj-radius-panel, 28rpx) var(--xj-radius-panel, 28rpx) 0;
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform var(--xj-duration-slow, 300ms) var(--xj-ease-standard, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    visibility 0s linear var(--xj-duration-slow, 300ms);
+}
+.sidebar-panel--open {
+  transform: translateX(0);
+  visibility: visible;
+  transition: transform var(--xj-duration-slow, 300ms) var(--xj-ease-standard, cubic-bezier(0.25, 0.1, 0.25, 1)),
+    visibility 0s linear 0s;
+}
+/* 跟手拖拽期间必须去掉过渡，否则面板会滞后于手指 */
+.sidebar-panel--dragging {
+  transition: none;
+}
+
+/* ---- 面板头部：新建会话 ---- */
+.sidebar-head {
+  flex-shrink: 0;
+  padding: 24rpx 24rpx 16rpx;
+}
+.sidebar-new {
+  width: 100%;
+  margin: 0;
+  background: #4A90D9;
+  background: var(--xj-color-primary, #4A90D9);
+  color: #ffffff;
+  color: var(--xj-text-inverse, #ffffff);
+  border-radius: 999rpx;
+  border-radius: var(--xj-radius-pill, 999rpx);
+  font-size: 28rpx;
+  font-size: var(--xj-font-size-md, 28rpx);
+  line-height: 2.6;
+}
+.sidebar-new::after {
+  border: none;
+}
+
+/* ---- 会话列表 ---- */
+.sidebar-list {
+  flex: 1;
+  min-height: 0;
+  padding: 0 24rpx;
+  box-sizing: border-box;
+}
+.sidebar-tip {
+  padding: 48rpx 0;
+  text-align: center;
+  color: #8a9099;
+  color: var(--xj-text-secondary, #8a9099);
+  font-size: 26rpx;
+}
+.sidebar-retry {
+  margin: 0 auto;
+  background: #ffffff;
+  color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
+  border: 1rpx solid #4A90D9;
+  border-radius: 999rpx;
+  font-size: 26rpx;
+  line-height: 2.2;
+  width: 240rpx;
+}
+.sidebar-retry::after {
+  border: none;
+}
+.sidebar-conv {
+  margin-bottom: 16rpx;
+  padding: 20rpx 24rpx;
+}
+/* 当前会话高亮（角标 + 主色描边 + 主色淡底） */
+.sidebar-conv--active {
+  border: 2rpx solid #4A90D9;
+  border: 2rpx solid var(--xj-color-primary, #4A90D9);
+  background: rgba(74, 144, 217, 0.12);
+  background: var(--xj-color-primary-soft, rgba(74, 144, 217, 0.12));
+}
+.sidebar-conv-title {
+  font-size: 28rpx;
+  color: #1f2329;
+  color: var(--xj-text-primary, #1f2329);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-conv-time {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #8a9099;
+  color: var(--xj-text-secondary, #8a9099);
+}
+
+/* ---- 底部操作：设置 / 清空历史 ---- */
+.sidebar-foot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 16rpx 24rpx;
+  padding-bottom: calc(16rpx + env(safe-area-inset-bottom));
+  border-top: 1rpx solid rgba(31, 35, 41, 0.06);
+  border-top: 1rpx solid var(--xj-border-hairline, rgba(31, 35, 41, 0.06));
+}
+.sidebar-action {
+  flex: 1;
+  margin: 0;
+  background: transparent;
+  color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
+  border-radius: 999rpx;
+  font-size: 26rpx;
+  line-height: 2.4;
+}
+.sidebar-action::after {
+  border: none;
+}
+/* 设置页属 F17，当前 dev 无此页面：入口保持禁用外观 + 明确提示，不做假跳转 */
+.sidebar-action--muted {
+  color: #c4c9d0;
+  color: var(--xj-text-disabled, #c4c9d0);
 }

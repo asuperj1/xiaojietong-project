@@ -1,8 +1,12 @@
 <!-- AI 对话页（F4）：顶部操作条 + 消息列表 + 底部输入 -->
-<view class="chat-page">
-  <!-- 顶部操作条：【+ 新会话】/【历史】 -->
+<!-- F14-A：顶部【菜单】按钮 → 从左侧滑出侧边栏（新建会话 + 会话列表 + 长按删除） -->
+<view class="chat-page {{glassClass}}">
+  <!-- 顶部操作条：【菜单】/【+ 新会话】/【历史】（后两个是 F4 原有入口，保留） -->
   <view class="top-bar">
-    <button class="top-btn" bindtap="onNewConversation">+ 新会话</button>
+    <view class="top-bar-left">
+      <button class="top-btn" bindtap="onOpenSidebar">菜单</button>
+      <button class="top-btn" bindtap="onNewConversation">+ 新会话</button>
+    </view>
     <button class="top-btn" bindtap="onHistory">历史</button>
   </view>
 
@@ -70,5 +74,60 @@
       disabled="{{!inputValue}}"
       bindtap="onSend"
     >发送</button>
+  </view>
+
+  <!-- ==================== F14-A 侧边栏 ==================== -->
+  <!-- 遮罩：点击关闭。收起态由 WXSS 置 visibility:hidden，不拦截触摸 -->
+  <view
+    class="sidebar-mask {{sidebarOpen ? 'sidebar-mask--open' : ''}}"
+    bindtap="onMaskTap"
+  ></view>
+
+  <!-- 面板：从左滑出；支持右滑手势关闭（拖拽期间走内联位移，结束后交回类） -->
+  <view
+    class="sidebar-panel xj-glass xj-glass-strong {{sidebarOpen ? 'sidebar-panel--open' : ''}} {{sidebarDragging ? 'sidebar-panel--dragging' : ''}}"
+    style="{{sidebarStyle}}"
+    bindtouchstart="onSidebarTouchStart"
+    bindtouchmove="onSidebarTouchMove"
+    bindtouchend="onSidebarTouchEnd"
+    bindtouchcancel="onSidebarTouchCancel"
+  >
+    <view class="sidebar-head">
+      <button class="sidebar-new" bindtap="onNewConversation">+ 新建会话</button>
+    </view>
+
+    <scroll-view class="sidebar-list" scroll-y>
+      <view wx:if="{{convLoading}}" class="sidebar-tip">加载中…</view>
+
+      <block wx:elif="{{convError}}">
+        <view class="sidebar-tip">{{convError}}</view>
+        <button class="sidebar-retry" bindtap="fetchConversations">重试</button>
+      </block>
+
+      <block wx:elif="{{conversations.length === 0}}">
+        <view class="sidebar-tip">暂无历史会话</view>
+      </block>
+
+      <block wx:else>
+        <!-- 会话卡片：玻璃；点选切换，长按删除；当前会话高亮 -->
+        <view
+          class="sidebar-conv xj-glass-card {{item.id === conversationId ? 'sidebar-conv--active' : ''}}"
+          wx:for="{{conversations}}"
+          wx:key="id"
+          data-id="{{item.id}}"
+          bindtap="onTapConversation"
+          bindlongpress="onConvLongPress"
+        >
+          <view class="sidebar-conv-title">{{item.title}}</view>
+          <view class="sidebar-conv-time">{{item.time}}</view>
+        </view>
+      </block>
+    </scroll-view>
+
+    <!-- 底部操作：设置（F17 交付前为禁用外观的占位入口）/ 清空历史 -->
+    <view class="sidebar-foot">
+      <button class="sidebar-action sidebar-action--muted" bindtap="onSettingsEntry">设置</button>
+      <button class="sidebar-action" bindtap="onClearHistory">清空历史</button>
+    </view>
   </view>
 </view>
