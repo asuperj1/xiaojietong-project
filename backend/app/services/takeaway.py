@@ -46,16 +46,19 @@ STATUS_ACCEPTED = 1
 STATUS_ARRIVED = 2
 
 
-def pickup_points(campus: str = "") -> list[dict]:
-    """可选驿站（固定取件点单选）：仅启用中的，按 `sort` 倒序。
+def pickup_points() -> list[dict]:
+    """可选驿站（固定取件点单选）：仅启用中、未删除的，按 `sort` 倒序。
 
-    `campus` 传入时按校区过滤；驿站的 `campus` 为空串表示**全部校区通用**。
+    ⚠️ **列名以 `db/sql/18_takeaway_pickup.sql` 的权威定义为准**（PR #88 收敛后）：
+    `business_hours` / `status` / `is_deleted`。漂移期的 `open_time` / `enabled` / `campus`
+    会被该脚本**回填后 DROP**（`campus` 有数据时保留并警告），因此这里**一律不引用** ——
+    引用了就会在"全新库"上报 `ERROR 1054`。
     """
     return cpp_bridge.query(
-        "SELECT `id`, `name`, `address`, `open_time`, `campus`, `sort` FROM `pickup_point` "
-        "WHERE `enabled` = 1 AND (? = '' OR `campus` = '' OR `campus` = ?) "
+        "SELECT `id`, `name`, `address`, `business_hours`, `contact_phone`, `sort` "
+        "FROM `pickup_point` WHERE `status` = 1 AND `is_deleted` = 0 "
         "ORDER BY `sort` DESC, `id` ASC",
-        [campus, campus],
+        [],
     )
 
 
@@ -73,8 +76,8 @@ def _gen_pickup_code() -> str:
 
 def _point_or_raise(pickup_point_id: int) -> dict:
     rows = cpp_bridge.query(
-        "SELECT `id`, `name`, `address`, `open_time`, `campus` FROM `pickup_point` "
-        "WHERE `id` = ? AND `enabled` = 1",
+        "SELECT `id`, `name`, `address`, `business_hours` FROM `pickup_point` "
+        "WHERE `id` = ? AND `status` = 1 AND `is_deleted` = 0",
         [int(pickup_point_id)],
     )
     if not rows:
@@ -163,7 +166,7 @@ def arrive(order_id: int, operator_id: int = 0) -> dict:
     code = order.get("pickup_code") or ""
     point = _point_or_raise(int(order.get("pickup_point_id") or 0)) if order.get(
         "pickup_point_id"
-    ) else {"name": "取件驿站", "address": "", "open_time": ""}
+    ) else {"name": "取件驿站", "address": "", "business_hours": ""}
 
     with cpp_bridge.begin():
         cpp_bridge.execute(
@@ -172,7 +175,9 @@ def arrive(order_id: int, operator_id: int = 0) -> dict:
             [STATUS_ARRIVED, int(order_id)],
         )
         if not already_notified:
-            hours = f"，营业时间 {point['open_time']}" if point.get("open_time") else ""
+            hours = (
+                f"，营业时间 {point['business_hours']}" if point.get("business_hours") else ""
+            )
             notice_scheduler.push_to_user(
                 kind="takeaway",
                 ref_id=int(order_id),

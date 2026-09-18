@@ -29,12 +29,12 @@ router = APIRouter(prefix="/life", tags=["life"])
 
 
 @router.get("/pickup-points")
-def pickup_points(campus: str = "", user: dict = Depends(get_current_user)):
-    """可选取件驿站（B31）：固定取件点**单选**，仅启用中的，按 `sort` 倒序。
+def pickup_points(user: dict = Depends(get_current_user)):
+    """可选取件驿站（B31）：固定取件点**单选**，仅 `status=1` 且未删除的，按 `sort` 倒序。
 
-    `campus` 为空返回全部；驿站的 `campus` 为空串表示**全校通用**（不过滤掉）。
+    列名跟随 `db/sql/18_takeaway_pickup.sql` 的权威定义（漂移列 `open_time`/`enabled` 已被收敛脚本清理）。
     """
-    return ok({"items": takeaway.pickup_points(campus)})
+    return ok({"items": takeaway.pickup_points()})
 
 
 class TakeawayOrderIn(BaseModel):

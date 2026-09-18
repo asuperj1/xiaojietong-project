@@ -65,13 +65,14 @@ def orders(client, hdr_a):
 # ------------------------------------------------------------ 驿站 / 下单 ----
 
 def test_pickup_points_listed_sorted_desc(client, hdr_a):
-    """驿站列表：仅启用中的，按 `sort` 倒序（前端单选数据源）。"""
+    """驿站列表：仅启用中的，按 `sort` 倒序，字段跟权威列定义（前端单选数据源）。"""
     items = client.get("/api/v1/life/pickup-points", headers=hdr_a).json()["data"]["items"]
     assert items, "应有驿站种子"
     sorts = [int(it["sort"]) for it in items]
     assert sorts == sorted(sorts, reverse=True), "应按 sort 倒序（越大越靠前）"
     for it in items:
         assert it["name"] and it["id"]
+        assert "business_hours" in it, "营业时间取权威列 business_hours（漂移列 open_time 已被收敛脚本清理）"
 
 
 def test_create_order_generates_six_digit_code_without_fee(client, hdr_a, orders):
