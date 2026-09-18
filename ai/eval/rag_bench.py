@@ -162,6 +162,7 @@ def summarize(rows: list[dict], k: int) -> dict:
         "n_total": len(rows),
         "n_positive": len(positives),
         "n_negative": len(negatives),
+        "n_expect_refuse": sum(1 for r in rows if r.get("expect_refuse")),
         "k": k,
         **hit_at,
         "mrr": round(mrr, 4),
@@ -211,6 +212,9 @@ def build_row(item: dict, hits: list[dict], latency_ms: float, error: str = "") 
         "category": item["category"],
         "question": item["question"],
         "expected_titles": item.get("expected_titles") or [],
+        # C41：C42 硬样本集会声明「这题该不该拒答」，报告里要带上，
+        # 否则事后无法算拒答率（只能重新跑一轮）。
+        "expect_refuse": bool(item.get("expect_refuse", False)),
         "got_titles": titles,
         "n_hits": len(titles),
         "rank": first_rank(titles, item.get("expected_titles") or []),
