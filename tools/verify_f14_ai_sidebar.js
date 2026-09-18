@@ -204,7 +204,6 @@ function loadChat(opts) {
     toasts: [],
     modals: [],
     navigations: [],
-    loading: 0,
     backend,
   }
 
@@ -215,12 +214,8 @@ function loadChat(opts) {
     removeStorageSync: () => {},
     showToast: (t) => state.toasts.push((t && t.title) || ''),
     hideToast: () => {},
-    showLoading: () => {
-      state.loading += 1
-    },
-    hideLoading: () => {
-      state.loading -= 1
-    },
+    showLoading: () => {},
+    hideLoading: () => {},
     showModal: (m) => {
       state.modals.push(m)
       if (m && typeof m.success === 'function') {
@@ -496,8 +491,12 @@ bar('B. 展开与列表加载（GET /chat/conversations 的口径与兜底）')
 
   await tick()
   check(
-    'B4 列表字段兜底：标题空值回落「未命名会话」',
-    page.data.conversations.length === 2 && page.data.conversations[0].title === '图书馆几点关门'
+    'B4 列表映射：条数与后端一致，id/title 原样透传（不做多余加工）',
+    page.data.conversations.length === 2 &&
+      page.data.conversations[0].id === 11 &&
+      page.data.conversations[1].id === 12 &&
+      page.data.conversations[0].title === '图书馆几点关门',
+    JSON.stringify(page.data.conversations)
   )
   check(
     'B5 时间字段经 formatTime 归一（截到分钟，不做 Date 解析）',
@@ -506,12 +505,23 @@ bar('B. 展开与列表加载（GET /chat/conversations 的口径与兜底）')
   )
 }
 
+// 标题兜底（后端 title 为空）
+{
+  const { page, state } = loadChat({ backend: { initial: [conv(5, '')] } })
+  await after(state, () => page.onOpenSidebar())
+  check(
+    'B6 标题空值回落「未命名会话」（不留空行）',
+    page.data.conversations.length === 1 && page.data.conversations[0].title === '未命名会话',
+    JSON.stringify(page.data.conversations)
+  )
+}
+
 // 请求未回来之前的加载态（应答被挂起）
 {
   const { page, state } = loadChat({ responder: () => null })
   await after(state, () => page.onOpenSidebar())
   check(
-    'B6 请求未返回时列表处于加载态（convLoading=true，页面不空白）',
+    'B7 请求未返回时列表处于加载态（convLoading=true，页面不空白）',
     page.data.convLoading === true && page.data.conversations.length === 0,
     JSON.stringify({ loading: page.data.convLoading, n: page.data.conversations.length })
   )
@@ -522,7 +532,7 @@ bar('B. 展开与列表加载（GET /chat/conversations 的口径与兜底）')
   const { page, state } = loadChat({ responder: () => ({ data: { code: 0, message: 'ok', data: {} } }) })
   await after(state, () => page.onOpenSidebar())
   check(
-    'B7 后端未返回 items 时列表兜底为空数组且不报错',
+    'B8 后端未返回 items 时列表兜底为空数组且不报错',
     Array.isArray(page.data.conversations) && page.data.conversations.length === 0 && !page.data.convError,
     JSON.stringify({ conv: page.data.conversations, err: page.data.convError })
   )
@@ -533,7 +543,7 @@ bar('B. 展开与列表加载（GET /chat/conversations 的口径与兜底）')
   const { page, state } = loadChat({ backend: { failList: true } })
   await after(state, () => page.onOpenSidebar())
   check(
-    'B8 列表加载失败落到面板内可重试态（convError 非空、loading 复位）',
+    'B9 列表加载失败落到面板内可重试态（convError 非空、loading 复位）',
     page.data.convError === '加载失败，请稍后重试' && page.data.convLoading === false,
     JSON.stringify({ err: page.data.convError, loading: page.data.convLoading })
   )
@@ -545,7 +555,7 @@ bar('B. 展开与列表加载（GET /chat/conversations 的口径与兜底）')
   await after(state, () => page.onOpenSidebar())
   await after(state, () => page.onCloseSidebar())
   const second = await after(state, () => page.onOpenSidebar())
-  check('B9 再次展开会重新拉取（不是缓存的旧列表）', convList(second).filter(isGet).length === 1)
+  check('B10 再次展开会重新拉取（不是缓存的旧列表）', convList(second).filter(isGet).length === 1)
 }
 
 // ------------------------------------------- C. 点选会话 ----
@@ -1209,7 +1219,7 @@ bar('反向对照（对真实源码做一处语义突变后，断言必须转为
   })
   await after(state, () => page.onOpenSidebar())
   check(
-    'R8 反证：去掉 ((res && res.items) || []) 兜底后 B7 断言会失败（字段缺失即报错）',
+    'R8 反证：去掉 ((res && res.items) || []) 兜底后 B8 断言会失败（字段缺失即报错）',
     !!page.data.convError,
     JSON.stringify({ err: page.data.convError })
   )
