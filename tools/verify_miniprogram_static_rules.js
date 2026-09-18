@@ -25,9 +25,11 @@
  *
  *  R3_DATETIME_STRING_PARSE  不得用 `new Date('Y-m-d H:i:s')` 解析时间字符串
  *     来源：`docs/PR39-审查报告260912.md:173`（iOS `Invalid Date` 经典跨端坑）；
- *     `docs/验收测试/A-执行报告-前端体验走查260912.md:92,106`
- *     （`pages/library/seat.js` 一处被点名）；任务单 F22 规则③。
- *     注：`new Date()`（无参）与 ISO `T` 形式**不算违规**，见下方 self-test 的合法样例。
+ *     任务单 F22 规则③（"本仓改用纯字符串截断"）。
+ *     注：走查报告 `docs/验收测试/A-执行报告-前端体验走查260912.md:92,106` 点名的
+ *     `pages/library/seat.js:5` 实为**无参** `new Date()`（取当前时间，安全），
+ *     故本规则不把它当违规 —— 见 self-test 的合法样例。
+ *     另：`new Date('2026-09-12T10:00:00')`（ISO `T` 形式）同样安全，不判。
  *
  *  R4_LIST_FIELD_NO_FALLBACK 后端列表字段必须先兜底再使用
  *     来源：`docs/成员1任务单-20260918.md` §2.3 规则④（`(res && res.items) || []`，
@@ -62,22 +64,29 @@
  *     node tools/verify_miniprogram_static_rules.js --self-test   # 六条规则的阴性对照
  *     node tools/verify_miniprogram_static_rules.js --src <repo-root>
  *
- *  退出码：0 = 六条规则全部通过；1 = 至少一条违规（或脚本/自检自身异常）。
+ * 退出码：0 = 六条规则全部通过；1 = 至少一条违规（或脚本/自检自身异常）。
+ * 输出两档：**违规**（决定退出码）与**覆盖提示 INFO**（说明某处为什么没被判违规，
+ * 例如"有 `X.f || []` 兜底但没有 `X &&` 守卫""渲染列表但请求未带分页参数"）。
+ * 文件名：任务单写的是 `verify_miniprogram_rules.js`，本仓实际文件是
+ * `verify_miniprogram_static_rules.js`（接 CI 时用实际路径）。
  *
  * 跨平台
  * ------
  *  读取文本时统一做 `CRLF/CR → LF` 归一化并去 BOM（本仓 `core.autocrlf=true`，
  *  Windows 工作区是 CRLF、blob 是 LF —— F16 verifier 曾在这里踩过坑）。
  *
- * 本脚本覆盖不到什么（**不要外推**）
- * --------------------------------
+ * 本脚本覆盖不到什么（**不要外推**；完整清单见 tools/README.md）
+ * ------------------------------------------------------------
  *  ✗ 视觉呈现 / 动画 / 真机性能 / `@supports` 类语法（WXSS 不在官方列举内）→ 真机抽测；
  *  ✗ 运行期行为（请求是否真的发出、状态机是否正确）→ 见各特性 `verify_*.js`；
  *  ✗ 后端接口语义与字段是否真的存在；
- *  ✗ 事件处理器写在 `behaviors`/混入对象里的情况（R1 只解析页面自身 JS）；
+ *  ✗ 事件处理器写在 `behaviors`/混入对象/箭头函数属性里的情况（R1 只解析页面自身 JS，
+ *    未定位到的会在覆盖提示里点名）；
  *  ✗ `scroll-view` 自带 `bindscrolltolower` 之外的自定义分页触发（如按钮"加载更多"）；
+ *  ✗ 请求不带分页参数的列表页（R2 不判定，只在覆盖提示里列出）；
  *  ✗ 后端时间字段实际类型为数字时间戳时，R3 的"字段直解"分面可能误报（见 R3 说明）；
- *  ✗ 列表字段不在本仓既有集合口径内的新命名（R4 口径自校准，见 `collectCollectionNames`）。
+ *  ✗ 列表字段不在本仓既有集合口径内的新命名（R4 口径自校准，见 `collectCollectionNames`）；
+ *  ✗ R5 只看 JS（WXML/WXSS 的外链不判定）；R6 只认字符串字面量跳转目标。
  */
 
 'use strict'
@@ -98,13 +107,13 @@ const RULES = [
   {
     id: 'R2_MISSING_LOWER_TRIGGER',
     title: '分页列表页必须有触底加载钩子（onReachBottom 或 bindscrolltolower）',
-    source: 'FRONT-08(P1) docs/项目审计报告20260912序1.md:826 · 走查报告:103 · 任务单 F22 规则②',
+    source: 'FRONT-08 docs/项目审计报告20260912序1.md:826（审计表列 P2；总表 docs/成员任务单-二阶段整改260912.md:363 列为 P1）· 走查报告:103 · 任务单 F22 规则②',
     fix: '补 onReachBottom() { this.fetch(this.data.page + 1) }，或在 scroll-view 上加 bindscrolltolower',
   },
   {
     id: 'R3_DATETIME_STRING_PARSE',
     title: "不得用 new Date('Y-m-d H:i:s') 解析时间字符串（iOS → Invalid Date）",
-    source: 'docs/PR39-审查报告260912.md:173 · 走查报告:92,106 · 任务单 F22 规则③',
+    source: 'docs/PR39-审查报告260912.md:173 · 任务单 F22 规则③（"本仓改用纯字符串截断"）；见脚本头部对 seat.js 的说明',
     fix: '按仓内既有做法做字符串截断格式化（如 formatTime），或改用 ISO 形式 / 数字时间戳',
   },
   {
@@ -411,16 +420,18 @@ function scan(mpDir) {
   })
 
   const violations = []
-  rule1TapDetailValue(ctx, violations)
-  rule2MissingLowerTrigger(ctx, violations)
+  const notes = [] // 覆盖提示：不计入退出码，只暴露静态分析的边界（见 README「盲区」）
+  rule1TapDetailValue(ctx, violations, notes)
+  rule2MissingLowerTrigger(ctx, violations, notes)
   rule3DatetimeStringParse(ctx, violations)
-  rule4ListFieldNoFallback(ctx, violations)
+  rule4ListFieldNoFallback(ctx, violations, notes)
   rule5HardcodedBaseUrl(ctx, violations)
   rule6PageRegistration(ctx, violations)
 
   violations.sort((a, b) => (a.rule === b.rule ? a.file.localeCompare(b.file) || a.line - b.line : a.rule.localeCompare(b.rule)))
   return {
     violations,
+    notes,
     stats: {
       js: jsFiles.length,
       wxml: wxmlFiles.length,
@@ -440,6 +451,11 @@ function violation(rule, file, line, evidence, kind) {
   return { rule, file, line, evidence: clip(evidence), kind, fix: RULE_BY_ID[rule].fix }
 }
 
+/** 覆盖提示（INFO）：说明某处为什么没被判违规 —— 不参与退出码 */
+function note(rule, file, line, text, kind) {
+  return { rule, file, line, text: clip(text, 220), kind }
+}
+
 // ---------------------------------------------------------------- R1 ----
 
 /** 从 WXML 里取 tap/长按类事件绑定的处理器名（WXML 注释已剔除） */
@@ -453,16 +469,21 @@ function tapHandlers(wxmlSrc) {
   return Array.from(names)
 }
 
-function rule1TapDetailValue(ctx, out) {
+function rule1TapDetailValue(ctx, out, notes) {
   for (const page of ctx.pages) {
     const wxmlFile = ctx.byRel[page.rel.replace(/\.js$/, '.wxml')]
     if (!wxmlFile) continue
     const handlers = tapHandlers(stripWxmlComments(readText(wxmlFile.abs)))
     if (!handlers.length) continue
     const src = code(page.abs)
+    const unresolved = []
     for (const name of handlers) {
       const fn = extractFunctionBody(src, name)
-      if (!fn) continue // 处理器不在页面 JS 里（behaviors/混入）→ 静态盲区，不判
+      if (!fn) {
+        // 处理器不在页面 JS 的可解析形态里（behaviors / 混入 / 箭头函数属性）→ 静态盲区
+        unresolved.push(name)
+        continue
+      }
       const hit = /\bdetail\s*\.\s*value\b/.exec(fn.body)
       if (!hit) continue
       const at = fn.start + hit.index
@@ -470,16 +491,40 @@ function rule1TapDetailValue(ctx, out) {
         violation('R1_TAP_DETAIL_VALUE', page.rel, lineAt(src, at), `${name} 内：${lineTextAt(src, at)}`, 'tap-detail-value')
       )
     }
+    if (unresolved.length) {
+      notes.push(
+        note(
+          'R1_TAP_DETAIL_VALUE',
+          page.rel,
+          0,
+          `${unresolved.length} 个 tap 处理器未能在页面 JS 中定位（箭头函数属性 / behaviors / 混入），本规则未检查：${unresolved.join(', ')}`,
+          'r1-unresolved-handler'
+        )
+      )
+    }
   }
 }
 
 // ---------------------------------------------------------------- R2 ----
 
-function rule2MissingLowerTrigger(ctx, out) {
+/** 页面是否渲染服务端列表（WXML 有 wx:for） */
+function rendersList(ctx, page) {
+  const wxmlFile = ctx.byRel[page.rel.replace(/\.js$/, '.wxml')]
+  if (!wxmlFile) return false
+  return /\bwx:for\s*=/.test(stripWxmlComments(readText(wxmlFile.abs)))
+}
+
+function rule2MissingLowerTrigger(ctx, out, notes) {
+  const unverifiable = []
   for (const page of ctx.pages) {
     const src = code(page.abs)
+    const hasRequest = findCalls(src, 'request').length > 0
     const paginated = findCalls(src, 'request').find((c) => /\bpage\b/.test(c.args))
-    if (!paginated) continue
+    if (!paginated) {
+      // 不传分页参数的列表页无法静态判定"能不能加载更多"（可能后端根本不支持分页）→ 只登记盲区
+      if (hasRequest && rendersList(ctx, page)) unverifiable.push(page.rel.replace(/^pages\//, '').replace(/\.js$/, ''))
+      continue
+    }
     if (/(?:^|[\s,{])onReachBottom\s*[:(]/.test(src)) continue
     const wxmlFile = ctx.byRel[page.rel.replace(/\.js$/, '.wxml')]
     const wxmlSrc = wxmlFile ? stripWxmlComments(readText(wxmlFile.abs)) : ''
@@ -491,6 +536,17 @@ function rule2MissingLowerTrigger(ctx, out) {
         lineAt(src, paginated.index),
         `分页拉取但无触底钩子：${clip(paginated.text, 120)}`,
         'missing-hook'
+      )
+    )
+  }
+  if (unverifiable.length) {
+    notes.push(
+      note(
+        'R2_MISSING_LOWER_TRIGGER',
+        '(多页)',
+        0,
+        `另有 ${unverifiable.length} 个页面渲染列表但请求未带分页参数，R2 不判定（属静态盲区，需人工确认后端是否支持分页）：${unverifiable.join(', ')}`,
+        'r2-unverifiable'
       )
     )
   }
@@ -568,8 +624,26 @@ function collectResponseBindings(src) {
 
 const ARRAY_USE_RE = /^(?:\.\s*(?:map|forEach|filter|concat|slice|find|findIndex|some|every|reduce|reduceRight|join|pop|push|shift|unshift|sort|reverse|indexOf|includes)\s*\(|\.\s*length\b|\[)/
 
-function rule4ListFieldNoFallback(ctx, out) {
+/** 正则转义 */
+function esc(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** 取 index 之前的**同一条语句**片段（以 `;` `{` `}` 或换行为界） */
+function sameStatementBefore(src, index) {
+  const window = src.slice(Math.max(0, index - 240), index)
+  const cut = Math.max(
+    window.lastIndexOf(';'),
+    window.lastIndexOf('{'),
+    window.lastIndexOf('}'),
+    window.lastIndexOf('\n')
+  )
+  return cut === -1 ? window : window.slice(cut + 1)
+}
+
+function rule4ListFieldNoFallback(ctx, out, notes) {
   const colls = Array.from(ctx.collectionNames)
+  const weakGuards = []
   for (const file of ctx.jsFiles) {
     const src = code(file.abs)
     const binds = Array.from(ctx.responseBindings[file.rel] || [])
@@ -589,22 +663,78 @@ function rule4ListFieldNoFallback(ctx, out) {
         const line = lineAt(src, start)
         const evidence = lineTextAt(src, start)
 
-        // (0) 已有兜底：`X.items || []`（含 `(res && res.items) || []` 里的 `) || []`）
-        if (/^\s*\)*\s*\|\|/.test(after)) continue
-        // (1) 直接当数组用：`X.items.map(` / `X.items[0]` / `X.items.length`
-        //     （`(res && res.items).map(...)` 也算 —— res 为 null 时同样抛错）
-        if (ARRAY_USE_RE.test(after.replace(/^\s*\)*\s*/, ''))) {
+        // 分类口径（四条互斥分支，顺序不能换 —— 每条都有对应的合法写法做对照）：
+        //
+        //   ① 已有兜底        `X.f || []` / `(X && X.f) || []`            → 放行
+        //   ② 未守卫 + 直接当数组用  `X.f.map(...)` / `X.f[0]` / `X.f.length` → 违规
+        //   ③ 括号闭合后再当数组用   `(X && X.f).map(...)`                 → 违规
+        //      （X 为 null 时 `X && X.f` 是 null，`.map` 照样抛）
+        //   ④ 前置守卫 `X && X.f` 且非上述用法（`X && X.f.length`、
+        //      `X && X.f.map(...)`）→ 放行（&& 短路，安全）
+        //   ⑤ 整块赋值且值表达式到此结束（`,` `;` `)` `}` `]` 或换行）→ 违规
+        const afterS = after.replace(/^[ \t]+/, '')
+        const stmtBefore = sameStatementBefore(src, start)
+        const B = esc(bind)
+        const F = esc(field)
+        // 同语句内的守卫：`X && X.f`，以及 `X.f && X.f.length` 这类"先判空再取长度"
+        // （后者曾实测误报，故必须按语句作用域识别，而不是只看紧邻的 `&&`）
+        const guardRe = new RegExp(
+          '(?:^|[^\\w$.])' +
+            '(?:' +
+            B +
+            '\\s*&&\\s*(?:' +
+            B +
+            '\\s*\\.\\s*data\\s*\\.\\s*|' +
+            B +
+            '\\s*\\.\\s*)' +
+            F +
+            '\\b' +
+            '|' +
+            B +
+            '\\s*\\.\\s*' +
+            F +
+            '\\s*&&\\s*' +
+            B +
+            '\\s*\\.\\s*' +
+            F +
+            '\\s*\\.\\s*length\\b' +
+            ')'
+        )
+        const guarded = /&&\s*$/.test(before) || guardRe.test(stmtBefore)
+        if (/^\s*\)*\s*\|\|/.test(afterS)) {
+          // ① / ①'：有兜底即放行；接收者未守卫的（`X.f || []`）登记覆盖提示
+          if (!guarded) weakGuards.push(`${file.rel}:${line}`)
+          continue
+        }
+        const directUse = ARRAY_USE_RE.test(afterS)
+        const parenUse = /^\)/.test(afterS) && ARRAY_USE_RE.test(afterS.replace(/^\)+[ \t]*/, ''))
+        if (directUse && !guarded) {
           out.push(violation('R4_LIST_FIELD_NO_FALLBACK', file.rel, line, `直接当数组用：${evidence}`, 'list-array-use'))
           continue
         }
-        // (2) `X && X.items` 形式的前置守卫（非数组用法，如 if/三元）→ 放行
-        if (/&&\s*$/.test(before)) continue
-        // (3) 整块赋值无兜底：`setData({ items: res.items })` / `const x = res.items`
-        if (/[:=]\s*$/.test(before)) {
+        if (parenUse) {
+          out.push(violation('R4_LIST_FIELD_NO_FALLBACK', file.rel, line, `守卫后仍当数组用：${evidence}`, 'list-array-use'))
+          continue
+        }
+        if (guarded) continue // ④
+        const endsValue =
+          /^[,;)\]}]/.test(afterS) || afterS === '' || (/^\r?\n/.test(afterS) && !/^\r?\n[ \t]*(?:\.|\|\||&&|\?)/.test(afterS))
+        if (endsValue && /[:=]\s*$/.test(before)) {
           out.push(violation('R4_LIST_FIELD_NO_FALLBACK', file.rel, line, `整块赋值未兜底：${evidence}`, 'list-assign'))
         }
       }
     }
+  }
+  if (weakGuards.length) {
+    notes.push(
+      note(
+        'R4_LIST_FIELD_NO_FALLBACK',
+        '(多文件)',
+        0,
+        `有 ${weakGuards.length} 处用 \`X.f || []\` 兜底但接收者未做 \`X &&\` 守卫（字段缺失已兜住；X 为 null 时仍会抛）。按"有兜底即放行"的口径**未判违规**，登记以便人工决定是否统一为 \`(X && X.f) || []\`：${weakGuards.join(', ')}`,
+        'r4-weak-guard'
+      )
+    )
   }
 }
 
@@ -722,7 +852,7 @@ function printRuleInventory() {
 }
 
 function printReport(result, mpLabel) {
-  const { violations, stats } = result
+  const { violations, notes, stats } = result
   bar(`F22 小程序端静态检查 · 只读扫描 ${mpLabel}`)
   console.log(`文件：${stats.js} js / ${stats.wxml} wxml / 页面入口 ${stats.pages}`)
   console.log(`行尾已归一化（CRLF→LF）、BOM 已去；注释不参与断言`)
@@ -731,8 +861,9 @@ function printReport(result, mpLabel) {
   printRuleInventory()
 
   if (!violations.length) {
+    printNotes(notes, mpLabel)
     bar()
-    console.log('[PASS] 六条规则全部通过：6/6 无违规')
+    console.log(`[PASS] 六条规则全部通过：6/6 无违规${notes.length ? `（另有 ${notes.length} 条覆盖提示，见上，不计入退出码）` : ''}`)
     bar()
     return 0
   }
@@ -755,8 +886,20 @@ function printReport(result, mpLabel) {
     console.log(`  ${n ? '[NG]' : '[OK]'} ${r.id}${n ? '  → ' + n + ' 处' : ''}`)
   })
   console.log(`\n[FAIL] ${violations.length} 处违规，涉及 ${Object.keys(counts).length}/${RULES.length} 条规则`)
-  console.log('⚠️ 六条规则只覆盖"已知坑类"；视觉/真机/运行期行为仍需人工与各特性 verifier。')
+  printNotes(notes, mpLabel)
+  console.log('\n⚠️ 六条规则只覆盖"已知坑类"；视觉/真机/运行期行为仍需人工与各特性 verifier。')
   return 1
+}
+
+/** 覆盖提示（INFO）：说明静态分析在哪里"看不见"，不参与退出码 */
+function printNotes(notes, mpLabel) {
+  if (!notes || !notes.length) return
+  bar(`覆盖提示（INFO · ${notes.length} 条 · 不计入退出码）`)
+  notes.forEach((n) => {
+    console.log(`\n[提示] ${n.rule}`)
+    console.log(`  位置: ${n.file === '(多页)' || n.file === '(多文件)' ? n.file : `${mpLabel}/${n.file}${n.line ? ':' + n.line : ''}`}`)
+    console.log(`  说明: ${n.text}`)
+  })
 }
 
 // ============================================================ self-test ====
@@ -835,7 +978,11 @@ Page({
     request('/demo/items', { data: { page, size: 20 } })
       .then((res) => {
         const items = ((res && res.items) || []).map((it) => ({ ...it }))
-        this.setData({ items, page })
+        // 合法变体（都曾让 R4 误报，必须全部放行）：
+        const total = res.items && res.items.length ? res.items.length : 0
+        const fallback = res.items || []
+        const safe = (res && res.total) || 0
+        this.setData({ items, page, total, fallbackCount: fallback.length, safe })
       })
       .catch(() => {})
   },
@@ -949,6 +1096,13 @@ function runSelfTest() {
   stCheck('基线含合法样例 new Date()（不得被 R3 误报）', /const d = new Date\(\)/.test(demoJs))
   stCheck('基线含合法样例 picker bindchange + e.detail.value（不得被 R1 误报）', /bindchange="onPickerChange"/.test(demoWxml) && /Number\(e\.detail\.value\)/.test(demoJs))
   stCheck('基线含合法样例 ((res && res.items) || []).map（不得被 R4 误报）', /\(\(res && res\.items\) \|\| \[\]\)\.map/.test(demoJs))
+  stCheck(
+    '基线含 R4 三个"曾误报"的合法变体（先判空再取长度 / 无守卫兜底 / 非集合字段）',
+    /res\.items && res\.items\.length \? res\.items\.length : 0/.test(demoJs) &&
+      /const fallback = res\.items \|\| \[\]/.test(demoJs) &&
+      /const safe = \(res && res\.total\) \|\| 0/.test(demoJs)
+  )
+  stCheck('基线的"无守卫兜底"只登记覆盖提示、不计入违规（notes 通道生效）', base.notes.length >= 1, `notes=${base.notes.length}`)
   stCheck('基线含 6 组注释诱饵（onReachBottom/detail.value/new Date/BASE_URL/res.items）',
     /\/\/ onReachBottom\(\)/.test(demoJs) &&
       /\/\/ 错误写法：.*e\.detail\.value/.test(demoJs) &&
@@ -1048,7 +1202,7 @@ function runSelfTest() {
   }
   // R4 分面：整块赋值未兜底
   {
-    const m = mutate('pages/demo/demo.js', 'this.setData({ items, page })', 'this.setData({ items: res.items, page })')
+    const m = mutate('pages/demo/demo.js', 'this.setData({ items, page, total', 'this.setData({ items: res.items, page, total')
     if (stCheck('R4b 突变可用', m.applied, m.note)) {
       const r = runOnFixture(m.files)
       const mine = r.violations.filter((v) => v.rule === 'R4_LIST_FIELD_NO_FALLBACK' && v.kind === 'list-assign')
