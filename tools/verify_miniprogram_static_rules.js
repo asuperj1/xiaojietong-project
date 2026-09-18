@@ -88,12 +88,19 @@
  *  R4 的 `list-array-use:res.items`）；R2 一个页面最多一条，故 identity 为空串。
  *  条目必须写明 `reason`（格式校验会拦住"无理由白名单"）。
  *
+ *  baseline 文件本体的两种异常（收口语义）：
+ *    · **缺失 → HARD FAIL**：它是门禁的版本化配置，缺失属配置完整性错误；
+ *      扫别的工作树请用 `--strict`（完全不读 baseline）或 `--baseline <file>`；
+ *    · **存在但 `entries: []` → 合法稳态**（历史债务清零后就是这样）：不因"为空"失败，
+ *      此时任何违规都按 NEW 处理（空 baseline ≠ 免检）。
+ *
  * 退出码：0 = 无违规，或门禁模式下 NEW=0 且 STALE=0；
- *         1 = 有 NEW / 有 STALE / 严格模式下有违规 / **扫描面无覆盖** / baseline 格式错误 / 脚本异常。
+ *         1 = 有 NEW / 有 STALE / 严格模式下有违规 / baseline 缺失或格式错误 /
+ *             **扫描面无覆盖** / **规则未执行** / 互斥 flag 组合 / 脚本异常。
  *         （扫不到页面入口时拒绝报 PASS，见 docs/CI.md「宁可红灯，不要假绿」）
  * 输出三档：**违规（KNOWN/NEW/STALE）**、**覆盖提示 INFO**（说明某处为什么没被判违规）、
  *           **R2 候选清单**（`--list-candidates`，与历史走查报告的"12 个列表页"不是同一口径，
- *           见 tools/README.md §「12 vs 17」）。
+ *           见 tools/README.md §「12 vs 17」；数量以该命令实际输出为准）。
  * 文件名：任务单写的是 `verify_miniprogram_rules.js`，本仓实际文件是
  * `verify_miniprogram_static_rules.js`（接 CI 时用实际路径）。
  *
@@ -1321,8 +1328,8 @@ function printReport(result, mpLabel, opts) {
     return 1
   }
 
-  if (options.baselineWarning) {
-    console.log(`\n⚠️ ${options.baselineWarning}`)
+  if (options.baselineInfo) {
+    console.log(`\nℹ️ ${options.baselineInfo}`)
   }
 
   if (!violations.length) {
@@ -1641,18 +1648,36 @@ function runOnFixture(files, opts) {
   }
 }
 
+/** 在 fixture 目录存活期间执行 fn(mpDir, dir)（用于需要"树 + baseline 文件"同时在盘的对照） */
+function withFixtureDir(files, fn) {
+  const dir = makeFixtureDir(files)
+  try {
+    return fn(path.join(dir, 'miniprogram'), dir)
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch (e) {
+      /* 清理失败不影响结论 */
+    }
+  }
+}
+
 let stPass = 0
 let stFail = 0
 
-/** 静音跑一段会打印的函数（只用于直接断言生产报告路径的退出码） */
+/** 静音跑一段会打印的函数（只用于直接断言生产报告路径的退出码）；同时捕获 stderr */
 function withSilentConsole(fn) {
-  const orig = console.log
+  const origLog = console.log
+  const origErr = console.error
   const lines = []
-  console.log = (...a) => lines.push(a.map((x) => String(x)).join(' '))
+  const push = (...a) => lines.push(a.map((x) => String(x)).join(' '))
+  console.log = push
+  console.error = push
   try {
     return { code: fn(), lines }
   } finally {
-    console.log = orig
+    console.log = origLog
+    console.error = origErr
   }
 }
 
@@ -2084,6 +2109,67 @@ function runSelfTest() {
       JSON.stringify(rBroken.checks)
     )
 
+  // -------------------------------- baseline 缺失 / 为空 / --strict（收口语义）----
+  console.log('\n[A/B/C 对照] baseline 缺失=硬失败 · 空=合法稳态 · --strict 不依赖 baseline')
+  {
+    withFixtureDir(cloneFixture(), (mp, dir) => {
+      const missing = path.join(dir, 'tools', 'does-not-exist.json')
+      const clean = scan(mp)
+      stCheck('A0 对照夹具本身 0 违规（"findings=0" 前提成立）', clean.violations.length === 0, `${clean.violations.length}`)
+
+      // A：baseline 缺失 → 即使 findings=0 也必须 FAIL（配置完整性错误）
+      const a = withSilentConsole(() => runGate(clean, missing, { label: 'tools/does-not-exist.json' }))
+      stCheck(
+        'A1 baseline 缺失 + findings=0 → HARD FAIL（exit 1，提示"缺少 baseline 文件"）',
+        a.code === 1 && a.lines.join('\n').indexOf('缺少 baseline 文件') !== -1,
+        `exit=${a.code}`
+      )
+
+      // B：baseline 存在但 entries=[] → 合法稳态，findings=0 时 PASS
+      const emptyPath = path.join(dir, 'empty-baseline.json')
+      fs.writeFileSync(emptyPath, JSON.stringify({ schema: 1, entries: [] }, null, 2), 'utf8')
+      const b = withSilentConsole(() => runGate(clean, emptyPath, { label: 'empty-baseline.json' }))
+      stCheck(
+        'B1 baseline 存在且 entries=[] + findings=0 → PASS（exit 0，不因"为空"失败）',
+        b.code === 0 && b.lines.join('\n').indexOf('合法稳态') !== -1,
+        `exit=${b.code}`
+      )
+
+      // C：--strict 不依赖 baseline —— 无违规 → 0；有违规 → 1
+      const c1 = withSilentConsole(() => runGate(clean, missing, { strict: true, label: 'tools/does-not-exist.json' }))
+      stCheck('C1 --strict + baseline 缺失 + findings=0 → PASS（exit 0）', c1.code === 0, `exit=${c1.code}`)
+
+      const dropHook = mutate('pages/demo/demo.js', '  onReachBottom() {\n    this.fetch(this.data.page + 1)\n  },', '')
+      withFixtureDir(dropHook.files, (mp2) => {
+        const dirty = scan(mp2)
+        const c2 = withSilentConsole(() => runGate(dirty, missing, { strict: true, label: 'tools/does-not-exist.json' }))
+        stCheck(
+          'C2 --strict + baseline 缺失 + findings=1 → FAIL（exit 1，按扫描结果而非 baseline）',
+          c2.code === 1 && dirty.violations.length === 1,
+          `exit=${c2.code} findings=${dirty.violations.length}`
+        )
+        const c3 = withSilentConsole(() => runGate(dirty, emptyPath, { label: 'empty-baseline.json' }))
+        stCheck('C3 空 baseline + findings=1 → 该违规是 NEW → FAIL（空 baseline ≠ 免检）', c3.code === 1, `exit=${c3.code}`)
+      })
+    })
+  }
+
+  // -------------------------------- 带值参数缺值（评审收口补充）----
+  console.log('\n[E 对照] `--baseline` / `--src` 缺参数值必须报错，不得静默退回默认值')
+  {
+    stCheck('E1 `--baseline` 裸写 → 判为缺值', flagsMissingValue(['--baseline'], ['--baseline', '--src']).length === 1)
+    stCheck('E2 `--src` 裸写 → 判为缺值', flagsMissingValue(['--src'], ['--baseline', '--src']).length === 1)
+    stCheck(
+      'E3 `--baseline --strict`（值位置是另一个 flag）→ 同样判为缺值',
+      flagsMissingValue(['--baseline', '--strict'], ['--baseline']).length === 1
+    )
+    stCheck(
+      'E4 正常给值 / 完全没给 flag → 不误报',
+      flagsMissingValue(['--baseline', 'b.json'], ['--baseline']).length === 0 &&
+        flagsMissingValue([], ['--baseline', '--src']).length === 0
+    )
+  }
+
     // B9 登记证据变化 → 只提醒（不阻塞），便于复核"条目还准不准"
     const changedEntry = Object.assign(entryOf(R2_RULE, 'pages/demo/demo.js', ''), { evidence: '登记时的旧证据文本' })
     const g9 = evaluateGate(r2only.violations, [changedEntry])
@@ -2151,9 +2237,21 @@ function runSelfTest() {
 
 // ================================================================ main ====
 
+/** 从 argv 里取 `--name <value>` 的值；后面为空或跟的是另一个 flag 时视为"没有值" */
+function argValueIn(argv, name, fallback) {
+  const i = argv.indexOf(name)
+  if (i === -1) return fallback
+  const v = argv[i + 1]
+  return v && v.charAt(0) !== '-' ? v : fallback
+}
+
+/** 带了 flag 却没给值的参数列表（纯函数，self-test 直接断言） */
+function flagsMissingValue(argv, flags) {
+  return flags.filter((f) => argv.indexOf(f) !== -1 && !argValueIn(argv, f, ''))
+}
+
 function argValue(name, fallback) {
-  const i = process.argv.indexOf(name)
-  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback
+  return argValueIn(process.argv.slice(2), name, fallback)
 }
 
 function printHelp() {
@@ -2170,7 +2268,11 @@ function printHelp() {
   console.log('')
   console.log('退出码：')
   console.log('  0 = 无任何违规；或门禁模式下 NEW=0 且 STALE=0（已知的历史违规不阻塞）')
-  console.log('  1 = 有新增违规（NEW）/ 基线条目过期（STALE）/ 严格模式下有违规 / 扫描面无覆盖 / 脚本异常')
+  console.log('  1 = 有新增违规（NEW）/ 基线条目过期（STALE）/ 严格模式下有违规 / baseline 缺失或格式错误 /')
+  console.log('      扫描面无覆盖 / 规则未执行 / 互斥 flag 组合 / 脚本异常')
+  console.log('')
+  console.log('baseline 语义：缺失 = HARD FAIL（版本化配置，配置完整性错误）；存在但 entries=[] = 合法稳态；')
+  console.log('               --strict 完全不读 baseline（可用于扫描别的工作树/分支树）。')
   console.log('')
   console.log('baseline 匹配口径：rule + file + identity（**不含行号**）。条目格式见 tools/README.md。')
   printRuleInventory()
@@ -2237,6 +2339,13 @@ function main() {
     return 0
   }
   const strict = argv.includes('--strict')
+  // 带值参数必须真的有值：`--baseline` / `--src` 后面什么都不写（或跟了另一个 flag）时，
+  // 原先会静默退回默认值，然后报出"缺少 baseline 文件"这种指向错误的原因（评审实测）
+  const missingValue = flagsMissingValue(argv, ['--baseline', '--src'])
+  if (missingValue.length) {
+    console.error(`[FAIL] ${missingValue.join(' / ')} 需要一个参数值（后面没有跟路径）`)
+    return 1
+  }
   const baselineArg = argValue('--baseline', '')
   // 相对路径按**被扫描的仓库根目录**（--src）解析 —— baseline 属于它描述的那棵树
   const baselineRel = baselineArg || BASELINE_DEFAULT_REL
@@ -2246,40 +2355,55 @@ function main() {
     return printBaselineSnippet(result, baselineRel)
   }
 
+  return runGate(result, baselineAbs, { strict, explicit: !!baselineArg, label: baselineRel })
+}
+
+/**
+ * 门禁模式的完整决策 + 报告（纯函数式入口，self-test 直接断言 A/B/C）。
+ *
+ * baseline 语义（收口后）：
+ *   - 默认 gate 模式：**baseline 文件缺失 = HARD FAIL**（它是门禁的版本化配置，缺失属配置完整性错误）；
+ *   - baseline 存在但 `entries: []` = **合法稳态**（历史债务清零），不因"为空"本身失败；
+ *   - `--strict`：**完全不依赖 baseline**（可用于扫描别的工作树/别的分支树）。
+ */
+function runGate(result, baselineAbs, opts) {
+  const options = opts || {}
+  const strict = !!options.strict
+  const label = options.label || baselineAbs
+
   if (strict) {
     return printReport(result, 'miniprogram', { strict: true })
   }
 
-  let baselineLabel = baselineRel
+  const exists = fs.existsSync(baselineAbs)
   let entries = []
-  if (fs.existsSync(baselineAbs)) {
-    const parsed = parseBaselineText(readText(baselineAbs))
-    if (parsed.errors.length) {
-      console.error(`[FAIL] baseline 文件格式错误（${baselineRel}）：`)
-      parsed.errors.forEach((e) => console.error('   - ' + e))
+  let emptyInfo = ''
+  if (!exists) {
+    if (options.explicit) {
+      console.error(`[FAIL] 指定的 baseline 文件不存在：${label}`)
+      console.error('       检查 --baseline 路径（相对路径按 --src 的仓库根目录解析）。')
       return 1
     }
-    entries = parsed.entries
-  } else if (baselineArg) {
-    console.error(`[FAIL] 指定的 baseline 文件不存在：${baselineAbs}`)
+    console.error(`[FAIL] 缺少 baseline 文件：${label}`)
+    console.error('       它是 F22 门禁的**版本化配置**（随仓库提交）；缺失属配置完整性错误，因此直接失败。')
+    console.error(`       · 若这是本仓库的树且文件被误删：git checkout -- ${BASELINE_DEFAULT_REL}`)
+    console.error('       · 若在扫描别的工作树：用 --strict（不依赖 baseline）或 --baseline <file> 显式指定')
     return 1
-  } else {
-    baselineLabel = `${BASELINE_DEFAULT_REL}（不存在）`
   }
-
-  // baseline 缺失/为空本身不能"藏住"违规（未登记的违规一定是 NEW → 红），但会让 KNOWN/NEW 失去意义
-  // —— 这会削弱门禁的可读性，所以要**大声**说出来，而不是只体现在标题行里
-  let baselineWarning = ''
-  if (!fs.existsSync(baselineAbs)) {
-    baselineWarning =
-      `未找到 baseline 文件：${baselineRel}（相对 ${root}）—— 历史违规无法区分，全部按 NEW 处理；` +
-      `若这是误删，请从 git 恢复（它应当随仓库一起提交）`
-  } else if (entries.length === 0) {
-    baselineWarning = `baseline 文件为空（entries: []）：所有违规都会按 NEW 处理；历史欠账未被登记`
+  const parsed = parseBaselineText(readText(baselineAbs))
+  if (parsed.errors.length) {
+    console.error(`[FAIL] baseline 文件格式错误（${label}）：`)
+    parsed.errors.forEach((e) => console.error('   - ' + e))
+    return 1
+  }
+  entries = parsed.entries
+  if (!entries.length) {
+    // 空 baseline 是**合法稳态**（历史债务全部清零后就是这样），不是告警
+    emptyInfo = 'baseline 为空（entries: []）—— 历史债务已清零，属合法稳态；此后任何违规都按 NEW 处理'
   }
 
   const gate = evaluateGate(result.violations, entries)
-  return printReport(result, 'miniprogram', { gate, baselineLabel, baselineWarning })
+  return printReport(result, 'miniprogram', { gate, baselineLabel: label, baselineInfo: emptyInfo })
 }
 
 try {
