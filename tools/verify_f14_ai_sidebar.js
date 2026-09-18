@@ -44,8 +44,12 @@
  *
  * 输出：`[OK]` / `[NG]` 逐项断言 + 末尾汇总；有失败则退出码 1。
  *
- * 口径说明：A~I 段是断言（决定退出码）；每条「能力」断言都配**反向对照**（J 段：
- * 对真实源码做一处语义突变后必须转为失败），用来证明断言不是空跑。
+ * 口径说明：A~I 段是断言（决定退出码）；「反向对照」段对真实源码做 **9 组语义突变**，
+ * 每组对应一条**具体断言**（不是「每条断言都有对照」的过度承诺），突变后该断言必须转为失败 ——
+ * 用来证明这些断言不是空跑。对照只覆盖易回归的关键点，其余断言的保障来自结构对账本身。
+ *
+ * ⚠️ 工具自身的约定：`wx` / `Page` / `getApp` 是**进程级 stub**，每个用例 `loadChat()` 后
+ * 必须立即驱动该实例；不要跨实例交叉调用（新实例会把全局 stub 指到新的 page）。
  */
 
 'use strict'
@@ -94,9 +98,75 @@ function bar(title) {
   console.log('='.repeat(84))
 }
 
+/**
+ * WXML 结构谓词：A 段断言与反向对照**共用同一实现** ——
+ * 否则「突变后重跑一遍同一条正则」只是重言式，证明不了断言会被抓。
+ */
+const hasLongPressDelete = (wxml) => /bindlongpress="onConvLongPress"/.test(wxml)
+const hasMaskTap = (wxml) => /class="sidebar-mask[^"]*"[^>]*bindtap="onMaskTap"/.test(wxml)
+const hasMenuButton = (wxml) => /<button[^>]*bindtap="onOpenSidebar"[^>]*>\s*菜单\s*<\/button>/.test(wxml)
+
+/**
+ * WXSS 简易层叠分析。
+ *
+ * 为什么需要它：`miniprogram/pages/chat/chat.wxss` 用了复合选择器压 `.xj-glass` 的
+ * `position: relative`。若把**状态声明**（transform / visibility / transition）也写进
+ * 高特异性规则，单类选择器的 `.sidebar-panel--open` 就永远压不过收起态 ——
+ * 面板恒为 translateX(-100%) + visibility:hidden，点【菜单】只看得见遮罩。
+ * 这类「纯文本断言全都 PASS、真机整块不可见」的假绿必须由层叠断言兜住。
+ */
+function wxssRules(css) {
+  const src = css.replace(/\/\*[\s\S]*?\*\//g, '') // 去注释：注释里也有示例选择器
+  const out = []
+  const re = /([^{}]+)\{([^{}]*)\}/g
+  let m
+  while ((m = re.exec(src))) {
+    out.push({ selector: m[1].trim().replace(/\s+/g, ' '), body: m[2] })
+  }
+  return out
+}
+
+/** 简化特异性：类 / 属性 / 伪类各记 1（本页无 id 选择器，元素选择器不计） */
+function specificity(selector) {
+  const cls = (selector.match(/\.[A-Za-z0-9_-]+/g) || []).length
+  const attr = (selector.match(/\[[^\]]*\]/g) || []).length
+  const pseudo = (selector.match(/(^|[^:]):[a-z-]+/g) || []).length
+  return cls + attr + pseudo
+}
+
+/** 在 A 规则与 B 规则之间，A 是否真的能赢（特异性更高，或同特异性但更靠后） */
+function beats(rules, a, b) {
+  if (!a || !b) return false
+  const sa = specificity(a.selector)
+  const sb = specificity(b.selector)
+  if (sa !== sb) return sa > sb
+  return rules.indexOf(a) > rules.indexOf(b)
+}
+
+/** 取第一条「选择器命中 selRe 且声明体命中 bodyRe」的规则 */
+function ruleOf(rules, selRe, bodyRe) {
+  return rules.find((r) => selRe.test(r.selector) && bodyRe.test(r.body))
+}
+
+/** 把一段 SSE 文本编码成 wx.request 的 onChunkReceived 回调需要的 ArrayBuffer */
+function sseBytes(text) {
+  return new TextEncoder().encode(text).buffer
+}
+
 // ---------------------------------------------------------------- 沙箱 ----
 
 const sandboxes = []
+
+/** 清理全部沙箱临时目录（正常结束与断言抛错都会走这里，不留 %TEMP%\\xjt-f14-*） */
+function cleanupSandboxes() {
+  sandboxes.forEach((d) => {
+    try {
+      fs.rmSync(d, { recursive: true, force: true })
+    } catch (e) {
+      /* 清理失败不影响结论 */
+    }
+  })
+}
 
 /**
  * 建隔离沙箱：整目录拷贝 `config` / `services` / `utils` / `pages/chat`。
@@ -155,6 +225,14 @@ function makeBackend(opts) {
         ],
       })
     }
+    // PATCH /chat/conversations/{id} —— 重命名（F14-A 补标题用）
+    const patchMatch = /\/chat\/conversations\/(\d+)$/.exec(url)
+    if (patchMatch && method === 'PATCH') {
+      const id = Number(patchMatch[1])
+      const title = (req.data && req.data.title) || ''
+      state.list = state.list.map((c) => (c.id === id ? Object.assign({}, c, { title }) : c))
+      return okBody({ conversation_id: id, title })
+    }
     // DELETE /chat/conversations/{id}
     const delMatch = /\/chat\/conversations\/(\d+)$/.exec(url)
     if (delMatch && method === 'DELETE') {
@@ -183,7 +261,6 @@ function makeBackend(opts) {
  * @param {boolean} [opts.modalConfirm] showModal 自动确认（false = 取消）
  * @param {Function} [opts.responder] (req, 第几次请求) => 应答 | null（null = 挂起不应答）
  * @param {string} [opts.sourceOverride] 用给定源码替换 chat.js（反向对照用）
- * @param {string} [opts.wxmlOverride] 用给定 WXML 替换 chat.wxml（反向对照用）
  * @param {object} [opts.globalData] getApp().globalData 额外字段（chatRestore / pendingSearch）
  */
 function loadChat(opts) {
@@ -191,9 +268,6 @@ function loadChat(opts) {
   const dir = makeSandbox()
   const file = path.join(dir, 'pages', 'chat', 'chat.js')
   if (o.sourceOverride) fs.writeFileSync(file, o.sourceOverride, 'utf8')
-  if (o.wxmlOverride) {
-    fs.writeFileSync(path.join(dir, 'pages', 'chat', 'chat.wxml'), o.wxmlOverride, 'utf8')
-  }
 
   const backend = o.responder ? null : makeBackend(o.backend)
   const responder = o.responder || ((req) => backend.handle(req))
@@ -201,6 +275,7 @@ function loadChat(opts) {
   const state = {
     requests: [],
     hanging: [],
+    tasks: [], // wx.request 返回的 RequestTask（SSE 用例用它喂 chunk）
     toasts: [],
     modals: [],
     navigations: [],
@@ -231,8 +306,16 @@ function loadChat(opts) {
       const res = responder(req, state.requests.length)
       if (res) req.success(res)
       else state.hanging.push(req)
-      // SSE 用的 RequestTask 形状（chat.js 内部依赖 abort / onChunkReceived 存在性）
-      return { abort() {}, onChunkReceived() {} }
+      // RequestTask 形状：普通请求用不到，SSE 用例靠 onChunkReceived 喂事件
+      const task = {
+        abort() {},
+        _onChunk: null,
+        onChunkReceived(cb) {
+          this._onChunk = cb
+        },
+      }
+      state.tasks.push(task)
+      return task
     },
   }
 
@@ -302,6 +385,30 @@ async function drag(page, dx, dy) {
   return mid
 }
 
+/** 取最后一次请求的 RequestTask（SSE 用例喂事件用） */
+const lastTask = (state) => state.tasks[state.tasks.length - 1]
+
+/** 把 SSE 文本喂给最后一次请求，驱动 chat.js 的 chunk / done 回调 */
+async function feedSse(state, text) {
+  const task = lastTask(state)
+  if (!task || typeof task._onChunk !== 'function') throw new Error('没有可用的 SSE RequestTask')
+  task._onChunk({ data: sseBytes(text) })
+  await tick()
+}
+
+/** 一次完整的「发消息 → 后端回执」：返回本次新发出的请求 */
+async function sendAndDone(page, state, content, convId, msgId) {
+  const before = state.requests.length
+  page.sendMessage(content)
+  await tick()
+  await feedSse(
+    state,
+    'event: chunk\ndata: {"delta":"好的"}\n\n' +
+      `event: done\ndata: {"conversation_id":${convId},"message_id":${msgId}}\n\n`
+  )
+  return state.requests.slice(before)
+}
+
 /**
  * WXML 标签闭合 / 嵌套配平检查。
  * 没有微信开发者工具时，这是唯一能自动发现「标签没关 / 嵌套错位」的手段
@@ -346,14 +453,8 @@ console.log(`被测文件：${CHAT_JS}`)
 // ------------------------------------------------- A. 结构对账 ----
 bar('A. 结构对账（F14-A：菜单按钮 / 遮罩 / 面板 / 会话列表 / 长按删除 / 当前项高亮）')
 {
-  check(
-    'A1 顶部存在【菜单】按钮且绑定 onOpenSidebar',
-    /<button[^>]*bindtap="onOpenSidebar"[^>]*>\s*菜单\s*<\/button>/.test(WXML_LF)
-  )
-  check(
-    'A2 遮罩节点 .sidebar-mask 绑定 onMaskTap（点击关闭）',
-    /class="sidebar-mask[^"]*"[^>]*bindtap="onMaskTap"/.test(WXML_LF)
-  )
+  check('A1 顶部左上角存在【菜单】按钮且绑定 onOpenSidebar', hasMenuButton(WXML_LF))
+  check('A2 遮罩节点 .sidebar-mask 绑定 onMaskTap（点击关闭）', hasMaskTap(WXML_LF))
   check(
     'A3 面板 .sidebar-panel 使用 F10 玻璃类（xj-glass-strong）',
     /class="sidebar-panel[^"]*xj-glass-strong/.test(WXML_LF)
@@ -377,7 +478,7 @@ bar('A. 结构对账（F14-A：菜单按钮 / 遮罩 / 面板 / 会话列表 / �
   )
   check(
     'A8 侧栏顶部【+ 新建会话】按钮绑定 onNewConversation',
-    /class="sidebar-new"[^>]*bindtap="onNewConversation"/.test(WXML_LF)
+    /class="sidebar-new[^"]*"[^>]*bindtap="onNewConversation"/.test(WXML_LF)
   )
   check(
     'A9 会话列表遍历 conversations 且 wx:key="id"',
@@ -386,7 +487,7 @@ bar('A. 结构对账（F14-A：菜单按钮 / 遮罩 / 面板 / 会话列表 / �
   check(
     'A10 会话卡片同时绑定 bindtap（切换）与 bindlongpress（删除）并携带 data-id',
     /bindtap="onTapConversation"/.test(WXML_LF) &&
-      /bindlongpress="onConvLongPress"/.test(WXML_LF) &&
+      hasLongPressDelete(WXML_LF) &&
       /data-id="\{\{item\.id\}\}"/.test(WXML_LF)
   )
   check(
@@ -451,28 +552,75 @@ bar('A. 结构对账（F14-A：菜单按钮 / 遮罩 / 面板 / 会话列表 / �
     `缺失：${missing.join(', ')}`
   )
 
-  // A17 面板定位：.xj-glass 自带 position: relative，面板必须用复合选择器压过它，
-  // 否则面板会退化成文档流内元素（整页布局崩坏，而纯文本断言看不出来）
+  // ---- A17~A22 层叠分析（纯文本断言最容易漏掉的一类：规则写对了，但压不过别人）----
+  const rules = wxssRules(WXSS)
+  const panelLayout = ruleOf(rules, /\.chat-page \.sidebar-panel$/, /position:\s*fixed/)
   check(
-    'A17 面板用 .chat-page .sidebar-panel 复合选择器声明 position: fixed',
-    /\.chat-page \.sidebar-panel\s*\{[^}]*position:\s*fixed/.test(WXSS),
+    'A17 面板用 .chat-page .sidebar-panel 复合选择器声明 position: fixed（压过 .xj-glass 的 relative）',
+    !!panelLayout,
     '未找到 .chat-page .sidebar-panel { position: fixed }'
   )
-  const maskZ = /\.sidebar-mask\s*\{[^}]*z-index:\s*(\d+)/.exec(WXSS)
-  const panelZ = /\.chat-page \.sidebar-panel\s*\{[^}]*z-index:\s*(\d+)/.exec(WXSS)
   check(
     'A18 面板层级高于遮罩（否则点不到面板）',
-    !!maskZ && !!panelZ && Number(panelZ[1]) > Number(maskZ[1]),
-    `mask=${maskZ && maskZ[1]} panel=${panelZ && panelZ[1]}`
+    (() => {
+      const mask = ruleOf(rules, /\.sidebar-mask$/, /z-index:/)
+      const panel = ruleOf(rules, /\.chat-page \.sidebar-panel$/, /z-index:/)
+      if (!mask || !panel) return false
+      const z = (r) => Number(/z-index:\s*(\d+)/.exec(r.body)[1])
+      return z(panel) > z(mask)
+    })(),
+    '未找到可比较的 z-index'
+  )
+
+  // 收起态（translateX(-100%) / visibility:hidden）与展开态必须能「赢」：
+  // 这正是 B1 那类 blocker 的形态 —— 状态声明被写进高特异性规则后，
+  // 单类的 --open 永远压不过，真机上只出遮罩、面板永不出现。
+  const panelBase = ruleOf(rules, /\.sidebar-panel$/, /translateX\(-100%\)/)
+  const panelOpen = ruleOf(rules, /\.sidebar-panel--open/, /translateX\(0\)/)
+  check(
+    'A19 展开态 .sidebar-panel--open 的 transform 能压过收起态（特异性 + 顺序）',
+    !!panelBase && !!panelOpen && beats(rules, panelOpen, panelBase),
+    panelBase && panelOpen
+      ? `base=${panelBase.selector}(${specificity(panelBase.selector)}) open=${panelOpen.selector}(${specificity(panelOpen.selector)})`
+      : '未同时找到收起态与展开态的 transform 规则'
+  )
+  const visHidden = ruleOf(rules, /\.sidebar-panel$/, /visibility:\s*hidden/)
+  const visOpen = ruleOf(rules, /\.sidebar-panel--open/, /visibility:\s*visible/)
+  check(
+    'A20 展开态 visibility:visible 能压过收起态 visibility:hidden',
+    !!visHidden && !!visOpen && beats(rules, visOpen, visHidden),
+    visHidden && visOpen
+      ? `closed=${visHidden.selector}(${specificity(visHidden.selector)}) open=${visOpen.selector}(${specificity(visOpen.selector)})`
+      : '未同时找到收起态与展开态的 visibility 规则'
+  )
+  const dragRule = ruleOf(rules, /\.sidebar-panel--dragging/, /transition:\s*none/)
+  check(
+    'A21 拖拽态 transition:none 能压过基规则的 transition（否则面板滞后于手指）',
+    !!dragRule && beats(rules, dragRule, panelBase),
+    dragRule && panelBase
+      ? `dragging=${dragRule.selector}(${specificity(dragRule.selector)}) base=${panelBase.selector}(${specificity(panelBase.selector)})`
+      : '未找到 --dragging 的 transition:none'
+  )
+  // 会话高亮要在**降级设备上**也可见：玻璃降级类 `.is-glass-fallback .xj-glass-card`（0,2,0）
+  // 会重设 background/border-color，单类的高亮规则会被它整块盖掉。
+  const activeRule = ruleOf(rules, /sidebar-conv--active/, /background:/)
+  check(
+    'A22 当前会话高亮能压过玻璃降级类 .is-glass-fallback .xj-glass-card（0,2,0）',
+    !!activeRule && specificity(activeRule.selector) >= 2,
+    activeRule ? `${activeRule.selector} → 特异性 ${specificity(activeRule.selector)}` : '未找到高亮规则'
   )
   check(
-    'A19 收起态用 visibility: hidden（只靠 opacity:0 会吃掉整页点击）',
-    /\.sidebar-mask\s*\{[^}]*visibility:\s*hidden/.test(WXSS) &&
-      /\.chat-page \.sidebar-panel\s*\{[^}]*visibility:\s*hidden/.test(WXSS)
+    'A23 遮罩收起态用 visibility: hidden（只靠 opacity:0 会吃掉整页点击）',
+    !!ruleOf(rules, /\.sidebar-mask$/, /visibility:\s*hidden/) &&
+      !!ruleOf(rules, /\.sidebar-mask--open/, /visibility:\s*visible/)
+  )
+  check(
+    'A24 面板收起态用 visibility: hidden（收起时不可点）',
+    !!ruleOf(rules, /\.sidebar-panel$/, /visibility:\s*hidden/)
   )
 
   const balance = checkTagBalance(WXML_LF)
-  check('A20 WXML 标签闭合与嵌套配平', balance.ok, balance.detail)
+  check('A25 WXML 标签闭合与嵌套配平', balance.ok, balance.detail)
 }
 
 // ------------------------------------------- B. 展开与列表加载 ----
@@ -582,13 +730,26 @@ bar('C. 点选会话（拉历史消息 → 还原对话区 → 收起侧栏）')
     JSON.stringify(page.data.messages.map((x) => x.role + ':' + x.content))
   )
 
+  // 点当前会话：只收起侧栏，不重拉消息（否则滚动位置与正文都会被重置）
+  await after(state, () => page.onOpenSidebar())
+  const again = await after(state, () =>
+    page.onTapConversation({ currentTarget: { dataset: { id: 12 } } })
+  )
+  check(
+    'C4b 再次点当前会话只收起侧栏，不重复拉消息',
+    again.length === 0 &&
+      page.data.sidebarOpen === false &&
+      page.data.messages.length === 2,
+    JSON.stringify({ sent: again.map((r) => r.url), messages: page.data.messages.length })
+  )
+
   // 连点节流
   const { page: p2, state: s2 } = loadChat()
   await after(s2, () => p2.onOpenSidebar())
   p2.onTapConversation({ currentTarget: { dataset: { id: 11 } } })
   await after(s2, () => p2.onTapConversation({ currentTarget: { dataset: { id: 12 } } }))
   check(
-    'C5 连点只发一次消息请求（_convLoading 节流）',
+    'C5 连点只发一次消息请求（_msgLoading 节流）',
     reqs(s2.requests, /\/messages$/).length === 1,
     JSON.stringify(s2.requests.map((r) => r.url))
   )
@@ -713,9 +874,11 @@ bar('D. 长按删除会话（DELETE /chat/conversations/{id}）')
 }
 
 // ------------------------------------------- E. 清空历史 ----
-bar('E. 清空历史（后端无批量接口 → 取一批删一批，含上限保护）')
+bar('E. 清空历史（后端无批量接口 → 取一批删一批，含上限保护与失败语义）')
 {
   const { page, state } = loadChat({ backend: { initial: [conv(1, 'a'), conv(2, 'b'), conv(3, 'c')] } })
+  // 当前会话正是被清掉的那条 → 清空后对话区必须一并清空
+  page.setData({ conversationId: 1, messages: [{ localId: 1, role: 'user', content: 'hi' }] })
   await after(state, () => page.onOpenSidebar())
   await after(state, () => page.onClearHistory())
   check('E1 清空历史需二次确认（不可恢复）', state.modals.length === 1)
@@ -725,7 +888,7 @@ bar('E. 清空历史（后端无批量接口 → 取一批删一批，含上限�
     `deletes=${state.backend.deletes}`
   )
   check(
-    'E3 清空后对话区清空 + conversationId 归零 + 列表刷新为空',
+    'E3 全部清空后对话区清空 + conversationId 归零 + 列表为空',
     page.data.messages.length === 0 &&
       page.data.conversationId === null &&
       page.data.conversations.length === 0,
@@ -749,9 +912,26 @@ bar('E. 清空历史（后端无批量接口 → 取一批删一批，含上限�
   )
 }
 
+// 列表本身没拉到 ≠ 没有会话：不能把失败说成「暂无历史会话」
+{
+  const { page, state } = loadChat({ backend: { failList: true } })
+  await after(state, () => page.onOpenSidebar())
+  const before = state.requests.length
+  await after(state, () => page.onClearHistory())
+  check(
+    'E4b 列表加载失败时去重试，而不是谎报「暂无历史会话」',
+    state.modals.length === 0 &&
+      state.backend.deletes === 0 &&
+      convList(state.requests.slice(before)).filter(isGet).length === 1 &&
+      state.toasts.indexOf('暂无历史会话') === -1,
+    JSON.stringify({ modals: state.modals.length, toasts: state.toasts })
+  )
+}
+
 // 上限保护：后端始终删不干净
 {
   const { page, state } = loadChat({ backend: { keepNonEmpty: true } })
+  page.setData({ conversationId: 11, messages: [{ localId: 1, role: 'user', content: 'hi' }] })
   await after(state, () => page.onOpenSidebar())
   await after(state, () => page.onClearHistory())
   const fetches = convList(state.requests).filter(isGet).length
@@ -765,11 +945,19 @@ bar('E. 清空历史（后端无批量接口 → 取一批删一批，含上限�
     state.toasts[state.toasts.length - 1] === '部分会话未清空，请重试',
     JSON.stringify(state.toasts.slice(-3))
   )
+  check(
+    'E6b 部分未清空时，仍在列表里的当前会话不得被本地清空',
+    page.data.messages.length === 1 && page.data.conversationId === 11,
+    JSON.stringify({ messages: page.data.messages.length, conv: page.data.conversationId })
+  )
 }
 
 // 中途失败即停
 {
-  const { page, state } = loadChat({ backend: { initial: [conv(1, 'a'), conv(2, 'b'), conv(3, 'c')], failDeleteAt: 2 } })
+  const { page, state } = loadChat({
+    backend: { initial: [conv(1, 'a'), conv(2, 'b'), conv(3, 'c')], failDeleteAt: 2 },
+  })
+  page.setData({ conversationId: 3, messages: [{ localId: 1, role: 'user', content: 'hi' }] })
   await after(state, () => page.onOpenSidebar())
   await after(state, () => page.onClearHistory())
   check(
@@ -782,6 +970,40 @@ bar('E. 清空历史（后端无批量接口 → 取一批删一批，含上限�
     state.toasts[state.toasts.length - 1] === '部分会话未清空，请重试',
     JSON.stringify(state.toasts.slice(-3))
   )
+  check(
+    'E8b 中途失败时，未删掉的当前会话（id=3）保留在对话区',
+    page.data.messages.length === 1 && page.data.conversationId === 3,
+    JSON.stringify({ messages: page.data.messages.length, conv: page.data.conversationId })
+  )
+}
+
+// 拉列表失败：一条都没删 → 不能提示「部分会话未清空」
+{
+  let listCalls = 0
+  const { page, state } = loadChat({
+    responder: (req) => {
+      const method = (req.method || 'GET').toUpperCase()
+      if (method === 'GET' && /\/chat\/conversations\/?$/.test(req.url)) {
+        listCalls += 1
+        if (listCalls === 1) return okBody({ items: [conv(1, 'a')] })
+        return { data: { code: 5001, message: '服务异常', data: null } }
+      }
+      return null
+    },
+  })
+  page.setData({ conversationId: 1, messages: [{ localId: 1, role: 'user', content: 'hi' }] })
+  await after(state, () => page.onOpenSidebar())
+  await after(state, () => page.onClearHistory())
+  check(
+    'E9 列表拉取失败时提示「未能读取会话列表」，不谎报「部分未清空」',
+    state.toasts[state.toasts.length - 1] === '未能读取会话列表，请稍后重试',
+    JSON.stringify(state.toasts.slice(-3))
+  )
+  check(
+    'E9b 列表不可信时保守保留对话区（不误删用户正在看的会话）',
+    page.data.messages.length === 1 && page.data.conversationId === 1,
+    JSON.stringify({ messages: page.data.messages.length, conv: page.data.conversationId })
+  )
 }
 
 // 生成中拦截
@@ -791,7 +1013,7 @@ bar('E. 清空历史（后端无批量接口 → 取一批删一批，含上限�
   await after(state, () => page.onOpenSidebar())
   await after(state, () => page.onClearHistory())
   check(
-    'E9 生成中清空被拦截（不弹框、不发 DELETE）',
+    'E10 生成中清空被拦截（不弹框、不发 DELETE）',
     state.modals.length === 0 && state.backend.deletes === 0 && state.toasts.indexOf('正在回答中，请稍后再试') !== -1,
     JSON.stringify({ modals: state.modals.length, deletes: state.backend.deletes })
   )}
@@ -832,7 +1054,7 @@ bar('F. 新建会话（B24：POST /chat/conversations，空会话可直接对话
   )
 }
 
-// 迟到响应丢弃（一）：连续两次「新建会话」，旧响应不得覆盖新会话
+// 迟到响应丢弃（一）：连点两次「新建会话」只建一条空会话，且响应能落地
 {
   const holds = []
   const { page, state } = loadChat({
@@ -849,28 +1071,64 @@ bar('F. 新建会话（B24：POST /chat/conversations，空会话可直接对话
   page.onNewConversation()
   await tick()
   check(
-    'F5 反向前提：两次新建都已发出且被挂起',
-    holds.length === 2 && page.data.conversationId === null,
+    'F5 连点两次「新建会话」只发一个 POST（在飞守卫，不在侧栏留下两行「新对话」）',
+    holds.length === 1 && page.data.conversationId === null,
     JSON.stringify({ holds: holds.length, conv: page.data.conversationId })
   )
-  // 第 1 次请求的响应后到：不得把当前会话指回那个已被取代的空会话
   holds[0].success(okBody({ conversation_id: 77, title: '新对话' }))
   await tick()
   check(
-    'F6 旧的新建响应被丢弃（不指向被取代的会话）',
-    page.data.conversationId === null,
+    'F5b 该响应正常落地（不是被自己的守卫丢掉）',
+    page.data.conversationId === 77,
     String(page.data.conversationId)
   )
-  holds[1].success(okBody({ conversation_id: 88, title: '新对话' }))
+  // 已经停在一条空会话上 → 再点新建不该再建一条
+  const before = state.requests.length
+  page.onNewConversation()
+  await tick()
+  const posts = state.requests
+    .slice(before)
+    .filter((r) => (r.method || '').toUpperCase() === 'POST')
+  check(
+    'F5c 已停在空会话上时再点「新建」不再重复建会话',
+    posts.length === 0 && page.data.messages.length === 0,
+    JSON.stringify(posts.map((r) => r.url))
+  )
+}
+
+// 迟到响应丢弃（二）：在飞期间用户选了一个**空**历史会话（消息为空，靠序号守护）
+{
+  let hold = null
+  const { page, state } = loadChat({
+    responder: (req) => {
+      const method = (req.method || 'GET').toUpperCase()
+      if ((req.method || '').toUpperCase() === 'POST' && /\/chat\/conversations\/?$/.test(req.url)) {
+        hold = req
+        return null
+      }
+      if (/\/messages$/.test(req.url)) return okBody({ items: [] }) // 空会话：没有消息可兜底
+      if (method === 'GET' && /\/chat\/conversations\/?$/.test(req.url)) {
+        return okBody({ items: [conv(11, '空会话')] })
+      }
+      return null
+    },
+  })
+  await after(state, () => page.onOpenSidebar())
+  page.onNewConversation() // POST 挂起
+  await tick()
+  page.onTapConversation({ currentTarget: { dataset: { id: 11 } } }) // 选中一个空会话
+  await tick()
+  check('F6 反向前提：已选中空会话 id=11', page.data.conversationId === 11, String(page.data.conversationId))
+  hold.success(okBody({ conversation_id: 77, title: '新对话' }))
   await tick()
   check(
-    'F6b 最后一次新建的响应生效（conversation_id=88）',
-    page.data.conversationId === 88,
+    'F6b 迟到的「新建」响应不得覆盖用户刚选中的会话（序号守护）',
+    page.data.conversationId === 11,
     String(page.data.conversationId)
   )
 }
 
-// 迟到响应丢弃（二）：用户在响应回来之前已经开口（会话 id 归 /chat/send）
+// 迟到响应丢弃（三）：用户在响应回来之前已经开口（会话 id 归 /chat/send）
 {
   let hold = null
   const { page, state } = loadChat({
@@ -910,6 +1168,13 @@ bar('F. 新建会话（B24：POST /chat/conversations，空会话可直接对话
     page.data.conversationId === null && page.data.messages.length === 0,
     JSON.stringify({ conv: page.data.conversationId, messages: page.data.messages.length })
   )
+  // 失败后守卫必须解开，否则用户再也建不了会话
+  const retry = await after(state, () => page.onNewConversation())
+  check(
+    'F7b 失败后仍在飞守卫已解开（可再次新建）',
+    retry.filter((r) => (r.method || '').toUpperCase() === 'POST').length === 1,
+    JSON.stringify(retry.map((r) => r.method + ' ' + r.url))
+  )
 }
 
 // 生成中新建需确认
@@ -924,8 +1189,42 @@ bar('F. 新建会话（B24：POST /chat/conversations，空会话可直接对话
   )
 }
 
+// 显式新建的会话补标题（对齐 F4 懒建路径「首条消息前 20 字」的观感）
+{
+  const { page, state } = loadChat()
+  await after(state, () => page.onNewConversation())
+  await tick()
+  check('F9 反向前提：显式新建得到 conversation_id=77', page.data.conversationId === 77)
+  const sent = await sendAndDone(page, state, '图书馆几点关门？谢谢', 77, 5)
+  const patches = sent.filter((r) => (r.method || '').toUpperCase() === 'PATCH')
+  check(
+    'F9 显式新建的会话在首条消息成功后补一次 PATCH 重命名（标题 = 首条消息前 20 字）',
+    patches.length === 1 && patches[0].data.title === '图书馆几点关门？谢谢',
+    JSON.stringify(patches.map((r) => r.method + ' ' + r.url + ' ' + JSON.stringify(r.data)))
+  )
+  // 第二句不该再改标题（否则标题会跟着最后一句跑）
+  const sent2 = await sendAndDone(page, state, '那周末呢', 77, 6)
+  check(
+    'F9b 只补一次标题（第二句不再 PATCH）',
+    sent2.filter((r) => (r.method || '').toUpperCase() === 'PATCH').length === 0,
+    JSON.stringify(sent2.map((r) => r.method + ' ' + r.url))
+  )
+}
+
+// 懒建路径（conversationId=null 时发送）不得额外 PATCH：后端已经用首条消息当标题
+{
+  const { page, state } = loadChat()
+  const sent = await sendAndDone(page, state, '直接从输入框提问', 88, 7)
+  check(
+    'F10 懒建路径不发多余 PATCH（后端 /chat/send 已经用首条消息建标题）',
+    sent.filter((r) => (r.method || '').toUpperCase() === 'PATCH').length === 0 &&
+      page.data.conversationId === 88,
+    JSON.stringify({ sent: sent.map((r) => r.method + ' ' + r.url), conv: page.data.conversationId })
+  )
+}
+
 // ------------------------------------------- G. 遮罩 / 手势 ----
-bar('G. 遮罩点击与右滑手势关闭')
+bar('G. 遮罩点击与滑动关闭（规格：右滑手势关闭；向左拖同样关闭）')
 {
   const { page, state } = loadChat()
   await after(state, () => page.onOpenSidebar())
@@ -933,13 +1232,22 @@ bar('G. 遮罩点击与右滑手势关闭')
   check('G1 点击遮罩关闭侧栏', page.data.sidebarOpen === false)
 }
 
+// 向右拖（规格明写的「右滑手势关闭」）：有阻尼反馈、过阈值关闭
 {
   const { page, state } = loadChat()
   await after(state, () => page.onOpenSidebar())
   const mid = await drag(page, 80, 0)
   check(
-    'G2 右拖期间跟手（出现过 translateX 位移且拖拽态为 true）',
+    'G2 右拖期间跟手（拖拽态为 true 且出现 translateX 位移）',
     mid.some((s) => s.dragging === true && /translateX\(/.test(s.style)),
+    JSON.stringify(mid)
+  )
+  check(
+    'G2b 右拖位移被限幅（面板已在最左位，不把它拖进屏幕里）',
+    mid.every((s) => {
+      const m = /translateX\((-?\d+(?:\.\d+)?)px\)/.exec(s.style)
+      return !m || Number(m[1]) <= 24
+    }),
     JSON.stringify(mid)
   )
   check('G3 右拖超过阈值 → 关闭', page.data.sidebarOpen === false)
@@ -981,12 +1289,31 @@ bar('G. 遮罩点击与右滑手势关闭')
 {
   const { page, state } = loadChat()
   await after(state, () => page.onOpenSidebar())
+  const mid = await drag(page, -40, 0)
+  check(
+    'G6b 左拖未过阈值 → 回弹（保持展开且位移清空）',
+    page.data.sidebarOpen === true &&
+      page.data.sidebarStyle === '' &&
+      page.data.sidebarDragging === false,
+    JSON.stringify({
+      open: page.data.sidebarOpen,
+      style: page.data.sidebarStyle,
+      dragging: page.data.sidebarDragging,
+      mid,
+    })
+  )
+}
+
+{
+  const { page, state } = loadChat()
+  await after(state, () => page.onOpenSidebar())
   const mid = await drag(page, -80, 0)
   check(
-    'G7 向左拖动不接管（面板已是展开位，向左不产生位移）且不关闭',
-    mid.every((s) => s.dragging === false) && page.data.sidebarOpen === true,
-    JSON.stringify({ mid, open: page.data.sidebarOpen })
+    'G7 向左拖完全跟手（面板被推回屏幕外，位移为负）',
+    mid.some((s) => /translateX\(-\d/.test(s.style)),
+    JSON.stringify(mid)
   )
+  check('G7b 左拖过阈值 → 关闭（抽屉的通用手感）', page.data.sidebarOpen === false)
 }
 
 {
@@ -1080,6 +1407,16 @@ bar('H. 状态恢复（Tab 切走再回来不残留遮罩；F4 既有行为不�
   check('H4 消费后清空 pendingSearch（不重复自动发送）', page._app.globalData.pendingSearch === '')
 }
 
+{
+  const { page, state } = loadChat()
+  const sent = await after(state, () => page.onHistory())
+  check(
+    'H5 F4 的【历史】入口仍跳会话列表页（跳转目标在 app.json 已注册）',
+    sent.length === 0 && state.navigations.indexOf('/pages/chat/history') !== -1,
+    JSON.stringify(state.navigations)
+  )
+}
+
 // ------------------------------------------- I. F14-A 边界 ----
 bar('I. F14-A 边界（语音 / 自定义 TabBar 不在本任务）')
 {
@@ -1103,14 +1440,11 @@ bar('I. F14-A 边界（语音 / 自定义 TabBar 不在本任务）')
 // -------------------------------------------------- 反向对照 ----
 bar('反向对照（对真实源码做一处语义突变后，断言必须转为失败 —— 证明不是空跑）')
 
-// R1 突变 WXML：去掉长按删除绑定
+// R1 突变 WXML：去掉长按删除绑定（重跑 A10 用的同一个谓词）
 {
   const mutated = WXML_LF.replace(/\n\s*bindlongpress="onConvLongPress"/, '')
   check('R1 突变可用（WXML 确实被改写）', mutated !== WXML_LF)
-  check(
-    'R1 反证：去掉 bindlongpress 后 A10 断言会失败',
-    !/bindlongpress="onConvLongPress"/.test(mutated)
-  )
+  check('R1 反证：去掉 bindlongpress 后 A10 断言会失败', !hasLongPressDelete(mutated))
 }
 
 // R2 突变 JS：删除请求路径写错
@@ -1130,29 +1464,35 @@ bar('反向对照（对真实源码做一处语义突变后，断言必须转为
   )
 }
 
-// R3 突变 JS：去掉迟到响应的序号守护（连续两次新建的场景）
+// R3 突变 JS：去掉迟到响应的序号守护（在飞期间改选了一个空历史会话）
 {
   const mutated = JS.replace('        if (seq !== this._createSeq) return\n', '')
   check('R3 突变可用（源码确实被改写）', mutated !== JS)
-  const holds = []
+  let hold = null
   const { page, state } = loadChat({
     sourceOverride: mutated,
     responder: (req) => {
+      const method = (req.method || 'GET').toUpperCase()
       if ((req.method || '').toUpperCase() === 'POST' && /\/chat\/conversations\/?$/.test(req.url)) {
-        holds.push(req)
+        hold = req
         return null
       }
-      return { data: { code: 0, message: 'ok', data: { items: [] } } }
+      if (/\/messages$/.test(req.url)) return okBody({ items: [] })
+      if (method === 'GET' && /\/chat\/conversations\/?$/.test(req.url)) {
+        return okBody({ items: [conv(11, '空会话')] })
+      }
+      return null
     },
   })
+  await after(state, () => page.onOpenSidebar())
   page.onNewConversation()
   await tick()
-  page.onNewConversation()
+  page.onTapConversation({ currentTarget: { dataset: { id: 11 } } })
   await tick()
-  holds[0].success(okBody({ conversation_id: 77, title: '新对话' }))
+  hold.success(okBody({ conversation_id: 77, title: '新对话' }))
   await tick()
   check(
-    'R3 反证：去掉序号守护后旧响应会覆盖当前会话（F6 断言会失败）',
+    'R3 反证：去掉序号守护后迟到的「新建」响应会覆盖用户刚选中的会话（F6b 断言会失败）',
     page.data.conversationId === 77,
     String(page.data.conversationId)
   )
@@ -1161,7 +1501,7 @@ bar('反向对照（对真实源码做一处语义突变后，断言必须转为
 // R4 突变 JS：手势阈值判断失效
 {
   const mutated = JS.replace(
-    'if (wasDragging && dragged >= SIDEBAR_CLOSE_DRAG_PX) {',
+    'if (wasDragging && Math.abs(dragged) >= SIDEBAR_CLOSE_DRAG_PX) {',
     'if (false) {'
   )
   check('R4 突变可用（源码确实被改写）', mutated !== JS)
@@ -1171,14 +1511,11 @@ bar('反向对照（对真实源码做一处语义突变后，断言必须转为
   check('R4 反证：阈值判断失效后 G3 断言会失败（拖到底也不关）', page.data.sidebarOpen === true)
 }
 
-// R5 突变 WXML：去掉遮罩点击关闭
+// R5 突变 WXML：去掉遮罩点击关闭（重跑 A2 用的同一个谓词）
 {
   const mutated = WXML_LF.replace(/\n\s*bindtap="onMaskTap"/, '')
   check('R5 突变可用（WXML 确实被改写）', mutated !== WXML_LF)
-  check(
-    'R5 反证：去掉遮罩 bindtap 后 A2 断言会失败',
-    !/class="sidebar-mask[^"]*"[^>]*bindtap="onMaskTap"/.test(mutated)
-  )
+  check('R5 反证：去掉遮罩 bindtap 后 A2 断言会失败', !hasMaskTap(mutated))
 }
 
 // R6 突变 WXML：删掉一个闭合标签
@@ -1186,14 +1523,14 @@ bar('反向对照（对真实源码做一处语义突变后，断言必须转为
   const broken = WXML_LF.replace('</scroll-view>', '')
   check('R6 突变可用（WXML 确实被改写）', broken !== WXML_LF)
   const b = checkTagBalance(broken)
-  check('R6 反证：WXML 少一个闭合标签时 A20 会失败', b.ok === false, JSON.stringify(b))
+  check('R6 反证：WXML 少一个闭合标签时 A25 会失败', b.ok === false, JSON.stringify(b))
 }
 
 // R7 突变 JS：清空历史的轮数上限失效
 {
   const mutated = JS.replace(
-    'if (roundsLeft <= 0) return this.finishClear(false)',
-    'if (roundsLeft <= -1) return this.finishClear(false)'
+    "if (roundsLeft <= 0) return this.finishClear('partial')",
+    "if (roundsLeft <= -1) return this.finishClear('partial')"
   )
   check('R7 突变可用（源码确实被改写）', mutated !== JS)
   const { page, state } = loadChat({ sourceOverride: mutated, backend: { keepNonEmpty: true } })
@@ -1225,30 +1562,44 @@ bar('反向对照（对真实源码做一处语义突变后，断言必须转为
   )
 }
 
-// ================================================================ 汇总 ====
+// R9 突变 WXSS：把收起态的 transform/visibility 提升到复合选择器（B1 那类 blocker 的形态）
+// —— 单类的 --open 再也压不过它，A19~A21 的层叠断言必须转为失败。
+{
+  const mutated = WXSS.replace('\n.sidebar-panel {', '\n.chat-page .sidebar-panel {')
+  check('R9 突变可用（WXSS 确实被改写）', mutated !== WXSS)
+  const rules = wxssRules(mutated)
+  const base = ruleOf(rules, /\.sidebar-panel$/, /translateX\(-100%\)/)
+  const open = ruleOf(rules, /\.sidebar-panel--open/, /translateX\(0\)/)
+  check(
+    'R9 反证：收起态被提到复合选择器后 A19 断言会失败（展开态压不过收起态）',
+    !!base && !!open && !beats(rules, open, base),
+    base && open ? `base=${base.selector}(${specificity(base.selector)})` : '规则未命中'
+  )
+}
 
-sandboxes.forEach((d) => {
-  try {
-    fs.rmSync(d, { recursive: true, force: true })
-  } catch (e) {
-    /* 清理失败不影响结论 */
-  }
-})
+// ================================================================ 汇总 ====
 
 console.log('\n' + '-'.repeat(84))
 if (fail === 0) {
   console.log(`[PASS] F14-A AI 助手侧边栏校验通过（${pass} 项）`)
-  console.log('⚠️ 仅覆盖请求分派/状态机/竞态与失败路径/结构对账；')
+  console.log('⚠️ 仅覆盖请求分派/状态机/竞态与失败路径/结构对账/样式层叠；')
   console.log('   侧滑动画顺滑度、遮罩观感、玻璃模糊、跟手拖拽与列表滚动的真实交互、')
   console.log('   iOS 安全区与低端机性能仍需微信开发者工具 / 真机目视确认 —— 属 MANUAL CHECK。')
   console.log('   语音转写属 F14-B，不在本工具覆盖范围。')
-  process.exit(0)
+  process.exitCode = 0
+} else {
+  console.log(`[FAIL] ${fail} 项未通过 / 共 ${pass + fail} 项`)
+  process.exitCode = 1
 }
-console.log(`[FAIL] ${fail} 项未通过 / 共 ${pass + fail} 项`)
-process.exit(1)
 }
 
-main().catch((err) => {
-  console.error('[FAIL] 验证工具自身异常：', err)
-  process.exit(1)
-})
+// 异常也要清干净临时目录（断言抛错时不能把 %TEMP%\xjt-f14-* 留在盘上）
+main()
+  .catch((err) => {
+    console.error('[FAIL] 验证工具自身异常：', err)
+    process.exitCode = 1
+  })
+  .finally(() => {
+    cleanupSandboxes()
+    process.exit(process.exitCode || 0)
+  })

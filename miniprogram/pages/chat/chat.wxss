@@ -252,9 +252,12 @@ page {
     visibility 0s linear 0s;
 }
 
-/* ---- 面板 ----
-   必须用复合选择器：.xj-glass 自带 position: relative（同为单类选择器），
-   面板的 position 取值不该依赖 app.wxss 与本文件的加载顺序。 */
+/* ---- 面板：布局（必须用复合选择器）----
+   .xj-glass 自带 position: relative（同为单类选择器），面板的 position 取值
+   不该依赖 app.wxss 与本文件的加载顺序，故这一块用复合选择器（0,2,0）。
+   ⚠️ 只放「需要压过玻璃库」的布局声明：状态类（--open / --dragging）都是单类选择器
+   （0,1,0），一旦把 transform / visibility / transition 也写进本规则，它们会被本规则
+   永久盖住 —— 面板会停在 translateX(-100%) + visibility:hidden，点【菜单】只看得见遮罩。 */
 .chat-page .sidebar-panel {
   position: fixed;
   top: 0;
@@ -267,6 +270,10 @@ page {
   box-sizing: border-box;
   border-radius: 0 28rpx 28rpx 0;
   border-radius: 0 var(--xj-radius-panel, 28rpx) var(--xj-radius-panel, 28rpx) 0;
+}
+
+/* ---- 面板：收起态（与状态类同为单类选择器，靠先后顺序决出胜负）---- */
+.sidebar-panel {
   transform: translateX(-100%);
   visibility: hidden;
   transition: transform var(--xj-duration-slow, 300ms) var(--xj-ease-standard, cubic-bezier(0.25, 0.1, 0.25, 1)),
@@ -283,18 +290,19 @@ page {
   transition: none;
 }
 
-/* ---- 面板头部：新建会话 ---- */
+/* ---- 面板头部：新建会话（玻璃按钮 + 主色描边，同 §1.4 的凸起按钮口径）---- */
 .sidebar-head {
   flex-shrink: 0;
   padding: 24rpx 24rpx 16rpx;
 }
-.sidebar-new {
+/* 用复合选择器压过 .xj-glass 的 border（同为单类选择器，不依赖加载顺序） */
+.chat-page .sidebar-new {
   width: 100%;
   margin: 0;
-  background: #4A90D9;
-  background: var(--xj-color-primary, #4A90D9);
-  color: #ffffff;
-  color: var(--xj-text-inverse, #ffffff);
+  color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
+  border: 1rpx solid #4A90D9;
+  border: 1rpx solid var(--xj-color-primary, #4A90D9);
   border-radius: 999rpx;
   border-radius: var(--xj-radius-pill, 999rpx);
   font-size: 28rpx;
@@ -337,8 +345,10 @@ page {
   margin-bottom: 16rpx;
   padding: 20rpx 24rpx;
 }
-/* 当前会话高亮（角标 + 主色描边 + 主色淡底） */
-.sidebar-conv--active {
+/* 当前会话高亮（主色描边 + 主色淡底）。
+   用复合选择器：玻璃降级类 `.is-glass-fallback .xj-glass-card`（0,2,0）会重设
+   background / border-color —— 单类选择器的高亮恰好会在**降级设备上**整块消失。 */
+.chat-page .sidebar-conv--active {
   border: 2rpx solid #4A90D9;
   border: 2rpx solid var(--xj-color-primary, #4A90D9);
   background: rgba(74, 144, 217, 0.12);
@@ -382,8 +392,9 @@ page {
 .sidebar-action::after {
   border: none;
 }
-/* 设置页属 F17，当前 dev 无此页面：入口保持禁用外观 + 明确提示，不做假跳转 */
-.sidebar-action--muted {
-  color: #c4c9d0;
-  color: var(--xj-text-disabled, #c4c9d0);
+/* 设置页属 F17，当前 dev 上不存在该页面：入口保留为**次级样式**（不是假禁用态 ——
+   看起来 disabled 却可点会让人以为按坏了），点击给明确提示，不做假跳转。 */
+.sidebar-action--secondary {
+  color: #8a9099;
+  color: var(--xj-text-secondary, #8a9099);
 }

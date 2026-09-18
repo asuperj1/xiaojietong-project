@@ -83,7 +83,7 @@
     bindtap="onMaskTap"
   ></view>
 
-  <!-- 面板：从左滑出；支持右滑手势关闭（拖拽期间走内联位移，结束后交回类） -->
+  <!-- 面板：从左滑出；支持滑动关闭（向右滑坡阈值 / 向左拖跟手，见 chat.js） -->
   <view
     class="sidebar-panel xj-glass xj-glass-strong {{sidebarOpen ? 'sidebar-panel--open' : ''}} {{sidebarDragging ? 'sidebar-panel--dragging' : ''}}"
     style="{{sidebarStyle}}"
@@ -93,13 +93,14 @@
     bindtouchcancel="onSidebarTouchCancel"
   >
     <view class="sidebar-head">
-      <button class="sidebar-new" bindtap="onNewConversation">+ 新建会话</button>
+      <button class="sidebar-new xj-glass" bindtap="onNewConversation">+ 新建会话</button>
     </view>
 
     <scroll-view class="sidebar-list" scroll-y>
-      <view wx:if="{{convLoading}}" class="sidebar-tip">加载中…</view>
+      <!-- 刷新时保留旧列表（只在「还没有任何数据」时占位），避免每次展开都闪一下「加载中」 -->
+      <view wx:if="{{convLoading && conversations.length === 0}}" class="sidebar-tip">加载中…</view>
 
-      <block wx:elif="{{convError}}">
+      <block wx:elif="{{convError && conversations.length === 0}}">
         <view class="sidebar-tip">{{convError}}</view>
         <button class="sidebar-retry" bindtap="fetchConversations">重试</button>
       </block>
@@ -124,9 +125,9 @@
       </block>
     </scroll-view>
 
-    <!-- 底部操作：设置（F17 交付前为禁用外观的占位入口）/ 清空历史 -->
+    <!-- 底部操作：设置（F17 交付前为次级占位入口，点击给明确提示）/ 清空历史 -->
     <view class="sidebar-foot">
-      <button class="sidebar-action sidebar-action--muted" bindtap="onSettingsEntry">设置</button>
+      <button class="sidebar-action sidebar-action--secondary" bindtap="onSettingsEntry">设置</button>
       <button class="sidebar-action" bindtap="onClearHistory">清空历史</button>
     </view>
   </view>

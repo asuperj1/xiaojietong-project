@@ -5,17 +5,24 @@ const { request, sseRequest } = require('../../services/request')
 const { formatTime } = require('../../utils/format')
 
 // ==================== F14-A 侧边栏常量 ====================
-// 向右拖拽超过该距离即关闭侧边栏。touch 事件的 clientX 单位是 px（不是 rpx）：
+// 滑动关闭的位移阈值。touch 事件的 clientX 单位是 px（不是 rpx）：
 // 60px 在 375pt 宽的机型上约为面板宽度（560rpx ≈ 280px）的 1/5，
-// 与 iOS 抽屉「拖过一小段就关闭、拖不到就回弹」的手感一致，避免误触关掉。
+// 「拖过一小段就关闭、拖不到就回弹」，避免误触关掉。左右两个方向都用这一条阈值。
 const SIDEBAR_CLOSE_DRAG_PX = 60
 // 拖拽死区：位移小于该值视为抖动；且只有「横向位移大于纵向位移」才进入拖拽态，
 // 否则会把会话列表的纵向滚动误判成关闭手势。
 const SIDEBAR_DRAG_DEAD_ZONE_PX = 6
+// 向右拖时允许的最大跟手位移：面板已经在最左侧，再往右就是拖进屏幕里了，
+// 故只给一点点阻尼反馈（告诉用户手势已被接收），不作为面板的真实位置。
+const SIDEBAR_RIGHT_DRAG_MAX_PX = 24
 // 「清空历史」轮数上限：后端只有单条 DELETE /chat/conversations/{id}（无批量接口），
 // 而 GET /chat/conversations 每次最多返回 50 条 —— 故实现为「取一批 → 删一批」循环。
 // 封顶 10 轮（≈500 条），避免后端始终删不干净时无限循环；超出则提示「部分未清空」。
 const CLEAR_HISTORY_MAX_ROUNDS = 10
+// 显式新建（B24）的会话在后端固定叫「新对话」，而 F4 懒建路径用**首条消息前 20 字**当标题
+// （`backend/app/routers/chat.py:82`）。为免侧栏出现一排「新对话」，本页在显式新建的会话
+// 发出第一句话后补一次重命名 —— 截断长度与后端懒建口径保持一致。
+const AUTO_TITLE_MAX_LEN = 20
 
 Page({
   data: {
@@ -44,8 +51,11 @@ Page({
   _dragStartY: null,
   _dragX: 0,          // 当前跟手位移（px）
   _dragging: false,   // 是否已越过死区进入拖拽态
-  _createSeq: 0,      // 「新建会话」请求序号（丢弃迟到响应，避免覆盖已开始的对话）
-  _convLoading: false, // 会话消息加载中（防止连点重复拉取）
+  _createSeq: 0,      // 会话身份序号：新建响应迟到时作废（见 createConversation）
+  _convSeq: 0,        // 会话列表请求序号：慢响应不得覆盖后发请求（见 fetchConversations）
+  _pendingCreate: false, // 是否已有「新建会话」请求在飞（防止连点建出两条空会话）
+  _needsTitle: false, // 本条会话是否需要补标题（显式新建留下的一次性标记）
+  _msgLoading: false, // 会话消息加载中（防止连点重复拉取）
 
   onLoad() {
     // 官方建议：getApp() 在页面生命周期内调用，而非模块顶层
@@ -103,7 +113,7 @@ Page({
     this.fetchConversations()
   },
 
-  // 收起侧边栏（遮罩点击 / 右滑手势 / 新建会话 / 选中会话都走这里）
+  // 收起侧边栏（遮罩点击 / 滑动关闭 / 新建会话 / 选中会话都走这里）
   onCloseSidebar() {
     this.closeSidebarState()
   },
@@ -120,20 +130,28 @@ Page({
   },
 
   // 会话列表：GET /chat/conversations（后端按 updated_at DESC，最多 50 条）
+  // 返回 Promise<boolean>：true = 本次响应落地，false = 被更新的请求取代或请求失败
   fetchConversations() {
+    this._convSeq += 1
+    const seq = this._convSeq
     this.setData({ convLoading: true, convError: '' })
-    request('/chat/conversations')
+    return request('/chat/conversations')
       .then((res) => {
+        // 乱序守护：慢响应不得覆盖后发请求的结果（展开→重试连点时会并发两个 GET）
+        if (seq !== this._convSeq) return false
         const items = ((res && res.items) || []).map((c) => ({
           id: c.id,
           title: c.title || '未命名会话',
           time: formatTime(c.updated_at),
         }))
         this.setData({ conversations: items, convLoading: false })
+        return true
       })
       .catch(() => {
         // 网络/业务错误提示已由 services/request.js 统一处理，这里只落到面板内的可重试态
+        if (seq !== this._convSeq) return false
         this.setData({ convLoading: false, convError: '加载失败，请稍后重试' })
+        return false
       })
   },
 
@@ -145,21 +163,26 @@ Page({
       wx.showToast({ title: '正在回答中，请稍后再试', icon: 'none' })
       return
     }
-    if (this._convLoading) return
-    this._convLoading = true
+    // 点的就是当前会话：只收起侧栏，不重拉消息（否则会重置滚动位置、白跑一次请求）
+    if (id === this.data.conversationId) {
+      this.closeSidebarState()
+      return
+    }
+    if (this._msgLoading) return
+    this._msgLoading = true
     wx.showLoading({ title: '加载中…', mask: true })
 
     request('/chat/conversations/' + id + '/messages')
       .then((res) => {
         const messages = (res && res.items) || []
-        this._convLoading = false
+        this._msgLoading = false
         wx.hideLoading()
         this.closeSidebarState()
         this.restoreConversation({ conversationId: id, messages })
       })
       .catch(() => {
         // 错误提示已由 services/request.js 统一处理
-        this._convLoading = false
+        this._msgLoading = false
         wx.hideLoading()
       })
   },
@@ -211,6 +234,12 @@ Page({
       return
     }
     if (!this.data.conversations.length) {
+      // 先分清「真的没有会话」和「列表没拉到」：把加载失败说成「暂无历史会话」，
+      // 用户就不会去点面板里的重试
+      if (this.data.convError) {
+        this.fetchConversations()
+        return
+      }
       wx.showToast({ title: '暂无历史会话', icon: 'none' })
       return
     }
@@ -237,14 +266,16 @@ Page({
     request('/chat/conversations')
       .then((res) => {
         const items = (res && res.items) || []
-        if (!items.length) return this.finishClear(true)
-        if (roundsLeft <= 0) return this.finishClear(false)
+        if (!items.length) return this.finishClear('done')
+        if (roundsLeft <= 0) return this.finishClear('partial')
         return this.deleteSequential(items, 0).then((ok) => {
-          if (!ok) return this.finishClear(false)
+          if (!ok) return this.finishClear('partial')
           return this.clearRound(roundsLeft - 1)
         })
       })
-      .catch(() => this.finishClear(false))
+      // ⚠️ 拉列表失败 ≠ 删除失败：这时一条都没删，不能提示「部分会话未清空」（会顶掉
+      // request.js 更准确的通知，也让用户以为删了一半）
+      .catch(() => this.finishClear('error'))
   },
 
   // 串行删除一批会话；返回是否全部成功
@@ -255,14 +286,27 @@ Page({
       .catch(() => false)
   },
 
-  finishClear(done) {
+  /**
+   * 收尾清空历史。
+   * @param {'done'|'partial'|'error'} status done = 全清空；partial = 删除中途失败或轮数用尽；
+   *        error = 列表都拉不到（一条都没删）
+   */
+  finishClear(status) {
     wx.hideLoading()
-    // 全部会话都没了 → 当前对话区也必须清空，否则会停在一个已不存在的会话上
-    this.resetConversation()
-    this.fetchConversations()
-    wx.showToast({
-      title: done ? '已清空历史' : '部分会话未清空，请重试',
-      icon: 'none',
+    const current = this.data.conversationId
+    this.fetchConversations().then((ok) => {
+      const title =
+        status === 'done'
+          ? '已清空历史'
+          : status === 'partial'
+            ? '部分会话未清空，请重试'
+            : '未能读取会话列表，请稍后重试'
+      // 列表没刷到（拉取失败）时不做「当前会话还在不在」的判断：旧列表可能缺它，
+      // 据此清空对话区会把用户正在看的会话误删。保守起见保留。
+      if (ok && !(current != null && this.data.conversations.some((c) => c.id === current))) {
+        this.resetConversation()
+      }
+      wx.showToast({ title, icon: 'none' })
     })
   },
 
@@ -273,7 +317,7 @@ Page({
     wx.showToast({ title: '设置页尚未开放', icon: 'none' })
   },
 
-  // ---- 侧边栏手势：右滑关闭 ----
+  // ---- 侧边栏手势：滑动关闭（规格：从左侧滑出 + 右滑手势关闭）----
 
   onSidebarTouchStart(e) {
     if (!this.data.sidebarOpen) return
@@ -281,6 +325,7 @@ Page({
     if (!t) return
     this._dragStartX = t.clientX
     this._dragStartY = t.clientY
+    this._dragDx = 0
     this._dragX = 0
     this._dragging = false
   },
@@ -294,25 +339,30 @@ Page({
 
     if (!this._dragging) {
       if (Math.abs(dx) < SIDEBAR_DRAG_DEAD_ZONE_PX) return // 抖动死区
-      // 只认「向右且比纵向更明显」的位移：其余情况（左拖 / 上下滚动列表）不接管
-      if (dx <= 0 || Math.abs(dx) <= Math.abs(dy)) return
+      // 只认「比纵向更明显」的横向位移：上下滚动会话列表时不接管
+      if (Math.abs(dx) <= Math.abs(dy)) return
       this._dragging = true
+      // 拖拽态只在这一刻 setData 一次：它整段手势恒定不变，
+      // 跟着 touchmove 每帧重发等于把渲染开销翻倍（低端机跟手卡顿的主因）。
+      this.setData({ sidebarDragging: true })
     }
 
-    // 只跟随向右的位移：向左拖不把面板推出屏幕（面板最左就是 0）
-    this._dragX = dx > 0 ? dx : 0
-    this.setData({
-      sidebarDragging: true,
-      sidebarStyle: 'transform: translateX(' + this._dragX + 'px)',
-    })
+    // 跟手位移：
+    //  · 向左（dx<0）= 把面板推回屏幕外，抽屉的通用手感 → 完全跟手；
+    //  · 向右（dx>0）= 规格里写的「右滑手势关闭」→ 面板已在最左位，只给阻尼反馈。
+    this._dragDx = dx
+    this._dragX = dx < 0 ? dx : Math.min(dx, SIDEBAR_RIGHT_DRAG_MAX_PX)
+    this.setData({ sidebarStyle: 'transform: translateX(' + this._dragX + 'px)' })
   },
 
   onSidebarTouchEnd() {
     if (this._dragStartX == null) return
-    const dragged = this._dragX
+    const dragged = this._dragDx
     const wasDragging = this._dragging
     this.resetDrag()
-    if (wasDragging && dragged >= SIDEBAR_CLOSE_DRAG_PX) {
+    // 关闭判定用**原始位移**：向右（规格明写的右滑关闭）与向左（把面板推回屏幕外）
+    // 拖够同一个阈值都关闭，不因跟手位移被限幅而影响判定。
+    if (wasDragging && Math.abs(dragged) >= SIDEBAR_CLOSE_DRAG_PX) {
       this.setData({ sidebarOpen: false, sidebarDragging: false, sidebarStyle: '' })
       return
     }
@@ -331,6 +381,7 @@ Page({
   resetDrag() {
     this._dragStartX = null
     this._dragStartY = null
+    this._dragDx = 0
     this._dragX = 0
     this._dragging = false
   },
@@ -385,8 +436,13 @@ Page({
   },
 
   startNewConversation() {
+    // 已经停在一个「刚建好、还没说话」的空会话上（或上一次新建请求还在飞）→ 只做本地复位，
+    // 不再建第二个空会话：连点两次「新建会话」不该在侧栏里留下两行「新对话」。
+    const alreadyEmpty =
+      this.data.conversationId != null && !this.data.messages.length && !this.data.sending
     this.resetConversation()
     this.closeSidebarState()
+    if (alreadyEmpty || this._pendingCreate) return
     this.createConversation()
   },
 
@@ -394,25 +450,42 @@ Page({
   // 失败不阻断：conversationId 保持 null 时，首条消息仍由 /chat/send 懒建会话
   // （即 F4 的原有路径），用户不会因为这一次请求失败而无法开始新对话。
   createConversation() {
+    this._pendingCreate = true
     this._createSeq += 1
     const seq = this._createSeq
     request('/chat/conversations', { method: 'POST', data: {} })
       .then((res) => {
+        this._pendingCreate = false
         // 迟到响应丢弃：期间又点过新建，或用户已经开口（此时会话 id 归 /chat/send 所有，
         // 直接 setData 会把正在进行的对话指到一个空会话上）
         if (seq !== this._createSeq) return
         if (this.data.messages.length || this.data.sending) return
         const id = res && res.conversation_id
         if (id == null) return
+        // 显式新建的会话标题是后端默认的「新对话」→ 记下标记，等第一句话发出去后补标题
+        this._needsTitle = true
         this.setData({ conversationId: id })
       })
       .catch(() => {
         // 错误提示已由 services/request.js 统一处理（含登录失效跳转）
+        this._pendingCreate = false
       })
+  },
+
+  // 用首条消息给「显式新建」的会话补标题（对齐 F4 懒建路径的观感）。
+  // 只在需要时调用一次；失败不重试、不提示 —— 标题只是观感，会话本身已经可用。
+  renameConversation(conversationId, content) {
+    const title = String(content || '').trim().slice(0, AUTO_TITLE_MAX_LEN)
+    if (!title) return
+    request('/chat/conversations/' + conversationId, {
+      method: 'PATCH',
+      data: { title },
+    }).catch(() => {})
   },
 
   resetConversation() {
     this._activeAiId = null
+    this._needsTitle = false
     this.setData({
       messages: [],
       conversationId: null,
@@ -439,6 +512,10 @@ Page({
     })
     const last = messages[messages.length - 1]
     this._activeAiId = null
+    // 会话身份已被「选中的历史会话」接管：在飞的「新建」响应不得再改 conversationId
+    // （从侧栏选中一个**空**会话时，messages 为空，光靠「有没有消息」守不住）
+    this._createSeq += 1
+    this._needsTitle = false
     this.setData({
       messages,
       conversationId: restore.conversationId,
@@ -455,6 +532,11 @@ Page({
     // 本条消息由 /chat/send 负责建会话（conversationId 为 null 时后端会新建），
     // 故让仍在飞的「新建会话」响应作废，避免它稍后把 id 改成另一个空会话。
     this._createSeq += 1
+
+    // 「显式新建」留下的一次性补标题标记：随本次发送消费掉（失败也不重试，
+    // 否则标题会跟着第二句话跑）。
+    const needsTitle = this._needsTitle
+    this._needsTitle = false
 
     const userMsg = this.makeMessage('user', content)
     const aiMsg = this.makeMessage('assistant', '')
@@ -516,6 +598,9 @@ Page({
           if (this._activeAiId !== aiLocalId) return
           if (data && data.conversation_id != null) {
             this.setData({ conversationId: data.conversation_id })
+            // 显式新建的会话在后端固定叫「新对话」→ 用首条消息补一个标题，
+            // 免得侧栏里出现一排同名的「新对话」（懒建路径后端已自行命名，不走这里）
+            if (needsTitle) this.renameConversation(data.conversation_id, content)
           }
           if (data && data.message_id != null) {
             this.updateMessage(aiLocalId, { messageId: data.message_id })
