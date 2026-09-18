@@ -18,10 +18,12 @@
  *     才用 `e.detail.value`（`docs/项目审计报告20260912序1.md:197`）。
  *
  *  R2_MISSING_LOWER_TRIGGER 分页列表页必须有触底加载钩子
- *     来源：`docs/项目审计报告20260912序1.md:826`（FRONT-08 · P1：`life/index`、
+ *     来源：`docs/项目审计报告20260912序1.md:826`（FRONT-08 · P2：`life/index`、
  *     `life/notices` 仍缺 `onReachBottom`，20 条后无法加载更多）；
  *     `docs/验收测试/A-执行报告-前端体验走查260912.md:21,65,103`（12 个列表页）；
  *     `docs/二阶段整改方案-前端UI重构与后端支撑.md:395`。
+ *     口径：只认"页/偏移"类参数（`page`/`pageNo`/`offset`/`skip`…）；
+ *     只有 `limit`/`size` 的请求算"只取前 N 条"的预览（本仓首页 `/topics/hot`），不判定。
  *
  *  R3_DATETIME_STRING_PARSE  不得用 `new Date('Y-m-d H:i:s')` 解析时间字符串
  *     来源：`docs/PR39-审查报告260912.md:173`（iOS `Invalid Date` 经典跨端坑）；
@@ -64,7 +66,8 @@
  *     node tools/verify_miniprogram_static_rules.js --self-test   # 六条规则的阴性对照
  *     node tools/verify_miniprogram_static_rules.js --src <repo-root>
  *
- * 退出码：0 = 六条规则全部通过；1 = 至少一条违规（或脚本/自检自身异常）。
+ * 退出码：0 = 六条规则全部通过；1 = 至少一条违规（或脚本/自检自身异常、
+ * 或**扫描面无覆盖** —— 扫不到页面入口时拒绝报 PASS，见 docs/CI.md「宁可红灯，不要假绿」）。
  * 输出两档：**违规**（决定退出码）与**覆盖提示 INFO**（说明某处为什么没被判违规，
  * 例如"有 `X.f || []` 兜底但没有 `X &&` 守卫""渲染列表但请求未带分页参数"）。
  * 文件名：任务单写的是 `verify_miniprogram_rules.js`，本仓实际文件是
@@ -155,7 +158,7 @@ const BACKEND_TIME_FIELDS = [
 ]
 // R5 豁免清单：确实需要写死的外部链接（当前为空；新增须在此说明理由）
 const URL_LITERAL_ALLOWLIST = []
-// R6 允许的「非页面」目录（WXML 模板片段等）
+// R1 认定的"点击类"事件（bindtap / catch:tap / bindlongpress …）
 const TAP_EVENTS = ['tap', 'longtap', 'longpress']
 
 // ============================================================ 文本工具 ====
@@ -170,7 +173,7 @@ function readText(file) {
   return s.replace(/\r\n?/g, '\n')
 }
 
-/** 行尾归一化（对外暴露，self-test 复用） */
+/** 行尾归一化（去 BOM + CRLF/CR → LF）；readText 与 self-test fixture 共用 */
 function normalizeEol(s) {
   return String(s).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
 }
@@ -183,8 +186,11 @@ function normalizeEol(s) {
  * `miniprogram/pages/life/index.js` 里写着 `e.detail.value` 的错误写法），
  * 若不去注释，注释本身就会污染断言（既可能误报，也可能"让断言以为已修复"）。
  *
- * 字符串/模板串与正则字面量内的 `//` 不算注释；正则字面量用
- * "上一有效字符"启发式识别（`= ( , : [ ! & | ? { } ;` 之后才是正则）。
+ * 字符串/模板串与正则字面量内的 `//` 不算注释。正则字面量的起始位置用
+ * "上一有效字符 / 上一关键字"启发式识别（`= ( , : [ ! & | ? { } ;` 之后，
+ * 或 `return`/`typeof`/`case`/`in`/`of`/`void`/`delete`/`await` 等关键字之后才是正则）；
+ * 正则**整体连同其内容**一并抹掉 —— 否则正则里的 `'` 会被当成字符串开头，
+ * 导致后面的注释没被剥掉（实测踩过：注释里的 `BASE_URL` 被当成代码报违规）。
  */
 function stripComments(src) {
   const out = src.split('')
@@ -194,6 +200,7 @@ function stripComments(src) {
   }
   let i = 0
   let prev = '' // 上一个非空白有效字符（用于区分正则 / 除号）
+  let prevWord = '' // 上一个标识符（关键字后可以跟正则字面量）
   while (i < n) {
     const c = src[i]
     const d = src[i + 1]
@@ -235,31 +242,65 @@ function stripComments(src) {
         i += 1
       }
       prev = quote
+      prevWord = ''
       continue
     }
-    if (c === '/' && (prev === '' || '(,=:[!&|?{};+-*%~^<>'.indexOf(prev) !== -1)) {
-      // 正则字面量：跳到未转义的结束 '/'
+    if (c === '/' && (prev === '' || REGEX_PREFIX_CHARS.indexOf(prev) !== -1 || REGEX_PREFIX_WORDS.indexOf(prevWord) !== -1)) {
+      // 正则字面量：整体抹掉（含内容），避免其中的引号把后续注释"吞掉"
+      blank(i) // 开头的 '/'
       i += 1
-      while (i < n) {
+      while (i < n && src[i] !== '\n') {
         if (src[i] === '\\') {
+          blank(i)
+          blank(i + 1)
           i += 2
           continue
         }
         if (src[i] === '/') {
+          blank(i)
           i += 1
           break
         }
-        if (src[i] === '\n') break
+        blank(i)
         i += 1
       }
       prev = '/'
+      prevWord = ''
       continue
     }
-    if (!/\s/.test(c)) prev = c
+    if (/[A-Za-z_$]/.test(c)) {
+      let j = i
+      while (j < n && /[\w$]/.test(src[j])) j += 1
+      prev = src[j - 1]
+      prevWord = src.slice(i, j)
+      i = j
+      continue
+    }
+    if (!/\s/.test(c)) {
+      prev = c
+      prevWord = ''
+    }
     i += 1
   }
   return out.join('')
 }
+
+// 正则字面量可以出现在这些字符 / 关键字之后（其余情况 `/` 是除号）
+const REGEX_PREFIX_CHARS = '(,=:[!&|?{};+-*%~^<>'
+const REGEX_PREFIX_WORDS = [
+  'return',
+  'typeof',
+  'case',
+  'in',
+  'of',
+  'delete',
+  'void',
+  'instanceof',
+  'yield',
+  'await',
+  'do',
+  'else',
+]
 
 /** 去掉 WXML 注释 `<!-- ... -->`（同样保持长度与换行） */
 function stripWxmlComments(src) {
@@ -374,12 +415,8 @@ function findCalls(src, name) {
 
 /** 递归列出文件：{ abs, rel }（rel 用 `/` 分隔，跨平台一致） */
 function listFiles(root, filter, dir = root, acc = []) {
-  let entries
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true })
-  } catch (e) {
-    return acc
-  }
+  // 不吞目录读取错误：读不到就必须红脸报错，否则会出现"没检查却报 PASS"的假绿
+  const entries = fs.readdirSync(dir, { withFileTypes: true })
   for (const e of entries) {
     const abs = path.join(dir, e.name)
     if (e.isDirectory()) listFiles(root, filter, abs, acc)
@@ -447,11 +484,12 @@ function code(file) {
   return codeCache.get(file)
 }
 
+/** 违规项（决定退出码）。line = 0 表示"该违规不属于某一行"（如 app.json 级别的注册问题、聚合项） */
 function violation(rule, file, line, evidence, kind) {
   return { rule, file, line, evidence: clip(evidence), kind, fix: RULE_BY_ID[rule].fix }
 }
 
-/** 覆盖提示（INFO）：说明某处为什么没被判违规 —— 不参与退出码 */
+/** 覆盖提示（INFO）：说明某处为什么没被判违规 —— 不参与退出码（line = 0 同上） */
 function note(rule, file, line, text, kind) {
   return { rule, file, line, text: clip(text, 220), kind }
 }
@@ -514,12 +552,29 @@ function rendersList(ctx, page) {
   return /\bwx:for\s*=/.test(stripWxmlComments(readText(wxmlFile.abs)))
 }
 
+/** 把字符串/模板串内容抹成空格（保留长度），避免"字符串里出现 page 就算分页"这类误判 */
+function blankStrings(src) {
+  return src.replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, (m) => m.replace(/[^\n]/g, ' '))
+}
+
+/**
+ * 请求实参里是否带**分页语义**的参数（只看代码，不看字符串内容）。
+ *
+ * 口径：只认"页/偏移"类参数（`page`/`pageNo`/`offset`/`skip`…）。
+ * **刻意不含 `limit` / `size`** —— 单独一个 `limit: 5` 是"只取前 N 条"的预览
+ * （本仓 `pages/index/index.js` 的 `/topics/hot` 就是），不是分页，判它会误报。
+ */
+function hasPaginationParam(args) {
+  const codeOnly = blankStrings(args)
+  return /\b(?:page|pageNo|pageNum|pageIndex|page_no|page_num|offset|skip)\b/.test(codeOnly)
+}
+
 function rule2MissingLowerTrigger(ctx, out, notes) {
   const unverifiable = []
   for (const page of ctx.pages) {
     const src = code(page.abs)
     const hasRequest = findCalls(src, 'request').length > 0
-    const paginated = findCalls(src, 'request').find((c) => /\bpage\b/.test(c.args))
+    const paginated = findCalls(src, 'request').find((c) => hasPaginationParam(c.args))
     if (!paginated) {
       // 不传分页参数的列表页无法静态判定"能不能加载更多"（可能后端根本不支持分页）→ 只登记盲区
       if (hasRequest && rendersList(ctx, page)) unverifiable.push(page.rel.replace(/^pages\//, '').replace(/\.js$/, ''))
@@ -567,9 +622,10 @@ function rule3DatetimeStringParse(ctx, out) {
         const line = lineAt(src, m.index)
         const evidenceOf = () => lineTextAt(src, m.index)
         if (!arg) continue // new Date()：合法（本仓 pages/library/seat.js 同款）
-        const strLit = /^(['"])([\s\S]*)\1$/.exec(arg)
+        const strLit = /^(['"`])([\s\S]*)\1$/.exec(arg)
         if (strLit) {
           const value = strLit[2]
+          if (value.indexOf('${') !== -1) continue // 模板串插值：静态判不了
           // 只判「日期与时间用空格分隔」的经典 iOS 失败形式；ISO 的 `T` 形式是安全的
           if (/^\d{4}-\d{1,2}-\d{1,2}[ ]+\d{1,2}:\d{2}/.test(value)) {
             out.push(
@@ -594,22 +650,29 @@ function rule3DatetimeStringParse(ctx, out) {
 // ---------------------------------------------------------------- R4 ----
 
 /**
- * 「集合字段」口径自校准：凡在本仓以 `X.f || []` / `X.f.map(...)` 这类**数组用法**
- * 出现过的字段名，都算列表字段（接收者限定为顶层标识符，页面态 `this.data.f`
- * 不算 —— 它已经是兜底过的本地状态）。
+ * 「集合字段」口径自校准：凡在本仓以 `X.f || []` / `Y.f.map(...)` 这类**数组用法**
+ * 出现过的字段名，都算列表字段。
+ *
+ * 两个约束（防止把一个随便什么对象的字段名污染成"列表字段"）：
+ *   - `X.f || []`：接收者不限 —— 写 `|| []` 本身就说明"这里期望它是数组"；
+ *   - `Y.f.map(...)`：接收者只认 `this.data`（页面态）或**本文件的响应对象变量**
+ *     （否则 `cfg.plan.map(...)` 会把 `plan` 变成列表字段，进而误报 `res.plan.length`）。
  */
 function collectCollectionNames(jsFiles) {
   const names = new Set(COLLECTION_SEED)
   const chain = '(?:^|[^\\w$.])([A-Za-z_$][\\w$]*)\\s*\\.\\s*([A-Za-z_$][\\w$]*)'
+  const methods = '(?:map|forEach|filter|concat|slice|find|findIndex|some|every|reduce|join)'
   const re1 = new RegExp(chain + '\\s*\\)*\\s*\\|\\|\\s*\\[\\s*\\]', 'g')
-  const re2 = new RegExp(
-    chain + '\\s*\\.\\s*(?:map|forEach|filter|concat|slice|find|findIndex|some|every|reduce|join)\\b',
-    'g'
-  )
+  const re2 = new RegExp('this\\s*\\.\\s*data\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\.\\s*' + methods + '\\b', 'g')
+  const re3 = new RegExp(chain + '\\s*\\.\\s*' + methods + '\\b', 'g')
   for (const f of jsFiles) {
     const src = code(f.abs)
+    const binds = collectResponseBindings(src)
     findAll(src, re1).forEach((m) => names.add(m[2]))
-    findAll(src, re2).forEach((m) => names.add(m[2]))
+    findAll(src, re2).forEach((m) => names.add(m[1]))
+    findAll(src, re3).forEach((m) => {
+      if (binds.has(m[1])) names.add(m[2])
+    })
   }
   return names
 }
@@ -639,6 +702,32 @@ function sameStatementBefore(src, index) {
     window.lastIndexOf('\n')
   )
   return cut === -1 ? window : window.slice(cut + 1)
+}
+
+/**
+ * 该位置是否被 `if (X && X.f ...) {` / `if (X && X.f ...)` 这类**单一守卫块**包着。
+ * 用于 `list-assign` 分面：块内取值不会再抛，不该判违规（实测曾误报）
+ * 例：`if (res && res.items.length) { this.setData({ items: res.items }) }`
+ *
+ * 判据：向上找最近的 `if/while/for (...) {`，且它的 `{` 到当前位置**没有再闭合**
+ * （说明这个块还开着）—— 这样"守卫块结束后另起一条语句"不会被误放行。
+ */
+function enclosingGuardText(src, index, guardTest) {
+  const before = src.slice(Math.max(0, index - 400), index)
+  const re = /(?:^|[;{}\n])\s*(?:else\s+)?(?:if|while|for)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*\{/g
+  const opened = []
+  let m
+  while ((m = re.exec(before)) !== null) opened.push(m)
+  for (let i = opened.length - 1; i >= 0; i -= 1) {
+    const afterBrace = before.slice(opened[i].index + opened[i][0].length)
+    if (afterBrace.indexOf('}') !== -1) return '' // 该块已闭合，不构成包裹
+    return guardTest(opened[i][1]) ? opened[i][1] : ''
+  }
+  // 无大括号：`if (...)` 换行后直接跟语句
+  const trimmed = before.replace(/[ \t]+$/, '')
+  const bare = /(?:^|[;{}\n])\s*(?:else\s+)?(?:if|while|for)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*$/.exec(trimmed)
+  if (bare && guardTest(bare[1])) return bare[1]
+  return ''
 }
 
 function rule4ListFieldNoFallback(ctx, out, notes) {
@@ -720,6 +809,8 @@ function rule4ListFieldNoFallback(ctx, out, notes) {
         const endsValue =
           /^[,;)\]}]/.test(afterS) || afterS === '' || (/^\r?\n/.test(afterS) && !/^\r?\n[ \t]*(?:\.|\|\||&&|\?)/.test(afterS))
         if (endsValue && /[:=]\s*$/.test(before)) {
+          // ⑤ 整块赋值：若被 `if (X && X.f ...) {` 这种单一守卫块包着，块内取值是安全的
+          if (enclosingGuardText(src, start, (cond) => guardRe.test(cond))) continue
           out.push(violation('R4_LIST_FIELD_NO_FALLBACK', file.rel, line, `整块赋值未兜底：${evidence}`, 'list-assign'))
         }
       }
@@ -816,12 +907,12 @@ function rule6PageRegistration(ctx, out) {
       )
     }
   }
-  // (d) 跳转目标必须是已注册页面（字符串字面量形式 /pages/x/y）
-  const targetRe = /(['"])(\/pages\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+)\1/g
+  // (d) 跳转目标必须是已注册页面（字符串字面量形式 `/pages/x/y`，允许后面跟 ?query 或继续拼接）
+  const targetRe = /(['"])(\/pages\/[A-Za-z0-9_-]+\/[A-Za-z0-9_/-]*)/g
   for (const file of ctx.jsFiles.concat(ctx.wxmlFiles)) {
     const src = file.rel.endsWith('.wxml') ? stripWxmlComments(readText(file.abs)) : code(file.abs)
     for (const m of findAll(src, targetRe)) {
-      const target = m[2].slice(1)
+      const target = m[2].slice(1).replace(/\/$/, '')
       if (registered.has(target)) continue
       out.push(
         violation('R6_PAGE_REGISTRATION', file.rel, lineAt(src, m.index), `跳转目标未注册：${m[2]}`, 'nav-target-unregistered')
@@ -860,7 +951,17 @@ function printReport(result, mpLabel) {
 
   printRuleInventory()
 
+  // 覆盖下限：什么都没扫到时**不能报 PASS**（docs/CI.md「宁可红灯，不要假绿」）
+  if (stats.js === 0 || stats.pages === 0) {
+    bar()
+    console.log(`[FAIL] 扫描面无覆盖：${mpLabel} 下发现 ${stats.js} 个 js / ${stats.pages} 个页面入口（pages/**/*.js + 同名 .wxml）`)
+    console.log('       —— 拒绝在"没检查"的情况下给出 PASS；请确认扫描根目录是否正确。')
+    bar()
+    return 1
+  }
+
   if (!violations.length) {
+    printRuleSummary({})
     printNotes(notes, mpLabel)
     bar()
     console.log(`[PASS] 六条规则全部通过：6/6 无违规${notes.length ? `（另有 ${notes.length} 条覆盖提示，见上，不计入退出码）` : ''}`)
@@ -881,14 +982,19 @@ function printReport(result, mpLabel) {
     counts[v.rule] = (counts[v.rule] || 0) + 1
   })
   bar('汇总')
-  RULES.forEach((r) => {
-    const n = counts[r.id] || 0
-    console.log(`  ${n ? '[NG]' : '[OK]'} ${r.id}${n ? '  → ' + n + ' 处' : ''}`)
-  })
+  printRuleSummary(counts)
   console.log(`\n[FAIL] ${violations.length} 处违规，涉及 ${Object.keys(counts).length}/${RULES.length} 条规则`)
   printNotes(notes, mpLabel)
   console.log('\n⚠️ 六条规则只覆盖"已知坑类"；视觉/真机/运行期行为仍需人工与各特性 verifier。')
   return 1
+}
+
+/** 每条规则一行结论（PASS / FAIL 两条路径都打，口径与其它 verify_*.js 一致） */
+function printRuleSummary(counts) {
+  RULES.forEach((r) => {
+    const n = counts[r.id] || 0
+    console.log(`  ${n ? '[NG]' : '[OK]'} ${r.id}${n ? '  → ' + n + ' 处' : ''}`)
+  })
 }
 
 /** 覆盖提示（INFO）：说明静态分析在哪里"看不见"，不参与退出码 */
@@ -955,6 +1061,11 @@ function today() {
   return d.getFullYear() + '-01-01'
 }
 
+// 合法样例：正则里带单引号 —— 注释解析不得因此错位（曾把下面的诱饵注释当成代码报 R5）
+function isQuoted(s) {
+  return /'/.test(s)
+}
+
 Page({
   data: { items: [], cats: ['全部'], catIndex: 0, page: 1, today: '' },
   onLoad() {
@@ -982,7 +1093,12 @@ Page({
         const total = res.items && res.items.length ? res.items.length : 0
         const fallback = res.items || []
         const safe = (res && res.total) || 0
-        this.setData({ items, page, total, fallbackCount: fallback.length, safe })
+        const guarded = res.items && res.items.map((it) => it.id)
+        if (res && res.items.length) {
+          // 守卫块内整块赋值是安全的（也曾误报）
+          this.setData({ items: res.items })
+        }
+        this.setData({ items, page, total, fallbackCount: fallback.length, safe, guardedCount: guarded.length })
       })
       .catch(() => {})
   },
@@ -1005,12 +1121,14 @@ Page({
   'pages/demo/extra.wxml': '<view>extra</view>\n',
 }
 
-function makeFixtureDir(files) {
+function makeFixtureDir(files, opts) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xjt-f22-'))
+  const eol = opts && opts.crlf ? '\r\n' : '\n'
   for (const rel of Object.keys(files)) {
     const abs = path.join(dir, 'miniprogram', rel)
     fs.mkdirSync(path.dirname(abs), { recursive: true })
-    fs.writeFileSync(abs, normalizeEol(files[rel]), 'utf8')
+    const content = normalizeEol(files[rel]).replace(/\n/g, eol)
+    fs.writeFileSync(abs, content, 'utf8')
   }
   return dir
 }
@@ -1033,8 +1151,8 @@ function mutate(rel, from, to) {
   return { files, applied: files[rel] !== src, note: '' }
 }
 
-function runOnFixture(files) {
-  const dir = makeFixtureDir(files)
+function runOnFixture(files, opts) {
+  const dir = makeFixtureDir(files, opts)
   try {
     return scan(path.join(dir, 'miniprogram'))
   } finally {
@@ -1221,6 +1339,78 @@ function runSelfTest() {
       const r = runOnFixture(m.files)
       stCheck('R5c 注释里的地址字面量不触发违规（注释不参与断言）', r.violations.length === 0, r.violations.map((v) => v.rule + ' ' + v.evidence).join(' | '))
     }
+  }
+  // R5d 解析错位：正则字面量里的单引号不得让后面的注释被当成代码（实测踩过的假违规）
+  {
+    const m = mutate(
+      'pages/demo/demo.js',
+      "function isQuoted(s) {\n  return /'/.test(s)\n}",
+      "function isQuoted(s) {\n  return /'/.test(s)\n}\n// const LEAK = 'http://10.0.0.9:8000/api/v1'"
+    )
+    if (stCheck('R5d 突变可用', m.applied, m.note)) {
+      const r = runOnFixture(m.files)
+      stCheck('R5d 正则后的注释不得被当成代码（不误报 R5）', r.violations.length === 0, r.violations.map((v) => v.rule + ' ' + v.evidence).join(' | '))
+    }
+  }
+  // R2d 分页口径：只有 limit（预览）不算分页；pageNo（页号）必须算分页
+  {
+    const drop = mutate('pages/demo/demo.js', '  onReachBottom() {\n    this.fetch(this.data.page + 1)\n  },', '')
+    const noHook = drop.files['pages/demo/demo.js']
+    const withPageNo = noHook.replace('{ data: { page, size: 20 } }', '{ data: { pageNo: page, size: 20 } }')
+    const withLimit = noHook.replace('{ data: { page, size: 20 } }', '{ data: { limit: 5 } }')
+    const applied = drop.applied && withPageNo !== noHook && withLimit !== noHook
+    if (stCheck('R2d 突变可用', applied, drop.note)) {
+      const r1 = runOnFixture(drop.files)
+      const r2 = runOnFixture(Object.assign({}, drop.files, { 'pages/demo/demo.js': withPageNo }))
+      const r3 = runOnFixture(Object.assign({}, drop.files, { 'pages/demo/demo.js': withLimit }))
+      stCheck('R2d 去掉触底钩子后 page/size 被抓（正对照）', r1.violations.length === 1 && r1.violations[0].rule === 'R2_MISSING_LOWER_TRIGGER', r1.violations.map((v) => v.rule).join(' | '))
+      stCheck('R2d pageNo 同样算分页（被抓）', r2.violations.some((v) => v.rule === 'R2_MISSING_LOWER_TRIGGER'), r2.violations.map((v) => v.rule).join(' | '))
+      stCheck('R2d 只有 limit:5（首页预览）不算分页，不得误报', r3.violations.filter((v) => v.rule === 'R2_MISSING_LOWER_TRIGGER').length === 0, r3.violations.map((v) => v.rule).join(' | '))
+    }
+  }
+  // R3c 模板串时间字面量同样要被抓
+  {
+    const m = mutate("pages/demo/demo.js", 'const d = new Date()', 'const d = new Date(`2026-09-12 10:00:00`)')
+    if (stCheck('R3c 突变可用', m.applied, m.note)) {
+      const r = runOnFixture(m.files)
+      const mine = r.violations.filter((v) => v.rule === 'R3_DATETIME_STRING_PARSE' && v.kind === 'date-literal')
+      stCheck('R3c 模板串 `Y-m-d H:i:s` 被抓（kind=date-literal）', mine.length === 1 && r.violations.length === 1, r.violations.map((v) => v.rule + '/' + v.kind).join(' | '))
+    }
+  }
+  // R4c 口径污染：与响应无关的对象字段名不得被当成"列表字段"
+  {
+    const files = cloneFixture()
+    files['pages/demo/demo.js'] = FIXTURE['pages/demo/demo.js']
+      .replace('function isQuoted(s) {', "const cfg = { plan: ['a'] }\nconst seededPlan = cfg.plan.map((x) => x)\nfunction isQuoted(s) {")
+      .replace('const safe = (res && res.total) || 0', 'const safe = (res && res.total) || 0\n        const n = res.plan.length')
+    const applied = /cfg\.plan\.map/.test(files['pages/demo/demo.js']) && /res\.plan\.length/.test(files['pages/demo/demo.js'])
+    if (stCheck('R4c 突变可用', applied)) {
+      const r = runOnFixture(files)
+      stCheck('R4c cfg.plan.map 不得把 plan 变成列表字段（res.plan.length 不误报）', r.violations.filter((v) => v.rule === 'R4_LIST_FIELD_NO_FALLBACK').length === 0, r.violations.map((v) => v.rule + ' ' + v.evidence).join(' | '))
+    }
+  }
+  // R6c 带 query 的跳转目标必须被抓（曾漏报）
+  {
+    const m = mutate('pages/demo/demo.js', "wx.navigateTo({ url: '/pages/demo/extra' })", "wx.navigateTo({ url: '/pages/ghost/ghost?id=1' })")
+    if (stCheck('R6c 突变可用', m.applied, m.note)) {
+      const r = runOnFixture(m.files)
+      const mine = r.violations.filter((v) => v.kind === 'nav-target-unregistered')
+      stCheck('R6c 带 query 的未注册跳转目标被抓', mine.length === 1 && r.violations.length === 1, r.violations.map((v) => v.rule + '/' + v.kind).join(' | '))
+    }
+  }
+  // CRLF：整棵 fixture 换成 CRLF 行尾后，结论（含行号）必须完全一致（F16 踩过的坑）
+  {
+    const m = mutate('pages/demo/demo.js', 'Number(e.currentTarget.dataset.index)', 'Number(e.detail.value)')
+    const lf = runOnFixture(m.files)
+    const crlf = runOnFixture(m.files, { crlf: true })
+    const lfHit = lf.violations.filter((v) => v.rule === 'R1_TAP_DETAIL_VALUE')
+    const crlfHit = crlf.violations.filter((v) => v.rule === 'R1_TAP_DETAIL_VALUE')
+    stCheck('CRLF 基线（整树 CRLF）仍然 0 违规', runOnFixture(cloneFixture(), { crlf: true }).violations.length === 0)
+    stCheck(
+      'CRLF 下 R1 注入仍被抓，且行号与 LF 一致',
+      lfHit.length === 1 && crlfHit.length === 1 && crlfHit[0].line === lfHit[0].line,
+      `LF=${lfHit.map((v) => v.line).join(',')} CRLF=${crlfHit.map((v) => v.line).join(',')}`
+    )
   }
 
   bar('self-test 汇总')
