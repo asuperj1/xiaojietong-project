@@ -1,7 +1,8 @@
-# `B26` 采集合规与限速
+# 采集器（`B26` 合规地基 + `B27` 配置驱动采集）
 
-> **职责**：在"发请求"之前把住三道关 —— **允许抓吗（robots）**、**还要等多久（限速）**、**留下了什么痕迹（日志）**。
-> **定位**：`B27` 配置驱动采集器的地基。B26 不抓业务页面，只提供闸门。
+> **B26 职责**：在"发请求"之前把住三道关 —— **允许抓吗（robots）**、**还要等多久（限速）**、**留下了什么痕迹（日志）**。
+> **B27 职责**：按 C21 的 `sources[]` 真正抓列表页与详情页，解析后**幂等**写入 `campus_notice`；新增一个源只需要写配置，不改代码。
+> **关系**：B27 的每一次请求都从 B26 的 `FetchGuard` 过 —— 列表页与**每个详情页**各过一次。
 
 ```
     ┌────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────┐
@@ -76,7 +77,9 @@ RateLimiter("lib", 0.1).interval(crawl_delay=3)   # → 10.0s，配置更严就�
 
 ---
 
-## 4. 采集前自检（CLI）
+## 4. CLI
+
+### 4.1 `check` —— 采集前自检（不写任何数据）
 
 ```bash
 cd backend
@@ -93,6 +96,51 @@ python -m app.collector check app/adapters/configs/xiaojietong.yml
 
 `--offline` 只校验参数（不联网）；`--json report.json` 落盘报告。
 **注意**：联网模式会真的去读目标站点的 robots.txt —— 本地/内网跑，别放进没有外网的 CI。
+
+### 4.2 `run` —— 真正抓取并入库（B27）
+
+```bash
+python -m app.collector run <config.yml> --dry-run            # 试跑：抓取+解析，不写库
+python -m app.collector run <config.yml> --source jwc-notice --limit 10
+python -m app.collector run <config.yml> --json result.json   # 结果落盘
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--source KEY` | 只跑指定源（可重复）；默认跑全部 `enabled: true` 的源 |
+| `--limit N` | 每个源最多抓几条详情（默认 20；列表不足时不补齐） |
+| `--dry-run` | 试跑：真实抓取与解析，但**不构造 `NoticeStore`** —— 连数据库模块都不导入，没配 DB 的机器也能预览 |
+| `--timeout` | 单请求超时秒数（默认 10） |
+| `--qps` | 源里没写 `rate_limit_qps` 时的默认值（默认 0.5） |
+
+退出码：`0` = 每个源都没错误；`1` = 至少一个源报错或被 robots 拒绝
+（便于接定时任务 / CI）。被拒绝的源会打印**具体原因**，且**一条业务请求都不会发出去**。
+
+### 4.3 新增一个源要改什么
+
+**只改配置，不改代码。** 在 `sources[]` 里加一项即可：
+
+```yaml
+- key: jwc-notice
+  name: 教务处通知
+  url: https://jwc.example.edu.cn/tzgg/
+  enabled: true
+  type: html_list
+  category: 教务
+  rate_limit_qps: 0.5
+  respect_robots: true
+  selectors:
+    list: 'div.list-item a'        # 列表页：每条通知的链接
+    title: 'h2'                    # 详情页：标题
+    content: 'div.content'         # 详情页：正文（缺省则取整页 body 文本）
+    date: 'span.pub-date'          # 详情页：发布时间（可选）
+```
+
+`selectors` 支持 `tag` / `.class` / `#id` / `tag.class` 与后代组合（如 `ul.news-list li a`）；
+**不支持的写法（`>`、`[attr]`、`:pseudo`）会直接报错**，而不是静默返回空
+—— "配置写错了、采集却悄悄没数据"比报错难查得多。
+
+**幂等**：以 `(source, title)` 判重，整条流水线重复跑不会写入重复通知。
 
 ---
 
@@ -122,6 +170,12 @@ python -m app.collector check app/adapters/configs/xiaojietong.yml
 4. **日志失败不拖垮采集**：写盘异常只 warning。
 5. **限速器按 key 复用**：走 `limiter_for()`，不要自己 `RateLimiter(...)`
    —— 否则同一源存在多个窗口，限速形同虚设。
+6. **逐条过闸门**（B27）：不只对列表页查 robots，**每一条详情页 URL 都要再查一次**
+   —— 详情页路径同样可能被禁止；每条请求也都要过限速。
+7. **UA 一致**（B27）：抓取用的 `User-Agent` 必须与 robots 判定时**完全相同**
+   —— 用 A 去问"我能抓吗"、再用 B 去抓，等于绕过了刚拿到的许可。
+8. **选择器不认识就报错**（B27）：`parse_selector` 抛 `ValueError`，绝不静默返回空。
+9. **试跑不碰数据库**（B27）：`--dry-run` 连 `NoticeStore` 都不构造，保证它能在任何机器上跑。
 
 ---
 
@@ -129,11 +183,17 @@ python -m app.collector check app/adapters/configs/xiaojietong.yml
 
 ```bash
 cd backend
-python -m pytest tests/test_collector.py -q      # 30 项，纯离线（不联网/不连库/不需 Ollama）
+python -m pytest tests/test_collector.py tests/test_collector_b27.py -q    # 67 项，纯离线
 ```
 
-覆盖：robots 允许/禁止/404 放行/5xx 保守拒绝/网络故障、缓存与过期、
-`Crawl-delay` 解析、限速取更严值、注册表复用、JSONL 落盘与坏行容错、
+`test_collector.py`（B26，30 项）覆盖：robots 允许/禁止/404 放行/5xx 保守拒绝/网络故障、
+缓存与过期、`Crawl-delay` 解析、限速取更严值、注册表复用、JSONL 落盘与坏行容错、
 `FetchGuard` 的拒绝路径 / 等待路径 / `respect_robots=false` 绕过路径 / 结果记录。
 
-作者：成员2（后端+AI）· B26
+`test_collector_b27.py`（B27，37 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
+列表页去重与相对链接补全、缺 `content` 选择器时退化为 body、
+**详情页逐条过 robots**（被禁的那条一条请求都不发、其余照常入库）、
+限速作用于每一次请求、`Crawl-delay` 压过 qps、单条失败不拖累其余、
+幂等重跑、`--dry-run` 不碰数据库、`--limit`、CLI 退出码与 `check` 回归。
+
+作者：成员2（后端+AI）· B26 / B27
