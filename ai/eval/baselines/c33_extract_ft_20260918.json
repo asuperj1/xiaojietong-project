@@ -1,0 +1,1865 @@
+{
+  "meta": {
+    "task": "C35",
+    "created": "2026-09-18",
+    "backend": "ollama",
+    "model": "xjt-extract-3b",
+    "num_ctx": 8192,
+    "temperature": 0.0,
+    "seed": 42,
+    "iters": 2000,
+    "dataset": "ai/eval/extract_cases.json",
+    "dataset_total": 24,
+    "n_cases": 24,
+    "pool": {
+      "base": "ai/eval/fixtures/few_shot_examples.json",
+      "ext": "ai/eval/fixtures/prompt_opt_examples_ext.json",
+      "base_size": 4,
+      "ext_size": 12,
+      "cap": 16
+    },
+    "prompt_variants": [
+      {
+        "variant": "V0-naive",
+        "added": "（C34 原样，无补充）",
+        "prompt_chars": 220
+      },
+      {
+        "variant": "V1-date",
+        "added": "补基准日 + 无年份按 2026 理解 + 跨年规则",
+        "prompt_chars": 399
+      },
+      {
+        "variant": "V2-rubric",
+        "added": "再补 importance 3~5 判定标准",
+        "prompt_chars": 609
+      },
+      {
+        "variant": "V3-optimized",
+        "added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+        "prompt_chars": 919
+      }
+    ],
+    "grid": [
+      "V0-naive@k=0",
+      "V1-date@k=0",
+      "V2-rubric@k=0",
+      "V3-optimized@k=0",
+      "V0-naive@k=1",
+      "V0-naive@k=2",
+      "V0-naive@k=3",
+      "V0-naive@k=4",
+      "V0-naive@k=8",
+      "V0-naive@k=16",
+      "V3-optimized@k=1",
+      "V3-optimized@k=2",
+      "V3-optimized@k=3",
+      "V3-optimized@k=4",
+      "V3-optimized@k=8",
+      "V3-optimized@k=16"
+    ],
+    "total_wall_time_s": 358.1,
+    "slim": true
+  },
+  "ladder": [
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.8095,
+            "recall": 0.85,
+            "f1": 0.8293,
+            "tp": 17,
+            "fp": 4,
+            "fn": 3
+          },
+          "entities": {
+            "precision": 0.9167,
+            "recall": 0.7586,
+            "f1": 0.8302,
+            "tp": 22,
+            "fp": 2,
+            "fn": 7
+          }
+        },
+        "micro": {
+          "precision": 0.7742,
+          "recall": 0.7423,
+          "f1": 0.7579,
+          "tp": 72,
+          "fp": 21,
+          "fn": 25
+        },
+        "macro_f1": 0.7586,
+        "strict_accuracy": 0.375,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.914,
+      "prompt_tokens_avg": 147.1,
+      "prompt_tokens_max": 161,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V0-naive@k=0",
+      "wall_time_s": 21.9,
+      "prompt_chars": 220
+    },
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.5,
+            "recall": 0.5,
+            "f1": 0.5,
+            "tp": 12,
+            "fp": 12,
+            "fn": 12
+          },
+          "deadline": {
+            "precision": 0.7619,
+            "recall": 0.8,
+            "f1": 0.7805,
+            "tp": 16,
+            "fp": 5,
+            "fn": 4
+          },
+          "entities": {
+            "precision": 0.8846,
+            "recall": 0.7931,
+            "f1": 0.8364,
+            "tp": 23,
+            "fp": 3,
+            "fn": 6
+          }
+        },
+        "micro": {
+          "precision": 0.7789,
+          "recall": 0.7629,
+          "f1": 0.7708,
+          "tp": 74,
+          "fp": 21,
+          "fn": 23
+        },
+        "macro_f1": 0.7688,
+        "strict_accuracy": 0.4167,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.96,
+      "prompt_tokens_avg": 261.1,
+      "prompt_tokens_max": 275,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "fa063fe48ca0",
+      "prompt_mismatch": false,
+      "variant": "V1-date",
+      "prompt_added": "补基准日 + 无年份按 2026 理解 + 跨年规则",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V1-date@k=0",
+      "wall_time_s": 23.0,
+      "prompt_chars": 399
+    },
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9167,
+            "recall": 0.9167,
+            "f1": 0.9167,
+            "tp": 22,
+            "fp": 2,
+            "fn": 2
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.8,
+            "recall": 0.8,
+            "f1": 0.8,
+            "tp": 16,
+            "fp": 4,
+            "fn": 4
+          },
+          "entities": {
+            "precision": 0.92,
+            "recall": 0.7931,
+            "f1": 0.8519,
+            "tp": 23,
+            "fp": 2,
+            "fn": 6
+          }
+        },
+        "micro": {
+          "precision": 0.7634,
+          "recall": 0.732,
+          "f1": 0.7474,
+          "tp": 71,
+          "fp": 22,
+          "fn": 26
+        },
+        "macro_f1": 0.7463,
+        "strict_accuracy": 0.25,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.94,
+      "prompt_tokens_avg": 399.1,
+      "prompt_tokens_max": 413,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "01a3894e6d23",
+      "prompt_mismatch": false,
+      "variant": "V2-rubric",
+      "prompt_added": "再补 importance 3~5 判定标准",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V2-rubric@k=0",
+      "wall_time_s": 22.6,
+      "prompt_chars": 609
+    },
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9167,
+            "recall": 0.9167,
+            "f1": 0.9167,
+            "tp": 22,
+            "fp": 2,
+            "fn": 2
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.8,
+            "recall": 0.8,
+            "f1": 0.8,
+            "tp": 16,
+            "fp": 4,
+            "fn": 4
+          },
+          "entities": {
+            "precision": 0.8696,
+            "recall": 0.6897,
+            "f1": 0.7692,
+            "tp": 20,
+            "fp": 3,
+            "fn": 9
+          }
+        },
+        "micro": {
+          "precision": 0.7473,
+          "recall": 0.701,
+          "f1": 0.7234,
+          "tp": 68,
+          "fp": 23,
+          "fn": 29
+        },
+        "macro_f1": 0.7257,
+        "strict_accuracy": 0.2917,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.899,
+      "prompt_tokens_avg": 576.1,
+      "prompt_tokens_max": 590,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V3-optimized@k=0",
+      "wall_time_s": 21.6,
+      "prompt_chars": 919
+    }
+  ],
+  "configs": [
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.8095,
+            "recall": 0.85,
+            "f1": 0.8293,
+            "tp": 17,
+            "fp": 4,
+            "fn": 3
+          },
+          "entities": {
+            "precision": 0.9167,
+            "recall": 0.7586,
+            "f1": 0.8302,
+            "tp": 22,
+            "fp": 2,
+            "fn": 7
+          }
+        },
+        "micro": {
+          "precision": 0.7742,
+          "recall": 0.7423,
+          "f1": 0.7579,
+          "tp": 72,
+          "fp": 21,
+          "fn": 25
+        },
+        "macro_f1": 0.7586,
+        "strict_accuracy": 0.375,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.914,
+      "prompt_tokens_avg": 147.1,
+      "prompt_tokens_max": 161,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V0-naive@k=0",
+      "wall_time_s": 21.9,
+      "prompt_chars": 220
+    },
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.5,
+            "recall": 0.5,
+            "f1": 0.5,
+            "tp": 12,
+            "fp": 12,
+            "fn": 12
+          },
+          "deadline": {
+            "precision": 0.7619,
+            "recall": 0.8,
+            "f1": 0.7805,
+            "tp": 16,
+            "fp": 5,
+            "fn": 4
+          },
+          "entities": {
+            "precision": 0.8846,
+            "recall": 0.7931,
+            "f1": 0.8364,
+            "tp": 23,
+            "fp": 3,
+            "fn": 6
+          }
+        },
+        "micro": {
+          "precision": 0.7789,
+          "recall": 0.7629,
+          "f1": 0.7708,
+          "tp": 74,
+          "fp": 21,
+          "fn": 23
+        },
+        "macro_f1": 0.7688,
+        "strict_accuracy": 0.4167,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.96,
+      "prompt_tokens_avg": 261.1,
+      "prompt_tokens_max": 275,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "fa063fe48ca0",
+      "prompt_mismatch": false,
+      "variant": "V1-date",
+      "prompt_added": "补基准日 + 无年份按 2026 理解 + 跨年规则",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V1-date@k=0",
+      "wall_time_s": 23.0,
+      "prompt_chars": 399
+    },
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9167,
+            "recall": 0.9167,
+            "f1": 0.9167,
+            "tp": 22,
+            "fp": 2,
+            "fn": 2
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.8,
+            "recall": 0.8,
+            "f1": 0.8,
+            "tp": 16,
+            "fp": 4,
+            "fn": 4
+          },
+          "entities": {
+            "precision": 0.92,
+            "recall": 0.7931,
+            "f1": 0.8519,
+            "tp": 23,
+            "fp": 2,
+            "fn": 6
+          }
+        },
+        "micro": {
+          "precision": 0.7634,
+          "recall": 0.732,
+          "f1": 0.7474,
+          "tp": 71,
+          "fp": 22,
+          "fn": 26
+        },
+        "macro_f1": 0.7463,
+        "strict_accuracy": 0.25,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.94,
+      "prompt_tokens_avg": 399.1,
+      "prompt_tokens_max": 413,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "01a3894e6d23",
+      "prompt_mismatch": false,
+      "variant": "V2-rubric",
+      "prompt_added": "再补 importance 3~5 判定标准",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V2-rubric@k=0",
+      "wall_time_s": 22.6,
+      "prompt_chars": 609
+    },
+    {
+      "mode": "zero-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 0,
+      "few_shot_source": null,
+      "few_shot_ids": [],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9167,
+            "recall": 0.9167,
+            "f1": 0.9167,
+            "tp": 22,
+            "fp": 2,
+            "fn": 2
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.8,
+            "recall": 0.8,
+            "f1": 0.8,
+            "tp": 16,
+            "fp": 4,
+            "fn": 4
+          },
+          "entities": {
+            "precision": 0.8696,
+            "recall": 0.6897,
+            "f1": 0.7692,
+            "tp": 20,
+            "fp": 3,
+            "fn": 9
+          }
+        },
+        "micro": {
+          "precision": 0.7473,
+          "recall": 0.701,
+          "f1": 0.7234,
+          "tp": 68,
+          "fp": 23,
+          "fn": 29
+        },
+        "macro_f1": 0.7257,
+        "strict_accuracy": 0.2917,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.899,
+      "prompt_tokens_avg": 576.1,
+      "prompt_tokens_max": 590,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 0,
+      "k_effective": 0,
+      "example_ids": [],
+      "config": "V3-optimized@k=0",
+      "wall_time_s": 21.6,
+      "prompt_chars": 919
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 1,
+      "few_shot_source": "ai/eval/fixtures/few_shot_examples.json",
+      "few_shot_ids": [
+        "FS01"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.6667,
+            "recall": 0.6667,
+            "f1": 0.6667,
+            "tp": 16,
+            "fp": 8,
+            "fn": 8
+          },
+          "deadline": {
+            "precision": 0.7895,
+            "recall": 0.75,
+            "f1": 0.7692,
+            "tp": 15,
+            "fp": 4,
+            "fn": 5
+          },
+          "entities": {
+            "precision": 0.8636,
+            "recall": 0.6552,
+            "f1": 0.7451,
+            "tp": 19,
+            "fp": 3,
+            "fn": 10
+          }
+        },
+        "micro": {
+          "precision": 0.8202,
+          "recall": 0.7526,
+          "f1": 0.7849,
+          "tp": 73,
+          "fp": 16,
+          "fn": 24
+        },
+        "macro_f1": 0.7848,
+        "strict_accuracy": 0.375,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.868,
+      "prompt_tokens_avg": 246.1,
+      "prompt_tokens_max": 260,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 1,
+      "k_effective": 1,
+      "example_ids": [
+        "FS01"
+      ],
+      "config": "V0-naive@k=1",
+      "wall_time_s": 20.8
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 2,
+      "few_shot_source": "ai/eval/fixtures/few_shot_examples.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.6667,
+            "recall": 0.6667,
+            "f1": 0.6667,
+            "tp": 16,
+            "fp": 8,
+            "fn": 8
+          },
+          "deadline": {
+            "precision": 0.7143,
+            "recall": 0.75,
+            "f1": 0.7317,
+            "tp": 15,
+            "fp": 6,
+            "fn": 5
+          },
+          "entities": {
+            "precision": 0.76,
+            "recall": 0.6552,
+            "f1": 0.7037,
+            "tp": 19,
+            "fp": 6,
+            "fn": 10
+          }
+        },
+        "micro": {
+          "precision": 0.7766,
+          "recall": 0.7526,
+          "f1": 0.7644,
+          "tp": 73,
+          "fp": 21,
+          "fn": 24
+        },
+        "macro_f1": 0.7651,
+        "strict_accuracy": 0.4167,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.905,
+      "prompt_tokens_avg": 344.1,
+      "prompt_tokens_max": 358,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 2,
+      "k_effective": 2,
+      "example_ids": [
+        "FS01",
+        "FS02"
+      ],
+      "config": "V0-naive@k=2",
+      "wall_time_s": 21.7
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 3,
+      "few_shot_source": "ai/eval/fixtures/few_shot_examples.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02",
+        "FS03"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.5833,
+            "recall": 0.5833,
+            "f1": 0.5833,
+            "tp": 14,
+            "fp": 10,
+            "fn": 10
+          },
+          "deadline": {
+            "precision": 0.7895,
+            "recall": 0.75,
+            "f1": 0.7692,
+            "tp": 15,
+            "fp": 4,
+            "fn": 5
+          },
+          "entities": {
+            "precision": 0.875,
+            "recall": 0.7241,
+            "f1": 0.7925,
+            "tp": 21,
+            "fp": 3,
+            "fn": 8
+          }
+        },
+        "micro": {
+          "precision": 0.8022,
+          "recall": 0.7526,
+          "f1": 0.7766,
+          "tp": 73,
+          "fp": 18,
+          "fn": 24
+        },
+        "macro_f1": 0.7758,
+        "strict_accuracy": 0.3333,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.949,
+      "prompt_tokens_avg": 471.1,
+      "prompt_tokens_max": 485,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 3,
+      "k_effective": 3,
+      "example_ids": [
+        "FS01",
+        "FS02",
+        "FS03"
+      ],
+      "config": "V0-naive@k=3",
+      "wall_time_s": 22.8
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 4,
+      "few_shot_source": "ai/eval/fixtures/few_shot_examples.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.625,
+            "recall": 0.625,
+            "f1": 0.625,
+            "tp": 15,
+            "fp": 9,
+            "fn": 9
+          },
+          "deadline": {
+            "precision": 0.5714,
+            "recall": 0.6,
+            "f1": 0.5854,
+            "tp": 12,
+            "fp": 9,
+            "fn": 8
+          },
+          "entities": {
+            "precision": 0.6923,
+            "recall": 0.6207,
+            "f1": 0.6545,
+            "tp": 18,
+            "fp": 8,
+            "fn": 11
+          }
+        },
+        "micro": {
+          "precision": 0.7158,
+          "recall": 0.701,
+          "f1": 0.7083,
+          "tp": 68,
+          "fp": 27,
+          "fn": 29
+        },
+        "macro_f1": 0.7058,
+        "strict_accuracy": 0.3333,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 1.014,
+      "prompt_tokens_avg": 522.1,
+      "prompt_tokens_max": 536,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 4,
+      "k_effective": 4,
+      "example_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04"
+      ],
+      "config": "V0-naive@k=4",
+      "wall_time_s": 24.3
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 8,
+      "few_shot_source": "ai/eval/fixtures/prompt_opt_examples_ext.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04",
+        "FS05",
+        "FS06",
+        "FS07",
+        "FS08"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9583,
+            "recall": 0.9583,
+            "f1": 0.9583,
+            "tp": 23,
+            "fp": 1,
+            "fn": 1
+          },
+          "importance": {
+            "precision": 0.625,
+            "recall": 0.625,
+            "f1": 0.625,
+            "tp": 15,
+            "fp": 9,
+            "fn": 9
+          },
+          "deadline": {
+            "precision": 0.75,
+            "recall": 0.75,
+            "f1": 0.75,
+            "tp": 15,
+            "fp": 5,
+            "fn": 5
+          },
+          "entities": {
+            "precision": 0.84,
+            "recall": 0.7241,
+            "f1": 0.7778,
+            "tp": 21,
+            "fp": 4,
+            "fn": 8
+          }
+        },
+        "micro": {
+          "precision": 0.7957,
+          "recall": 0.7629,
+          "f1": 0.7789,
+          "tp": 74,
+          "fp": 19,
+          "fn": 23
+        },
+        "macro_f1": 0.7778,
+        "strict_accuracy": 0.4167,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 1.004,
+      "prompt_tokens_avg": 961.1,
+      "prompt_tokens_max": 975,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 8,
+      "k_effective": 8,
+      "example_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04",
+        "FS05",
+        "FS06",
+        "FS07",
+        "FS08"
+      ],
+      "config": "V0-naive@k=8",
+      "wall_time_s": 24.1
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 16,
+      "few_shot_source": "ai/eval/fixtures/prompt_opt_examples_ext.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04",
+        "FS05",
+        "FS06",
+        "FS07",
+        "FS08",
+        "FS09",
+        "FS10",
+        "FS11",
+        "FS12",
+        "FS13",
+        "FS14",
+        "FS15",
+        "FS16"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.875,
+            "recall": 0.875,
+            "f1": 0.875,
+            "tp": 21,
+            "fp": 3,
+            "fn": 3
+          },
+          "importance": {
+            "precision": 0.6667,
+            "recall": 0.6667,
+            "f1": 0.6667,
+            "tp": 16,
+            "fp": 8,
+            "fn": 8
+          },
+          "deadline": {
+            "precision": 0.8,
+            "recall": 0.8,
+            "f1": 0.8,
+            "tp": 16,
+            "fp": 4,
+            "fn": 4
+          },
+          "entities": {
+            "precision": 0.8889,
+            "recall": 0.8276,
+            "f1": 0.8571,
+            "tp": 24,
+            "fp": 3,
+            "fn": 5
+          }
+        },
+        "micro": {
+          "precision": 0.8105,
+          "recall": 0.7938,
+          "f1": 0.8021,
+          "tp": 77,
+          "fp": 18,
+          "fn": 20
+        },
+        "macro_f1": 0.7997,
+        "strict_accuracy": 0.4167,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 1.044,
+      "prompt_tokens_avg": 1815.1,
+      "prompt_tokens_max": 1829,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "bf951145f1a6",
+      "prompt_mismatch": false,
+      "variant": "V0-naive",
+      "prompt_added": "（C34 原样，无补充）",
+      "k_requested": 16,
+      "k_effective": 16,
+      "example_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04",
+        "FS05",
+        "FS06",
+        "FS07",
+        "FS08",
+        "FS09",
+        "FS10",
+        "FS11",
+        "FS12",
+        "FS13",
+        "FS14",
+        "FS15",
+        "FS16"
+      ],
+      "config": "V0-naive@k=16",
+      "wall_time_s": 25.1
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 1,
+      "few_shot_source": "ai/eval/fixtures/few_shot_examples.json",
+      "few_shot_ids": [
+        "FS01"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.9167,
+            "recall": 0.9167,
+            "f1": 0.9167,
+            "tp": 22,
+            "fp": 2,
+            "fn": 2
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.875,
+            "recall": 0.7,
+            "f1": 0.7778,
+            "tp": 14,
+            "fp": 2,
+            "fn": 6
+          },
+          "entities": {
+            "precision": 0.9474,
+            "recall": 0.6207,
+            "f1": 0.75,
+            "tp": 18,
+            "fp": 1,
+            "fn": 11
+          }
+        },
+        "micro": {
+          "precision": 0.7711,
+          "recall": 0.6598,
+          "f1": 0.7111,
+          "tp": 64,
+          "fp": 19,
+          "fn": 33
+        },
+        "macro_f1": 0.7153,
+        "strict_accuracy": 0.2083,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.905,
+      "prompt_tokens_avg": 675.1,
+      "prompt_tokens_max": 689,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 1,
+      "k_effective": 1,
+      "example_ids": [
+        "FS01"
+      ],
+      "config": "V3-optimized@k=1",
+      "wall_time_s": 21.7
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 2,
+      "few_shot_source": "ai/eval/fixtures/few_shot_examples.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.875,
+            "recall": 0.875,
+            "f1": 0.875,
+            "tp": 21,
+            "fp": 3,
+            "fn": 3
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.7895,
+            "recall": 0.75,
+            "f1": 0.7692,
+            "tp": 15,
+            "fp": 4,
+            "fn": 5
+          },
+          "entities": {
+            "precision": 0.85,
+            "recall": 0.5862,
+            "f1": 0.6939,
+            "tp": 17,
+            "fp": 3,
+            "fn": 12
+          }
+        },
+        "micro": {
+          "precision": 0.7241,
+          "recall": 0.6495,
+          "f1": 0.6848,
+          "tp": 63,
+          "fp": 24,
+          "fn": 34
+        },
+        "macro_f1": 0.6887,
+        "strict_accuracy": 0.2917,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.907,
+      "prompt_tokens_avg": 773.1,
+      "prompt_tokens_max": 787,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 2,
+      "k_effective": 2,
+      "example_ids": [
+        "FS01",
+        "FS02"
+      ],
+      "config": "V3-optimized@k=2",
+      "wall_time_s": 21.8
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 3,
+      "few_shot_source": "ai/eval/fixtures/few_shot_examples.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02",
+        "FS03"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.875,
+            "recall": 0.875,
+            "f1": 0.875,
+            "tp": 21,
+            "fp": 3,
+            "fn": 3
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.8667,
+            "recall": 0.65,
+            "f1": 0.7429,
+            "tp": 13,
+            "fp": 2,
+            "fn": 7
+          },
+          "entities": {
+            "precision": 0.9474,
+            "recall": 0.6207,
+            "f1": 0.75,
+            "tp": 18,
+            "fp": 1,
+            "fn": 11
+          }
+        },
+        "micro": {
+          "precision": 0.7561,
+          "recall": 0.6392,
+          "f1": 0.6927,
+          "tp": 62,
+          "fp": 20,
+          "fn": 35
+        },
+        "macro_f1": 0.6962,
+        "strict_accuracy": 0.1667,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.844,
+      "prompt_tokens_avg": 900.1,
+      "prompt_tokens_max": 914,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 3,
+      "k_effective": 3,
+      "example_ids": [
+        "FS01",
+        "FS02",
+        "FS03"
+      ],
+      "config": "V3-optimized@k=3",
+      "wall_time_s": 20.3
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 4,
+      "few_shot_source": "ai/eval/fixtures/few_shot_examples.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.875,
+            "recall": 0.875,
+            "f1": 0.875,
+            "tp": 21,
+            "fp": 3,
+            "fn": 3
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.75,
+            "recall": 0.75,
+            "f1": 0.75,
+            "tp": 15,
+            "fp": 5,
+            "fn": 5
+          },
+          "entities": {
+            "precision": 0.8261,
+            "recall": 0.6552,
+            "f1": 0.7308,
+            "tp": 19,
+            "fp": 4,
+            "fn": 10
+          }
+        },
+        "micro": {
+          "precision": 0.7143,
+          "recall": 0.6701,
+          "f1": 0.6915,
+          "tp": 65,
+          "fp": 26,
+          "fn": 32
+        },
+        "macro_f1": 0.6931,
+        "strict_accuracy": 0.25,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.937,
+      "prompt_tokens_avg": 951.1,
+      "prompt_tokens_max": 965,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 4,
+      "k_effective": 4,
+      "example_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04"
+      ],
+      "config": "V3-optimized@k=4",
+      "wall_time_s": 22.5
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 8,
+      "few_shot_source": "ai/eval/fixtures/prompt_opt_examples_ext.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04",
+        "FS05",
+        "FS06",
+        "FS07",
+        "FS08"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.875,
+            "recall": 0.875,
+            "f1": 0.875,
+            "tp": 21,
+            "fp": 3,
+            "fn": 3
+          },
+          "importance": {
+            "precision": 0.4167,
+            "recall": 0.4167,
+            "f1": 0.4167,
+            "tp": 10,
+            "fp": 14,
+            "fn": 14
+          },
+          "deadline": {
+            "precision": 0.8824,
+            "recall": 0.75,
+            "f1": 0.8108,
+            "tp": 15,
+            "fp": 2,
+            "fn": 5
+          },
+          "entities": {
+            "precision": 0.9545,
+            "recall": 0.7241,
+            "f1": 0.8235,
+            "tp": 21,
+            "fp": 1,
+            "fn": 8
+          }
+        },
+        "micro": {
+          "precision": 0.7701,
+          "recall": 0.6907,
+          "f1": 0.7283,
+          "tp": 67,
+          "fp": 20,
+          "fn": 30
+        },
+        "macro_f1": 0.7315,
+        "strict_accuracy": 0.25,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.899,
+      "prompt_tokens_avg": 1390.1,
+      "prompt_tokens_max": 1404,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 8,
+      "k_effective": 8,
+      "example_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04",
+        "FS05",
+        "FS06",
+        "FS07",
+        "FS08"
+      ],
+      "config": "V3-optimized@k=8",
+      "wall_time_s": 21.6
+    },
+    {
+      "mode": "few-shot",
+      "backend": "ollama",
+      "model": "xjt-extract-3b",
+      "dataset": "ai/eval/extract_cases.json",
+      "dataset_total": 24,
+      "temperature": 0.0,
+      "few_shot_k": 16,
+      "few_shot_source": "ai/eval/fixtures/prompt_opt_examples_ext.json",
+      "few_shot_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04",
+        "FS05",
+        "FS06",
+        "FS07",
+        "FS08",
+        "FS09",
+        "FS10",
+        "FS11",
+        "FS12",
+        "FS13",
+        "FS14",
+        "FS15",
+        "FS16"
+      ],
+      "metrics": {
+        "per_field": {
+          "category": {
+            "precision": 0.875,
+            "recall": 0.875,
+            "f1": 0.875,
+            "tp": 21,
+            "fp": 3,
+            "fn": 3
+          },
+          "importance": {
+            "precision": 0.5417,
+            "recall": 0.5417,
+            "f1": 0.5417,
+            "tp": 13,
+            "fp": 11,
+            "fn": 11
+          },
+          "deadline": {
+            "precision": 0.8333,
+            "recall": 0.75,
+            "f1": 0.7895,
+            "tp": 15,
+            "fp": 3,
+            "fn": 5
+          },
+          "entities": {
+            "precision": 0.9091,
+            "recall": 0.6897,
+            "f1": 0.7843,
+            "tp": 20,
+            "fp": 2,
+            "fn": 9
+          }
+        },
+        "micro": {
+          "precision": 0.7841,
+          "recall": 0.7113,
+          "f1": 0.7459,
+          "tp": 69,
+          "fp": 19,
+          "fn": 28
+        },
+        "macro_f1": 0.7476,
+        "strict_accuracy": 0.2917,
+        "n": 24
+      },
+      "parse_errors": 0,
+      "parse_error_rate": 0.0,
+      "transport_errors": 0,
+      "errors": [],
+      "avg_latency_s": 0.906,
+      "prompt_tokens_avg": 2244.1,
+      "prompt_tokens_max": 2258,
+      "num_ctx": 8192,
+      "system_prompt_sha1": "623279faa866",
+      "prompt_mismatch": false,
+      "variant": "V3-optimized",
+      "prompt_added": "再补 category 受控词表 + deadline 何时为 null + entities 口径",
+      "k_requested": 16,
+      "k_effective": 16,
+      "example_ids": [
+        "FS01",
+        "FS02",
+        "FS03",
+        "FS04",
+        "FS05",
+        "FS06",
+        "FS07",
+        "FS08",
+        "FS09",
+        "FS10",
+        "FS11",
+        "FS12",
+        "FS13",
+        "FS14",
+        "FS15",
+        "FS16"
+      ],
+      "config": "V3-optimized@k=16",
+      "wall_time_s": 21.8
+    }
+  ],
+  "comparisons": [
+    {
+      "a": "V0-naive@k=0",
+      "b": "V3-optimized@k=0",
+      "k": 0,
+      "delta_pt": -3.45,
+      "ci_low_pt": -16.04,
+      "ci_high_pt": 8.79,
+      "iters": 2000,
+      "n_pairs": 24,
+      "significant": false
+    },
+    {
+      "a": "V0-naive@k=1",
+      "b": "V3-optimized@k=1",
+      "k": 1,
+      "delta_pt": -7.38,
+      "ci_low_pt": -14.83,
+      "ci_high_pt": -1.52,
+      "iters": 2000,
+      "n_pairs": 24,
+      "significant": true
+    },
+    {
+      "a": "V0-naive@k=2",
+      "b": "V3-optimized@k=2",
+      "k": 2,
+      "delta_pt": -7.96,
+      "ci_low_pt": -15.68,
+      "ci_high_pt": -1.07,
+      "iters": 2000,
+      "n_pairs": 24,
+      "significant": true
+    },
+    {
+      "a": "V0-naive@k=3",
+      "b": "V3-optimized@k=3",
+      "k": 3,
+      "delta_pt": -8.39,
+      "ci_low_pt": -16.62,
+      "ci_high_pt": -1.17,
+      "iters": 2000,
+      "n_pairs": 24,
+      "significant": true
+    },
+    {
+      "a": "V0-naive@k=4",
+      "b": "V3-optimized@k=4",
+      "k": 4,
+      "delta_pt": -1.68,
+      "ci_low_pt": -12.37,
+      "ci_high_pt": 10.23,
+      "iters": 2000,
+      "n_pairs": 24,
+      "significant": false
+    },
+    {
+      "a": "V0-naive@k=8",
+      "b": "V3-optimized@k=8",
+      "k": 8,
+      "delta_pt": -5.07,
+      "ci_low_pt": -13.45,
+      "ci_high_pt": 3.49,
+      "iters": 2000,
+      "n_pairs": 24,
+      "significant": false
+    },
+    {
+      "a": "V0-naive@k=16",
+      "b": "V3-optimized@k=16",
+      "k": 16,
+      "delta_pt": -5.61,
+      "ci_low_pt": -16.47,
+      "ci_high_pt": 5.3,
+      "iters": 2000,
+      "n_pairs": 24,
+      "significant": false
+    }
+  ],
+  "label_budget": {
+    "available": true,
+    "optimized_k0_f1": 0.7234,
+    "naive_curve": {
+      "0": 0.7579,
+      "1": 0.7849,
+      "2": 0.7644,
+      "3": 0.7766,
+      "4": 0.7083,
+      "8": 0.7789,
+      "16": 0.8021
+    },
+    "optimized_curve": {
+      "0": 0.7234,
+      "1": 0.7111,
+      "2": 0.6848,
+      "3": 0.6927,
+      "4": 0.6915,
+      "8": 0.7283,
+      "16": 0.7459
+    },
+    "matched_k": 0,
+    "bracket_below_k": 4,
+    "bracket_above_k": 0,
+    "max_k_tested": 16,
+    "reached": true
+  },
+  "gate": {
+    "expr": "V3-optimized@k=0 − V0-naive@k=0",
+    "delta_pt": -3.45,
+    "min_gain_pt": 5.0,
+    "passed": false
+  },
+  "reproduce": {
+    "k": 3,
+    "c34_published_f1": 0.4693,
+    "our_f1": 0.7766,
+    "our_num_ctx": 8192,
+    "our_model": "xjt-extract-3b",
+    "reproduce_model": "qwen2.5:3b",
+    "applicable": false,
+    "matched": null
+  },
+  "caveats": [
+    "评测集只有 24 条且是**合成数据**（C34 已注明）：几个百分点的差异可能只是抽样噪声，所以给出了配对自助法的 95% 区间；区间跨 0 的结论一律按「不显著」处理。",
+    "`V3-optimized` 里的 category 受控词表取的是评测集实际使用的 5 类。真实部署里类目来自库表/前端栏目（属正当先验），但它确实缩小了模型的搜索空间 —— 该档增益含这一条，不与「日期规则」「重要度细则」混算。",
+    "C35 的扩充示例（12 条）与 prompt 文本都是按 C34 记录的**标注规范**编写的，**不是**在评测集上反复调参拟合出来的；prompt 与示例一经确定即冻结，评测集只用于最终度量。",
+    "任务书里「100 条+优 prompt ≈ 300 条+朴素」的完整曲线需要**真实标注数据**（C31 工具链 + D12 人标注协作产出）才能测到 k=100/300；本实验在现有池子（上限 16 条）内给出可测段，并如实报告是否在测到的 k 上追平，**不外推**。",
+    "`importance` 的标注本身存在边界模糊（例如同为「提交材料截止」，评测集里 E02 记 4、E17 记 5）：这属于标注一致性问题（与 C32 的 Cohen's Kappa 同源），会同时压低所有档位的上限，不是 prompt 能修的。"
+  ]
+}
