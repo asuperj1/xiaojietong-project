@@ -49,6 +49,45 @@ def load_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def pad_batch(features: list[dict], pad_token_id: int,
+              label_pad_id: int = -100) -> dict[str, list[list[int]]]:
+    """把同一 batch 里长度不一的样本右补齐；**补齐位的 label 用 -100，不参与 loss**。
+
+    为什么不直接用 DataCollatorForLanguageModeling（transformers 5.17 实测）：
+    它只 pad `input_ids`/`attention_mask`，把已经 tokenize 好的 `labels` 原样交给
+    `tokenizer.pad` 去转 tensor，于是 **batch>1 直接抛**
+    `ValueError: Unable to create tensor ... features (labels) have excessive nesting`。
+    旧脚本用 `per_device_train_batch_size=1` 跑，单样本不需要 padding，所以这个坑一直没暴露；
+    加上评估（默认 eval batch=8）后，就炸在第 50 步的第一次评估上。
+
+    这里顺手把补齐位的 label 写成 -100：旧写法即使不崩，也会让模型去拟合 pad token。
+    """
+    if not features:
+        raise ValueError("pad_batch 收到空 batch")
+    width = max(len(f["input_ids"]) for f in features)
+    out: dict[str, list[list[int]]] = {"input_ids": [], "attention_mask": [], "labels": []}
+    for f in features:
+        n = width - len(f["input_ids"])
+        out["input_ids"].append(list(f["input_ids"]) + [pad_token_id] * n)
+        out["attention_mask"].append(list(f["attention_mask"]) + [0] * n)
+        out["labels"].append(list(f["labels"]) + [label_pad_id] * n)
+    return out
+
+
+class PadCollator:
+    """把 pad_batch 的结果转成 tensor（torch 推迟到 __call__ 才 import，便于无 GPU 单测）。"""
+
+    def __init__(self, pad_token_id: int, label_pad_id: int = -100) -> None:
+        self.pad_token_id = pad_token_id
+        self.label_pad_id = label_pad_id
+
+    def __call__(self, features: list[dict]) -> dict:
+        import torch
+
+        padded = pad_batch(features, self.pad_token_id, self.label_pad_id)
+        return {k: torch.tensor(v, dtype=torch.long) for k, v in padded.items()}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="校捷通 QLoRA 指令微调")
     ap.add_argument("--base_model", default="Qwen/Qwen2.5-7B-Instruct")
@@ -70,6 +109,8 @@ def main() -> None:
                     help="每多少步评估一次（同时作为 save_steps，两者必须整除）")
     ap.add_argument("--early_stopping_patience", type=int, default=0,
                     help=">0 时启用早停（需 --eval_data）：连续 N 次评估无改善就停")
+    ap.add_argument("--eval_batch_size", type=int, default=8,
+                    help="评估时的 batch 大小（评估不反传，batch 大些更快）")
     args = ap.parse_args()
 
     if args.early_stopping_patience > 0 and not args.eval_data:
@@ -81,7 +122,7 @@ def main() -> None:
 
     if not torch.cuda.is_available():
         print("[提示] 未检测到 CUDA GPU。QLoRA 通常需 GPU（学生机 8G 可用 3B/4B，16G 可用 7B-4bit）。")
-        print("       如需 CPU 冒烟测试可加 --smoke（不加载大模型），正式训练请在有 GPU 的机器/Colab 运行。")
+        print("       本脚本没有 CPU 降级开关：qlora/bnb 依赖 CUDA，无 GPU 时请勿硬跑，正式训练请在有 GPU 的机器上执行。")
 
     transformers = require("transformers")
     require("peft")
@@ -91,7 +132,7 @@ def main() -> None:
     from datasets import Dataset
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from transformers import (AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig,
-                              DataCollatorForLanguageModeling, Trainer, TrainingArguments)
+                              Trainer, TrainingArguments)
 
     data_path = Path(args.data)
     if not data_path.exists():
@@ -140,7 +181,11 @@ def main() -> None:
         learning_rate=args.lr,
         logging_steps=10,
         save_steps=args.eval_steps if eval_ds else 200,
-        save_total_limit=2,
+        # load_best_model_at_end=True 时**不能**限制保留数量：save_total_limit 会把
+        # 早期的最优 checkpoint 删掉，最后回载时报 “best model checkpoint not found”。
+        # adapter 只有几十 MB，宁可多留几个（本任务 243 步 → 最多 4 个）。
+        save_total_limit=2 if not eval_ds else None,
+        per_device_eval_batch_size=args.eval_batch_size,
         bf16=True,
         warmup_steps=20,
         lr_scheduler_type="cosine",
@@ -161,7 +206,7 @@ def main() -> None:
         print(f"  早停：连续 {args.early_stopping_patience} 次评估无改善即停")
     trainer = Trainer(model=model, args=training_args, train_dataset=ds,
                       eval_dataset=eval_ds, callbacks=callbacks,
-                      data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False))
+                      data_collator=PadCollator(tokenizer.pad_token_id))
     trainer.train()
     trainer.save_model(args.output)
     tokenizer.save_pretrained(args.output)
