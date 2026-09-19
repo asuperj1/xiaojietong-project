@@ -548,23 +548,39 @@ refresh_token 载荷同样带 `tv`；老 refresh_token 无 `tv` 时按 0 处理�
 
 ## 10. 生活服务
 
-### GET /life/merchants — 商家列表
-查询参数：`?category=食堂&page=&size=`
-响应 `data.items[]`：`{ "id":1,"name":"湖畔餐厅","category":"食堂","delivery_fee":0,"min_order":0,"avg_score":4.5,"business_hours":"07:00-21:00" }`
+### GET /life/pickup-points — 取件驿站（B31，v1.22 新增）
+`data.items[]`：`{ "id":1,"name":"菜鸟驿站·一食堂店","address":"第一食堂东侧 10 米","business_hours":"08:00-20:00","contact_phone":"","sort":30 }`
+- 仅返回 `status=1` 且 `is_deleted=0` 的驿站，按 `sort` 倒序。
+- **列名跟随 `db/sql/18_takeaway_pickup.sql` 的权威定义**（PR #88 收敛后）：`business_hours` / `status` / `is_deleted`；
+  漂移期的 `open_time` / `enabled` / `campus` 由该脚本回填后 DROP，故接口**不返回也不过滤**它们。
+- 前端 F19 用它做**固定取件点单选**。
 
-### GET /life/merchants/{id}/menu — 商家菜单
-`data.items[]`：`{ "id":1,"name":"红烧肉套餐","price":15.00,"sales_count":120 }`
-
-### POST /life/orders — 下单
+### POST /life/orders — 代收下单（B31 改义）
 请求：
 ```json
-{ "merchant_id":1, "items":[{"id":1,"num":2}], "address":"三公寓", "contact":"测试用户A", "contact_phone":"13800000000", "remark":"少辣" }
+{ "pickup_point_id": 1, "address": "三公寓", "contact": "测试用户A", "contact_phone": "13800000000", "remark": "一个中通快递" }
 ```
-响应：`{ "order_id": 9, "pay_amount": 30.00 }`
+响应 `data`：`{ "order_id": 9, "pickup_code": "583214", "pickup_point": {"id":1,"name":"三教快递柜","address":"..."}, "status": 1, "pay_amount": 0 }`
+- 下单即生成 **6 位数字取件码**（库内唯一，冲突自动重试），存在 `takeaway_order.pickup_code`。
+- **不计费**：`pay_amount = 0`；`merchant_id = 0`（代收无商家）。
+- 驿站必须存在且启用，否则 `1001`；`pickup_point_id` 缺省为 0 → 同样落到 `1001`
+  （老前端仍按代买体 `{merchant_id, items}` 调用时**不会**得到 FastAPI 的 422）。
+- `biz_type`：1 = 代买（**已下线**，仅历史数据）／2 = 代收（本接口固定写 2）。
 
-### GET /life/orders/{id} — 订单详情/配送进度
-`data`：`{ "id":9,"status":2,"items":[...],"total_amount":30.00,"delivery_fee":0 }`
-- status：0待支付 1已支付 2配送中 3已完成 4已取消
+### GET /life/orders — 我的代收订单（B31，v1.22 新增）
+查询参数：`?page=&size=` → `{ items:[...], total, page, size }`（`total` 为**真实 COUNT**）。
+- 每条含：`id, biz_type, status, pickup_code, pickup_point_name, pickup_point_address, remark, pay_amount, arrived_at, notified_at, created_at`。
+
+### GET /life/orders/{id} — 代收订单详情（B31）
+`data` 同列表字段（另含 `items`）；`arrived_at` / `notified_at` 为空表示**尚未到件**。
+- 前端 F19 据此**大字展示取件码** + 驿站信息。
+- **`status` 语义（代收）**：`1 已受理`（下单成功，待驿站揽收）→ `2 已到站`（待取件）→ `3 已取件`（核销，**下期**）。
+  > ⚠️ `status` 列原本是代买形状的枚举（0待支付/1已支付/2配送中/3已完成/4已取消）；代收不计费，
+  > 故按上表映射复用 —— 换枚举要改表，列入下期。
+
+> **B31 代买下线（v1.22，破坏性变更）**：`GET /life/merchants`、`GET /life/merchants/{id}/menu` **已删除**（404）；
+> `POST /life/orders` 请求体由 `{merchant_id, items[]}` 改为 `{pickup_point_id, ...}`。
+> `merchant` / `menu_item` 表仅保留历史数据。**前端 F19 与本接口须同批发布。**
 
 ### GET /life/notices — 通知列表
 查询参数：`?category=选课&target_grade=2024级&page=&size=`
@@ -712,6 +728,15 @@ refresh_token 载荷同样带 `tv`；老 refresh_token 无 `tv` 时按 0 处理�
 ### POST /admin/notices/purge-private — 清理私密推送行（v1.16 新增）
 请求 `{ "kind":"reminder", "ref_id": 9 }`（两字段可省略：省略则清理全部）
 响应 `{ "notices":3, "deliveries":5 }`（删除推送通知行及其投递记录，演示复位用）
+
+### POST /admin/takeaway/orders/{id}/arrive — 代收到件登记（B31，v1.22 新增）
+响应 `data`：`{ "order_id": 9, "pickup_code": "583214", "status": 2, "notified": true, "operator_id": 3 }`
+- 写 `takeaway_order.arrived_at` / `notified_at`，并给**下单人**发**一条**站内通知
+  （`campus_notice` 私密行 + `notice_delivery`）—— 本人可在 `GET /life/notices/unread` 看到，
+  且**不会**出现在公共 `GET /life/notices` 里（与 §10 的私密推送口径一致）。
+- **幂等**：重复调用不重复投递（返回 `notified=false`），`arrived_at` 保留**首次**登记时间。
+- 驿站签收是**运营动作**：普通用户调用 → `403 / 2003`；本期无驿站账号体系，由管理员代行。
+- 仅 `biz_type=2`（代收）订单可登记（历史代买订单 → `3001`）；订单不存在 → `1001`。
 
 ### GET /admin/forum/audit — 待审核帖子
 `data.items[]`：`{ "id":5,"title":"...","content":"...","author_id":1 }`（对应 `ForumDAO.pending_audit`）
@@ -939,3 +964,4 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.23 | 2026-09-16 | **B32 语音转文字**：新增 `POST /voice/transcribe`（wav/mp3/m4a/ogg/webm/amr，**按文件头魔数判定类型**，不信 `Content-Type`）；ASR 后端**配置驱动可插拔**（`XJT_ASR_BACKEND` = `none` / `http` / `whisper`，whisper 为**可选依赖、不进 requirements**）；**失败一律明确回码不静默**——格式/大小/时长 `1001`、服务不可用 `5002`、转写失败 `5003`（本次新增）；单文件 ≤2MB、时长 3~10 秒（WAV 精确校验，其它容器按大小兜底） |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
 | v1.24 | 2026-09-17 | **C36 抽取服务化（统一入口 + 与对话模型隔离）**：新增 `services/extract_model.py`（`XJT_EXTRACT_BACKEND` = `ollama`/`http`/`none`，`BASE_URL`/`MODEL`/`MAX_CHARS`/`MAX_CONCURRENCY`/`KEEP_ALIVE` 独立配置；失败**不静默降级**——抛 `ExtractUnavailable`/`ExtractFailure`，绝不返回 `{}`）；`secondhand_ai` 改接统一入口，`POST /secondhand/items/ai-describe` 新增 `model_truncated`（输入过长时先裁备注/标题，保证送进模型的是完整 JSON）；新增 `core/net.py`（回环地址绕过系统代理，修复 Windows 注册表代理导致的 502）；`GET /health/detail` 新增 `extract` 段（配置 / `available` / `ready` / **`isolation`** —— 只换模型不换地址**不算**隔离） |
+| v1.25 | 2026-09-16 | **B31 代收业务闭环（破坏性）**：**下线代买** —— 删除 `GET /life/merchants`、`GET /life/merchants/{id}/menu`，`POST /life/orders` 请求体由 `{merchant_id, items[]}` 改为 `{pickup_point_id, ...}`；新增 `GET /life/pickup-points`（启用中驿站、`sort` 倒序、可 `campus` 过滤）、`GET /life/orders`（我的代收订单，**真实 COUNT**）、`POST /admin/takeaway/orders/{id}/arrive`（到件登记 → 写 `arrived_at`/`notified_at` + **复用站内通知** `notice_delivery`；幂等、管理员限定）；下单生成 **6 位数字取件码**（库内唯一、冲突重试）、**不计费**（`pay_amount=0`、`merchant_id=0`）；代收 `status` 沿用代买枚举的语义映射（1 已受理 → 2 已到站 → 3 已取件，核销列下期）；`services/notice_scheduler.py` 新增公有 `push_to_user()`（B18 私密推送机制的**单用户版**，B31 到件通知复用） |

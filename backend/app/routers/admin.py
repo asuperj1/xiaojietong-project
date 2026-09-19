@@ -310,6 +310,18 @@ def notices_purge_private(body: NoticePurgeIn, _admin: dict = Depends(get_curren
     return ok(notice_scheduler.purge_private(kind=body.kind, ref_id=body.ref_id))
 
 
+@router.post("/takeaway/orders/{order_id}/arrive")
+def takeaway_arrive(order_id: int, admin: dict = Depends(get_current_admin)):
+    """代收到件登记（B31）：写 `arrived_at` 并向下单人发**一条**站内通知。
+
+    驿站签收是运营动作 —— 本期没有驿站账号体系，由管理员代行（`operator_id` 回显操作人）。
+    幂等：重复调用**不重复投递**，只回报当前状态与 `notified=false`。
+    """
+    from app.services import takeaway
+
+    return ok(takeaway.arrive(order_id, operator_id=int(admin["id"])))
+
+
 @router.post("/knowledge/index")
 def knowledge_index(force: bool = False, _admin: dict = Depends(get_current_admin)):
     """重建知识库索引（B15：Celery 异步执行）。

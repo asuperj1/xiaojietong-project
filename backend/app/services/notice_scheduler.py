@@ -187,6 +187,33 @@ def _deliver(
     return int(rows[0]["id"]) if rows else 0
 
 
+def push_to_user(
+    kind: str,
+    ref_id: int,
+    stage: str,
+    title: str,
+    content: str,
+    user_id: int,
+    score: float = 1.0,
+    reason: str = "",
+    now: Optional[datetime] = None,
+) -> int:
+    """对**单个用户**发一条站内推送（B31 到件通知等复用 B18 的私密推送机制）。
+
+    - 通知行写在 `campus_notice`，用 `target_grade = __push:<kind>:<ref_id>:<stage>` 作幂等键；
+      因此**不会**出现在公共通知列表里（`private_notice_ids()` 会按 id 剔除），
+      但**本人**可经 `/life/notices/unread`、`/life/notice-feed` 看到 —— 这就是"站内通知"的闭环。
+    - 投递记录写 `notice_delivery`（`ON DUPLICATE KEY UPDATE`）：重复投递只刷新得分/理由。
+
+    返回投递记录 id（调用方可忽略）。
+    """
+    now = now or datetime.now()
+    notice_id = _find_push_notice(kind, ref_id, stage)
+    if notice_id is None:
+        notice_id = _create_push_notice(kind, ref_id, stage, title, content, now)
+    return _deliver(notice_id, int(user_id), score, reason or title)
+
+
 # ------------------------------------------------------------ 待办来源 ----
 
 def _reminder_rows(now: datetime, user_id: Optional[int], limit: int) -> list[dict]:
