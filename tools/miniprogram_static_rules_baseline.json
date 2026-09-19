@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "description": "F22 小程序端静态检查 · 已登记的历史违规（baseline）。规则：条目按 rule+file+identity 精确匹配（不含行号）；新增违规会阻塞门禁；条目对应的违规一旦消失会报 STALE 并同样阻塞，请在修好页面的同一个 PR 里删掉该条目。新增条目必须手工添加并写明 reason（禁止用脚本自动灌入，避免把新违规洗成历史债务）。可选的 evidence 字段用于提醒【登记后证据是否变了】（不阻塞）。",
+  "entries": [
+    {
+      "rule": "R2_MISSING_LOWER_TRIGGER",
+      "file": "pages/life/index.js",
+      "identity": "",
+      "reason": "FRONT-08 遗留：/life/merchants 是服务端分页（page/size），但页面无 onReachBottom / bindscrolltolower，第 21 条之后取不到",
+      "evidence": "分页拉取但无触底钩子：request('/life/merchants', { data: { category: cat.value, page: 1, size: 20 }, })",
+      "registered": "2026-09-18",
+      "ref": "docs/项目审计报告20260912序1.md:826",
+      "owner": "成员1（页面修复任务，非 F22 tooling）"
+    },
+    {
+      "rule": "R2_MISSING_LOWER_TRIGGER",
+      "file": "pages/life/notices.js",
+      "identity": "",
+      "reason": "FRONT-08 遗留：/life/notices 与 /life/notice-feed 都是 page/size 分页，但页面无触底加载钩子",
+      "evidence": "分页拉取但无触底钩子：request(path, { data: { page: 1, size: 20 } })",
+      "registered": "2026-09-18",
+      "ref": "docs/项目审计报告20260912序1.md:826",
+      "owner": "成员1（页面修复任务，非 F22 tooling）"
+    },
+    {
+      "rule": "R2_MISSING_LOWER_TRIGGER",
+      "file": "pages/agent/index.js",
+      "identity": "",
+      "reason": "GET /agent/tasks 是服务端分页（backend/app/routers/agent.py:77-92 的 page/size + paged()），页面 index.wxml:29 只渲染 wx:for 且无加载更多 → 第 21 条之后的任务取不到",
+      "evidence": "分页拉取但无触底钩子：request('/agent/tasks', { data: { page: 1, size: 20 } })",
+      "registered": "2026-09-18",
+      "ref": "backend/app/routers/agent.py:77-92 · miniprogram/pages/agent/index.wxml:29",
+      "owner": "成员1（页面修复任务，非 F22 tooling）"
+    }
+  ]
+}
