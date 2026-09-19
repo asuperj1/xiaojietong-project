@@ -146,21 +146,35 @@ def _find_push_notice(kind: str, ref_id: int, stage: str) -> Optional[int]:
 
 
 def _create_push_notice(
-    kind: str, ref_id: int, stage: str, title: str, content: str, now: datetime
+    kind: str, ref_id: int, stage: str, title: str, content: str, now: datetime,
+    *,
+    deadline: Optional[datetime] = None,
+    importance: Optional[int] = None,
 ) -> int:
-    _, notice_id = cpp_bridge.execute(
-        "INSERT INTO campus_notice (title, content, source, category, target_grade, publish_time) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        [
-            title[:MAX_TITLE_CHARS],
-            content,
-            PUSH_SOURCE,
-            PUSH_CATEGORY,
-            _marker(kind, ref_id, stage),
-            now.strftime("%Y-%m-%d %H:%M:%S"),
-        ],
+    """创建推送通知行。
+
+    B29 起改走**统一入库入口** `ingest_notice`，顺带把扩展字段落库 —— 此前
+    `campus_notice` 的入库路径一个都没调抽取服务，所以 `deadline`/`materials`/
+    `importance` 一直是空的（B18 的推送文案里那份"需要材料"永远拼不出来）。
+
+    推送行是**系统生成**的，`deadline` / `importance` 调用方本来就知道准确值，
+    所以显式传入，不让抽取器去猜自己拼出来的文案；`materials` 仍交给抽取
+    （正文里若带了材料说明，这里能捡回来）。
+    """
+    from app.services.notice_ingest import ingest_notice   # 延迟导入：避免模块级循环
+
+    result = ingest_notice(
+        title=title[:MAX_TITLE_CHARS],
+        content=content,
+        source=PUSH_SOURCE,
+        category=PUSH_CATEGORY,
+        target_grade=_marker(kind, ref_id, stage),
+        publish_time=now.strftime("%Y-%m-%d %H:%M:%S"),
+        deadline=deadline,
+        importance=importance,
+        now=now,
     )
-    return int(notice_id)
+    return result.notice_id
 
 
 def _deliver(
@@ -360,6 +374,7 @@ def dispatch(
                     f"你的待办「{content_text}」{short}。"
                     f"\n截止时间：{_fmt(deadline)}",
                     base,
+                    deadline=deadline,
                 )
                 delivery_id = _deliver(
                     notice_id, uid, STAGE_RULES[stage][1],
@@ -425,6 +440,7 @@ def dispatch(
                     body += f"\n需要材料：{materials}"
                 notice_id = _create_push_notice(
                     "notice", nid, stage, f"{head} {title}", body, base,
+                    deadline=deadline, importance=imp,
                 )
                 sent = 0
                 for u in users:

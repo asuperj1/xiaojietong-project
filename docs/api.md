@@ -606,6 +606,11 @@ refresh_token 载荷同样带 `tv`；老 refresh_token 无 `tv` 时按 0 处理�
 > （服务端用 `information_schema` 探测列是否存在，不存在就不查、不报错，补查也直接跳过）。
 > `importance` 参与打分：通知流 `score += 0.2 × importance`（缺省 0，不改变旧排序）；
 > 分层推送（B18）同样把重要度计入推送得分，并在正文追加「需要材料：…」。
+> **v1.26 起字段来源（B29/B30）**：这三列由**入库时**自动抽取写入
+> （`services/notice_ingest.py`：`deadline` 走 C27 时间抽取、`importance` 走 C28 重要度、
+> `materials` 走材料清单抽取）；存量数据用 `python -m app.cli.notice_backfill` 回填。
+> **抽取失败不阻塞入库**（降级为 `null`，原因记入日志）——
+> 宁可少一个字段，也不会让一条通知写不进去。
 
 ### POST /life/notices/read-batch — 批量已读（v1.9 新增）
 请求 `{ "notice_ids": [1,2,3] }` → 响应 `{ "updated": 3 }`
@@ -939,3 +944,4 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.23 | 2026-09-16 | **B32 语音转文字**：新增 `POST /voice/transcribe`（wav/mp3/m4a/ogg/webm/amr，**按文件头魔数判定类型**，不信 `Content-Type`）；ASR 后端**配置驱动可插拔**（`XJT_ASR_BACKEND` = `none` / `http` / `whisper`，whisper 为**可选依赖、不进 requirements**）；**失败一律明确回码不静默**——格式/大小/时长 `1001`、服务不可用 `5002`、转写失败 `5003`（本次新增）；单文件 ≤2MB、时长 3~10 秒（WAV 精确校验，其它容器按大小兜底） |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
 | v1.24 | 2026-09-17 | **C36 抽取服务化（统一入口 + 与对话模型隔离）**：新增 `services/extract_model.py`（`XJT_EXTRACT_BACKEND` = `ollama`/`http`/`none`，`BASE_URL`/`MODEL`/`MAX_CHARS`/`MAX_CONCURRENCY`/`KEEP_ALIVE` 独立配置；失败**不静默降级**——抛 `ExtractUnavailable`/`ExtractFailure`，绝不返回 `{}`）；`secondhand_ai` 改接统一入口，`POST /secondhand/items/ai-describe` 新增 `model_truncated`（输入过长时先裁备注/标题，保证送进模型的是完整 JSON）；新增 `core/net.py`（回环地址绕过系统代理，修复 Windows 注册表代理导致的 502）；`GET /health/detail` 新增 `extract` 段（配置 / `available` / `ready` / **`isolation`** —— 只换模型不换地址**不算**隔离） |
+| v1.26 | 2026-09-18 | **B29 通知入库接入抽取 + B30 存量回填**（**接口契约不变**）：新增 `services/notice_ingest.py` —— 统一入库入口 `ingest_notice()` 在写入 `campus_notice` 时自动抽取 `deadline`（C27 时间抽取）/ `materials`（材料清单）/ `importance`（C28 重要度），显式传入的值优先；**抽取失败不阻塞入库**（降级为 `null` 并记录原因），未导入 `14_notice_extend.sql` 时按 B20 的口径**不写扩展列**。新增材料清单抽取：只认「标记词 + 冒号」形式（`需提交材料：成绩单、推荐信`），**宁可漏抽也不误抽**（中文没有词边界，硬猜会把说明文字写进材料列）。B18 的推送行改走该入口。新增回填命令 `python -m app.cli.notice_backfill`（`--dry-run` / `--limit` / `--json`，只补空值、可重复执行）。§10 的通知扩展字段自此**入库即有值**，不再依赖手工补数据 |
