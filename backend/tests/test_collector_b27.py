@@ -41,6 +41,7 @@ from app.collector.pipeline import (
     run_config,
 )
 from app.collector.robots import DEFAULT_USER_AGENT
+from app.collector.safety import check_url
 
 # ------------------------------------------------------------------ 夹具 ----
 
@@ -444,7 +445,8 @@ def test_load_sources_rejects_non_list_sources(tmp_path):
 
 
 def test_run_config_skips_disabled_and_filters_by_key(tmp_path):
-    disabled = {**SOURCE, "key": "off", "enabled": False, "url": ORIGIN + "/off/"}
+    disabled = {**SOURCE, "key": "off", "name": "已停用源", "enabled": False,
+                "url": ORIGIN + "/off/"}
     path = _write_config(tmp_path, [SOURCE, disabled])
     clock = FakeClock()
     http = FakeHttp(_pages())
@@ -631,3 +633,182 @@ def test_robots_gate_really_fetches_robots_txt():
 
     assert decision.allowed is True       # 该路径返回的不是 robots 规则 → 无限制
     assert seen == DEFAULT_USER_AGENT
+
+
+# ======================= review 复检：SSRF / 入库隔离 / 配置唯一性 ====
+#
+# 对应 review 第三轮的三条发现。SSRF 那条**必须端到端跑**：它关心的不是
+# "函数返回值对不对"，而是"有没有真的把请求打到内网去"。
+
+LIST_HTML_WITH_SSRF = """<html><body><ul class="news-list">
+  <li><a href="/notice/1.html">正常通知</a></li>
+  <li><a href="http://127.0.0.1:9/secret">内网探测</a></li>
+  <li><a href="http://169.254.169.254/latest/meta-data/iam/">云主机元数据</a></li>
+</ul></body></html>"""
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1/secret",
+    "http://127.0.0.1:8080/x",
+    "http://10.1.2.3/x",
+    "http://192.168.1.1/x",
+    "http://172.16.0.9/x",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://[::1]/x",
+    "http://0.0.0.0/x",
+    "http://localhost:9000/x",
+    "http://db.internal/x",
+])
+def test_safety_blocks_internal_targets(url):
+    allowed, reason = check_url(url)
+    assert allowed is False and reason
+
+
+@pytest.mark.parametrize("url", [
+    "ftp://example.com/x",
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "data:text/plain;base64,SGk=",
+    "",
+])
+def test_safety_blocks_non_http_schemes(url):
+    allowed, reason = check_url(url)
+    assert allowed is False and reason
+
+
+def test_safety_blocks_hostname_that_resolves_to_internal():
+    """域名本身看着是公网的，但解析到内网 —— 只看字面量会漏掉这一类。"""
+    allowed, reason = check_url("http://content.example.edu.cn/x",
+                                resolver=lambda host: ["10.0.0.7"])
+    assert allowed is False
+    assert "10.0.0.7" in reason
+
+
+def test_safety_allows_cross_origin_public_host():
+    """跨域的**公网**主机仍允许：有些学校把正文放在 content.xxx.edu.cn。
+
+    这是刻意的取舍 —— 强制"详情页必须与源站同源"会漏采合法正文，
+    与 robots 的口径一致：只拦"明显不该去的地方"。
+    """
+    allowed, _ = check_url("http://content.example.edu.cn/x",
+                           resolver=lambda host: ["93.184.216.34"])
+    assert allowed is True
+
+
+def test_safety_allows_unresolvable_host():
+    """解析不出来就放行 —— 解析失败 ⇒ 连接也会失败，请求发不出去，不构成 SSRF。
+
+    反过来（在这里拒绝）的代价是：DNS 故障会被误报成"安全问题"，把排查带偏。
+    错误信息由 HTTP 层给（"抓取失败"）才准确。
+    """
+    allowed, reason = check_url("http://nope.invalid/x", resolver=lambda host: [])
+    assert allowed is True and reason == ""
+
+
+def test_ssrf_link_is_blocked_before_any_request_is_sent():
+    """列表页里指向内网/云元数据的链接：**一条请求都不能发出去**，连 robots 都不问。
+
+    这正是 review 实测的链路 —— 原先 `guard.before` 会先替内网主机取一次
+    `robots.txt`（那本身就是一次打到内网的外发请求），而内网对 robots.txt 通常
+    返回 404，按 RFC 9309 恰好等于"无限制" ⇒ 放行 ⇒ 正文被抓走入库。
+    """
+    clock = FakeClock()
+    robots = FakeRobots({})          # 未登记 → 一律 404 = 无限制（review 走的正是这条）
+    guard = FetchGuard(
+        robots=RobotsGate(fetcher=robots, clock=clock),
+        journal=CollectJournal(path=""),
+        default_qps=0.0,
+        limiter_kwargs={"clock": clock, "sleep": clock.sleep},
+    )
+    http = FakeHttp(_pages(LIST_HTML_WITH_SSRF, numbers=(1,)))
+    store = FakeStore()
+
+    result = collect_source(SOURCE, guard=guard, fetcher=HttpFetcher(opener=http), store=store)
+
+    # 正常那条照常采到
+    assert result.inserted == 1
+    assert [r["title"] for r in store.rows] == ["第1条通知"]
+    # 内网那两条：请求一次都没发出去（**包含** robots 探测）
+    touched = http.calls + robots.calls
+    assert not any(
+        host in call for call in touched for host in ("127.0.0.1", "169.254.169.254")
+    ), f"不该有任何请求指向内网，实际：{touched}"
+    assert robots.calls == [ORIGIN + "/robots.txt"]    # 只问了源站自己的 robots
+    # 被拦的两条要报出来（该报警照报，退出码会是 1）
+    assert len(result.errors) == 2
+    assert all("安全闸门" in e for e in result.errors)
+    assert result.ok is False
+
+
+class _FlakyStore(FakeStore):
+    """第 `fail_at` 次 insert 抛异常，其余正常 —— 模拟「标题过长」这类 DB 错误。
+
+    用**调用次数**计数，而不是 `len(self.rows)`：失败的插入不会让行数增加，
+    用行数判断会把它后面的每一条都误伤（只剩第一条成功）。
+    """
+
+    def __init__(self, fail_at: int = 2, existing=()) -> None:
+        super().__init__(existing)
+        self.fail_at = fail_at
+        self.attempts = 0
+
+    def insert(self, *, title, content, source_name, category, publish_time=""):
+        self.attempts += 1
+        if self.attempts == self.fail_at:
+            raise RuntimeError('(1406, "Data too long for column \'title\' at row 1")')
+        return super().insert(title=title, content=content, source_name=source_name,
+                              category=category, publish_time=publish_time)
+
+
+def test_insert_failure_does_not_break_the_rest():
+    """一条入库失败不该拖垮整条流水线：该报警照报，其余条目照常入库。"""
+    result, store, _, _ = _run(store=_FlakyStore(fail_at=2))
+    assert (result.fetched, result.inserted) == (3, 2)
+    assert len(result.errors) == 1 and "入库失败" in result.errors[0]
+    assert result.ok is False
+    assert [r["title"] for r in store.rows] == ["第1条通知", "第3条通知"]
+
+
+def test_insert_failure_does_not_stop_later_sources(tmp_path):
+    """一个源入库失败，**后面的源必须照跑** —— review 实测原先整轮采集会报废。"""
+    cfg = _write_config(tmp_path, [
+        {**SOURCE, "key": "src-a", "name": "源A"},
+        {**SOURCE, "key": "src-b", "name": "源B"},
+    ])
+
+    class BoomForA(FakeStore):
+        def insert(self, *, title, content, source_name, category, publish_time=""):
+            if source_name == "源A":
+                raise RuntimeError("模拟 DB 故障")
+            return super().insert(title=title, content=content, source_name=source_name,
+                                  category=category, publish_time=publish_time)
+
+    clock = FakeClock()
+    http = FakeHttp(_pages())
+    results = run_config(cfg, guard=_guard(clock), fetcher=HttpFetcher(opener=http),
+                         store=BoomForA())
+
+    assert [r.key for r in results] == ["src-a", "src-b"]
+    assert results[0].ok is False and results[0].inserted == 0
+    assert results[1].ok is True and results[1].inserted == 3    # 后面的源不受影响
+
+
+def test_load_sources_rejects_duplicate_name(tmp_path):
+    """`name` 撞车会让两个源互相判重、静默少采 —— 必须在加载时就报错。"""
+    path = _write_config(tmp_path, [
+        {"key": "a", "name": "重名", "url": ORIGIN + "/a/"},
+        {"key": "b", "name": "重名", "url": ORIGIN + "/b/"},
+    ])
+    with pytest.raises(SystemExit) as exc:
+        load_sources(path)
+    assert "name 重复" in str(exc.value)
+
+
+def test_load_sources_rejects_duplicate_key(tmp_path):
+    path = _write_config(tmp_path, [
+        {"key": "same", "name": "甲", "url": ORIGIN + "/a/"},
+        {"key": "same", "name": "乙", "url": ORIGIN + "/b/"},
+    ])
+    with pytest.raises(SystemExit) as exc:
+        load_sources(path)
+    assert "key 重复" in str(exc.value)

@@ -82,6 +82,35 @@ RateLimiter("lib", 0.1).interval(crawl_delay=3)   # → 10.0s，配置更严就�
 现在有三项测试专门钉住这一点：一项检查常量可 latin-1 编码，
 一项**真起本地 HTTP 服务发一次请求**并核对服务端收到的 UA，一项让 `RobotsGate` 真去取 robots.txt。
 
+### 3.4 出网安全闸门（SSRF）
+
+`extract_list` 只对页面里的 `href` 做 `urljoin` 补全，**不校验主机** —— 列表页里一条指向
+别的主机的链接，会让采集器真的去抓它；而且在抓之前还会先替这个主机取一次 `robots.txt`
+（`FetchGuard.before` 干的），**那本身就已经是一次打到内网的外发请求**。
+内网服务对 `robots.txt` 通常返回 404，按 RFC 9309 恰好等于"无限制"
+—— 于是**连最保守的 `on_robots_error="block"` 都放行**；云主机上的
+`http://169.254.169.254/latest/meta-data/...` 走的正是这条路（实例凭据会变成一条"校园通知"）。
+
+所以每个详情页 URL 在 `FetchGuard.before` **之前**先过 `safety.check_url`：
+
+| 拒绝 | 例子 |
+|---|---|
+| 非 http/https | `ftp://`、`file://`、`javascript:`、`data:` |
+| 私有 / 回环 / 链路本地 / 保留地址 | `10.x`、`192.168.x`、`127.0.0.1`、`169.254.169.254`、`::1`、`0.0.0.0` |
+| 一眼就是内网的主机名 | `localhost`、`*.internal`、`*.local`… |
+| **DNS 解析结果**落在内网 | `content.example.edu.cn` → `10.0.0.7`（只查字面量会漏掉这类） |
+
+**允许**跨域的公网主机（有些学校把正文放在 `content.xxx.edu.cn`）—— 强制"详情页必须同源"
+会漏采合法正文；这与 robots 的口径一致：只拦"明显不该去的地方"，不替运维做同源的决定。
+
+**解析失败是放行的**：解析不出来 ⇒ 连接也必然失败、请求发不出去、不构成 SSRF；
+在这里拒绝只会把普通的 DNS 故障误报成"安全问题"，把排查方向带偏。
+错误交给 HTTP 层报"抓取失败"才准确。
+
+**已知边界**：挡不住 DNS rebinding（解析时返回公网 IP、连接时返回内网 IP）——
+那要在**连接层**绑定 IP 校验才能根治，属比出网闸门更大的改造（应落在 `fetcher` 层），
+不能靠这里多写两行假装解决了。
+
 ---
 
 ## 4. CLI
@@ -196,6 +225,13 @@ python -m app.collector run <config.yml> --json result.json   # 结果落盘
    —— 用 A 去问"我能抓吗"、再用 B 去抓，等于绕过了刚拿到的许可。
 8. **选择器不认识就报错**（B27）：`parse_selector` 抛 `ValueError`，绝不静默返回空。
 9. **试跑不碰数据库**（B27）：`--dry-run` 连 `NoticeStore` 都不构造，保证它能在任何机器上跑。
+10. **安全闸门必须排在 robots 之前**（B27 review P1）：`safety.check_url` 要跑在
+    `FetchGuard.before` 前 —— 先问 robots 等于先把请求打到内网去，那时候再拦已经晚了。
+11. **抓取路径与入库路径对称隔离**（B27 review P2）：详情页失败 `continue`，
+    入库失败同样 `continue` 并记进 `errors` —— 一条数据有问题不该让整轮采集报废。
+12. **配置里的 `key` 与 `name` 都强制唯一**（B27 review P3）：判重键落在入库的
+    `source` 列（= name）上，name 撞车会让两个源互相判重、**静默少采**；
+    宁可加载时直接报错。
 
 ---
 
@@ -203,19 +239,21 @@ python -m app.collector run <config.yml> --json result.json   # 结果落盘
 
 ```bash
 cd backend
-python -m pytest tests/test_collector.py tests/test_collector_b27.py -q    # 74 项（其中 3 项真发本地 HTTP 请求）
+python -m pytest tests/test_collector.py tests/test_collector_b27.py -q    # 97 项（其中 3 项真发本地 HTTP 请求）
 ```
 
 `test_collector.py`（B26，30 项）覆盖：robots 允许/禁止/404 放行/5xx 保守拒绝/网络故障、
 缓存与过期、`Crawl-delay` 解析、限速取更严值、注册表复用、JSONL 落盘与坏行容错、
 `FetchGuard` 的拒绝路径 / 等待路径 / `respect_robots=false` 绕过路径 / 结果记录。
 
-`test_collector_b27.py`（B27，44 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
+`test_collector_b27.py`（B27，67 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
 列表页去重与相对链接补全、缺 `content` 选择器时退化为 body、
 **详情页逐条过 robots**（被禁的那条一条请求都不发、其余照常入库）、
 限速作用于每一次请求、`Crawl-delay` 压过 qps、单条失败不拖累其余、
 幂等重跑、`--dry-run` 不碰数据库、`--limit`、
-**空列表告警与 `--fail-on-empty`**、CLI 退出码与 `check` 回归。
+**空列表告警与 `--fail-on-empty`**、CLI 退出码与 `check` 回归；
+另有 review 复检补的三组：**出网安全闸门**（含"内网链接连 robots 都不去问"的端到端断言）、
+**单条入库失败不拖垮整轮**（含"后面的源照跑"）、**配置 key/name 唯一性**。
 
 **其中最后 3 项是"真发请求"的**（起一个只监听 `127.0.0.1` 随机端口的
 `http.server`，不注入 opener）：校验默认 UA 可 latin-1 编码、HTTP 请求能真的把 UA

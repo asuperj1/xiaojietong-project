@@ -34,6 +34,7 @@ from typing import Any, Iterable, Mapping, Optional
 from .dom import absolutize, clean_text, parse_html, select_all, select_first
 from .fetcher import FetchError, HttpFetcher
 from .robots import DEFAULT_USER_AGENT
+from .safety import check_url
 
 
 # ------------------------------------------------------------------ 结构 ----
@@ -93,7 +94,32 @@ def load_sources(config_path: str | Path) -> list[dict[str, Any]]:
     sources = data.get("sources") or []
     if not isinstance(sources, list):
         raise SystemExit(f"{path} 的 sources 必须是数组")
-    return [s for s in sources if isinstance(s, dict)]
+    usable = [s for s in sources if isinstance(s, dict)]
+    _check_unique(usable, path)
+    return usable
+
+
+def _check_unique(sources: list[dict[str, Any]], path: Path) -> None:
+    """`key` 与 `name` 都必须唯一。
+
+    `key` 唯一是 C21 的契约；**`name` 也要求唯一**是因为判重键落在入库的
+    `source` 列（= name）上：两个源 name 撞车时，后一个源的同名标题会被当成
+    "已存在"整条跳过 —— 那是**静默丢数据**，比报错难查得多。
+    宁可在这里直接失败。
+    """
+    for field_name in ("key", "name"):
+        seen: dict[str, int] = {}
+        for idx, src in enumerate(sources, 1):
+            value = str(_field(src, field_name, "") or "")
+            if not value:
+                continue
+            if value in seen:
+                raise SystemExit(
+                    f"{path} 的 sources 里 {field_name} 重复：{value!r}"
+                    f"（第 {seen[value]} 与第 {idx} 项）—— 请改成唯一值；"
+                    "name 重复会让两个源互相判重、静默少采"
+                )
+            seen[value] = idx
 
 
 def _field(source: Any, name: str, default: Any = None) -> Any:
@@ -167,7 +193,21 @@ class NoticeStore:
     **幂等键是 `(source, title)`**：`campus_notice` 没有 url 列（DDL 里没有，
     也不该为采集单独加），而"同一个来源下标题相同"在本项目的数据里已经足够判重
     （通知标题带日期/编号，重复抓取只会拿到一模一样的标题）。
-    查不到就插，查到就 skip —— 重跑整条流水线是安全的。
+    查不到就插，查到就 skip。
+
+    ⚠️ **"重跑安全"只在串行场景成立**：`exists()` 与 `insert()` 是两条独立语句、
+    中间没有事务，`campus_notice` 上也没有 `(source, title)` 唯一索引
+    （`db/sql/09_life.sql` 只有 `idx_category` / `idx_publish`）。
+    两个**并发**的 run 会同时判断"不存在"→ 双双插入 → 重复通知。
+    本模块的承诺是"今天跑一次、明天再跑一次不会重复"；
+    要提升到并发安全得先加唯一索引（属 schema 决策，要走
+    `docs/db-migration-convention.md`），不是这里能单方面决定的。
+
+    ⚠️ 判重用的 `source` 是**源的 name**（展示名，也是写进 `campus_notice.source`
+    的值），**不是 key** —— 查的就是这一列，用 key 会查不到自己刚插进去的行。
+    代价是两个源的 `name` 撞车时会互相误判（后一个源的同名标题被整条跳过、
+    静默丢数据），所以 `load_sources()` **强制 name 与 key 都唯一**：
+    撞车时直接报错，而不是让它悄悄少采。
     """
 
     def __init__(self, *, query=None, execute=None) -> None:
@@ -261,6 +301,14 @@ def collect_source(
     # ③ 逐条详情（**每条都要过闸门**，不是只过一次）
     for item in listed[:max(0, limit)]:
         detail_url = item["url"]
+        # ⚠️ 出网安全闸门必须排在 `guard.before` **之前**：robots 检查本身就要向这个
+        # 主机发一次请求（`<origin>/robots.txt`），先问 robots 等于先把请求打到内网去
+        # —— 那时候再拦已经晚了。详见 `safety.py`。
+        allowed, blocked_reason = check_url(detail_url)
+        if not allowed:
+            result.errors.append(f"详情页被安全闸门拦下（{blocked_reason}）：{detail_url}")
+            continue
+
         d2 = guard.before(source, detail_url)
         if not d2.allowed:
             result.errors.append(f"robots 拦截详情页：{detail_url}（{d2.reason}）")
@@ -290,12 +338,23 @@ def collect_source(
         if dry_run:
             continue
 
-        if store.exists(name, title):
-            result.skipped += 1
+        # ⚠️ 入库也要与抓取路径**对称地隔离**：一条数据有问题（标题超长、正文顶到
+        # TEXT 上限、MySQL 重启/断连）不该让 `run_config` 的循环中断 ——
+        # 那会让后面的源一条都不采、汇总表与 --json 报告全部拿不到，
+        # 运维只看到一段裸 traceback。记进 errors ⇒ ok=False ⇒ 退出码 1：
+        # 该报警照报，但后面的源照跑、报告照出。
+        try:
+            if store.exists(name, title):
+                result.skipped += 1
+                continue
+            store.insert(title=title, content=detail["content"], source_name=name,
+                         category=category, publish_time=detail["publish_time"])
+            result.inserted += 1
+        except Exception as exc:  # noqa: BLE001 - 单条入库失败不该拖垮整轮
+            result.errors.append(
+                f"入库失败：{title}（{type(exc).__name__}: {exc}）"
+            )
             continue
-        store.insert(title=title, content=detail["content"], source_name=name,
-                     category=category, publish_time=detail["publish_time"])
-        result.inserted += 1
 
     result.ok = not result.errors
     return result
