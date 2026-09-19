@@ -138,6 +138,88 @@ function request(path, { method = 'GET', data = {} } = {}) {
   })
 }
 
+// ==================== 文件上传（multipart） ====================
+
+/** 图片上传接口路径（契约：docs/api.md §12 —— `POST /upload/image`） */
+const UPLOAD_IMAGE_PATH = '/upload/image'
+
+/**
+ * 上传图片（multipart/form-data）—— F17 资料设置页上传头像使用。
+ *
+ * 与 `request()` 共用同一套语义，避免各页自己去拼 URL / token：
+ * - base URL 走 `config/env.js` 的 `getBaseUrl()`，解析失败同样转成**异步**错误通道
+ *   （不得同步逃逸，理由与 `request()` 完全一致）；
+ * - 自动携带 `Authorization: Bearer <token>`；
+ * - `code === 0` → resolve 后端 data（`{ url, size }`）；否则与 `request()` 一样，
+ *   登录态失效走 `handleAuthFailure`，其余业务错误 toast 后 reject（`err.code` 可用）。
+ *
+ * ⚠️ 必须用 `wx.uploadFile`：multipart 的 boundary 由框架生成，**不能**手写
+ * `Content-Type: application/json`，否则后端收不到文件（`upload.py` 只接受 multipart）。
+ *
+ * @param {string} filePath 本地临时文件路径（`wx.chooseMedia` 的 tempFilePath）
+ * @param {Object} [options]
+ * @param {string} [options.name='file'] 表单字段名（后端 `upload_image(file: UploadFile)`）
+ * @returns {Promise<any>} 成功 resolve 后端 data；失败 reject 携带 code 属性的 Error
+ */
+function uploadImage(filePath, { name = 'file' } = {}) {
+  let url
+  try {
+    url = getBaseUrl() + UPLOAD_IMAGE_PATH
+  } catch (e) {
+    console.error('[env] API 地址解析失败：', e)
+    wx.showToast({ title: ENV_ERROR_TOAST, icon: 'none' })
+    return Promise.reject(makeEnvError())
+  }
+
+  const token = wx.getStorageSync(TOKEN_KEY) || ''
+
+  return new Promise((resolve, reject) => {
+    wx.uploadFile({
+      url,
+      filePath,
+      name,
+      // 刻意不设置 Content-Type：由框架补 multipart/form-data 与 boundary
+      header: token ? { Authorization: 'Bearer ' + token } : {},
+      success(res) {
+        // 与 wx.request 不同：uploadFile 的 res.data 是**字符串**，需要自行解析
+        let body = res.data
+        if (typeof body === 'string') {
+          try {
+            body = JSON.parse(body)
+          } catch (e) {
+            body = null
+          }
+        }
+        if (!body || typeof body !== 'object' || typeof body.code === 'undefined') {
+          wx.showToast({ title: '上传失败，请稍后重试', icon: 'none' })
+          reject(new Error('上传响应格式错误'))
+          return
+        }
+
+        const { code, message, data: payload } = body
+        if (code === 0) {
+          resolve(payload)
+          return
+        }
+
+        const err = new Error(message || '上传失败')
+        err.code = code
+        if (AUTH_FAILURE_CODES.indexOf(code) !== -1) {
+          handleAuthFailure(code, message)
+          reject(err)
+          return
+        }
+        wx.showToast({ title: message || '上传失败', icon: 'none' })
+        reject(err)
+      },
+      fail() {
+        wx.showToast({ title: '网络异常，请稍后重试', icon: 'none' })
+        reject(new Error('网络异常，请稍后重试'))
+      },
+    })
+  })
+}
+
 // ==================== SSE 流式请求 ====================
 
 // UTF-8 部分解码：返回 { text, remaining }，remaining 为末尾不完整多字节序列的字节
@@ -385,4 +467,4 @@ function sseRequest(path, data = {}, { onSources, onChunk, onRefused, onCitation
 
 // 后端地址改为动态解析：导出 getBaseUrl 供调试/自检使用
 // （原 BASE_URL 为静态字符串，仓内已无调用方，故不再导出，避免误用静态值）
-module.exports = { request, sseRequest, getBaseUrl }
+module.exports = { request, sseRequest, uploadImage, getBaseUrl }

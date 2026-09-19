@@ -1,0 +1,71 @@
+<!-- 资料设置（需求 9 / F17）—— 上传头像 · 改昵称 · 绑学号
+     依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §2.5、§3.6
+     契约：GET/PUT /user/me、POST /upload/image（docs/api.md §2 / §12）
+     本页**不是** Tab 页：自定义 TabBar 不会渲染，因此只需为底部安全区留白（见 profile.wxss），
+     不叠加 F12 的 110rpx 底栏留白。 -->
+<view class="pf-page xj-page-bg {{glassFallback ? 'is-glass-fallback' : ''}}">
+  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
+
+  <block wx:elif="{{error}}">
+    <view class="xj-empty">
+      <text class="xj-empty-icon">⚠️</text>{{error}}
+      <view><button class="xj-btn-plain pf-retry" bindtap="fetch">重试</button></view>
+    </view>
+  </block>
+
+  <block wx:else>
+    <!-- 头像：点击整行 → 选图 → 上传（POST /upload/image）→ 落库（PUT /user/me {avatar}） -->
+    <view class="pf-card xj-glass-card">
+      <view
+        class="pf-avatar-row"
+        bindtap="chooseAvatar"
+        hover-class="pf-pressed"
+        hover-start-time="20"
+        hover-stay-time="140"
+      >
+        <image wx:if="{{user.avatar}}" class="pf-avatar" src="{{user.avatar}}" mode="aspectFill" />
+        <view wx:else class="pf-avatar pf-avatar-text">{{avatarText}}</view>
+        <view class="pf-avatar-info">
+          <view class="pf-avatar-title">头像</view>
+          <view class="pf-avatar-hint">{{avatarUploading ? '上传中…' : '点击更换头像'}}</view>
+        </view>
+        <text class="pf-arrow">›</text>
+      </view>
+    </view>
+
+    <!-- 昵称 / 学号：同一个「保存」提交（只发有改动的字段） -->
+    <view class="pf-card xj-glass-card">
+      <view class="pf-field">
+        <text class="pf-label">昵称</text>
+        <input
+          class="pf-input"
+          value="{{nickname}}"
+          maxlength="64"
+          placeholder="请输入昵称"
+          placeholder-class="pf-placeholder"
+          bindinput="onNicknameInput"
+        />
+      </view>
+      <view class="pf-error" wx:if="{{nicknameError}}">{{nicknameError}}</view>
+
+      <view class="pf-field pf-field-last">
+        <text class="pf-label">学号</text>
+        <input
+          class="pf-input"
+          value="{{studentNo}}"
+          maxlength="32"
+          placeholder="未绑定"
+          placeholder-class="pf-placeholder"
+          bindinput="onStudentNoInput"
+        />
+      </view>
+      <view class="pf-hint" wx:if="{{!studentNoError}}">学号用于身份认证，绑定后 7 天内只能修改一次</view>
+      <view class="pf-error" wx:if="{{studentNoError}}">{{studentNoError}}</view>
+    </view>
+
+    <view class="pf-actions">
+      <button class="xj-btn-primary pf-save" bindtap="save" disabled="{{saving}}">{{saving ? '保存中…' : '保存'}}</button>
+      <view class="pf-error pf-form-error" wx:if="{{formError}}">{{formError}}</view>
+    </view>
+  </block>
+</view>
