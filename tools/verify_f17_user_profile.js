@@ -275,10 +275,20 @@ function loadPage(rel, opts = {}) {
     },
     uploadFile(o) {
       state.uploads.push({ url: o.url, filePath: o.filePath, name: o.name, header: o.header || {} })
+      // uploadResponder 可返回：undefined=默认成功 / null=挂起 / '__FAIL__'=网络层失败 /
+      // '__NOT_JSON__'=非 JSON 响应体（如网关 HTML）/ 其它对象=该响应体
       const resp = state.uploadResponder
         ? state.uploadResponder(o, state.uploads.length)
         : OK({ url: 'https://cdn.example/avatar.png?e=1&s=sign', size: 2048 })
       if (resp === null) return
+      if (resp === '__FAIL__') {
+        if (o.fail) o.fail({ errMsg: 'uploadFile:fail mock' })
+        return
+      }
+      if (resp === '__NOT_JSON__') {
+        if (o.success) o.success({ statusCode: 200, data: '<html>gateway</html>' })
+        return
+      }
       // 真实 uploadFile 的 res.data 是**字符串**（与 wx.request 不同）
       if (o.success) o.success({ statusCode: 200, data: JSON.stringify(resp) })
     },
@@ -739,6 +749,38 @@ async function main() {
     page.chooseAvatar()
     await tick()
     check('超过 5MB 的图片本地拦截（不发上传）', state.uploads.length === 0 && state.toasts.some((t) => /5MB/.test(t)), JSON.stringify(state.toasts))
+  }
+
+  {
+    // 上传的网络层失败：必须有可见反馈，且不得写库
+    const { page, state } = await probeProfilePage({ uploadResponder: () => '__FAIL__' })
+    page.chooseAvatar()
+    await tick()
+    check('上传网络失败 → toast 反馈且不发 PUT', state.toasts.length >= 1 && putMe(state).length === 0, `toasts=${JSON.stringify(state.toasts)}`)
+    check('上传网络失败 → avatarUploading 复位（不永久卡在上传中）', page.data.avatarUploading === false)
+  }
+
+  {
+    // 上传返回非 JSON（网关/HTML）：不得静默，也不得写库
+    const { page, state } = await probeProfilePage({ uploadResponder: () => '__NOT_JSON__' })
+    page.chooseAvatar()
+    await tick()
+    check('上传返回非 JSON → 给出失败反馈且不发 PUT', state.toasts.length >= 1 && putMe(state).length === 0, `toasts=${JSON.stringify(state.toasts)}`)
+  }
+
+  {
+    // 上传时登录态失效（2001）：必须复用统一登录失效处理（清态 + 回登录页）
+    const { page, state } = await probeProfilePage({
+      storage: { token: 'stale', refresh_token: 'r', user: FIXTURE_USER },
+      uploadResponder: () => ({ code: 2001, message: '未登录', data: {} }),
+    })
+    page.chooseAvatar()
+    await tick()
+    check(
+      '上传遇 2001 → 复用统一登录失效处理（清 token + 回登录页）',
+      state.storage.token === undefined && state.reLaunch[0] === '/pages/auth/login',
+      `storage=${JSON.stringify(state.storage)} reLaunch=${JSON.stringify(state.reLaunch)}`
+    )
   }
 
   {
