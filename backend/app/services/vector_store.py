@@ -300,9 +300,26 @@ class NumpyVectorStore(VectorStore):
 _vector_store: Optional[VectorStore] = None
 _vector_store_lock = threading.Lock()
 
+#: 仓库里的 `backend/` 目录（本文件在 `backend/app/services/` 下）
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
 
 def _persist_dir() -> Path:
-    return Path(settings.rag_vector_dir).resolve()
+    """向量库持久化目录（**绝对路径，与当前工作目录无关**）。
+
+    ⚠️ 修复记录（C41）：原实现是 `Path(settings.rag_vector_dir).resolve()` ——
+    那是**相对当前工作目录**解析，于是「从仓库根跑 `ai/eval/rag_bench.py`」与
+    「从 `backend/` 起 uvicorn」会指向**两个不同的库**：
+
+    - `backend/` 起服务 → `backend/data/rag`（本机上是有数据的那个）
+    - 仓库根跑评测   → `<repo>/data/rag`（仓库里跟了一份**空库**）→ `count() == 0`
+      → 向量检索必然空手而归 → `rag.py` **静默降级成关键词**，
+      而 C14 的 `hit@3` 基线正是在这种状态下量出来的（指标看着正常，验的不是向量检索）。
+
+    `config.py` 明确写了「相对 `backend/`」，本函数按该语义锚定，消除 CWD 依赖。
+    """
+    raw = Path(settings.rag_vector_dir)
+    return (raw if raw.is_absolute() else BACKEND_DIR / raw).resolve()
 
 
 def get_vector_store(force_reload: bool = False) -> VectorStore:
