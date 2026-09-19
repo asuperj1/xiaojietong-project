@@ -1,18 +1,28 @@
-"""`python -m app.collector` —— 采集前合规自检（B26）。
+"""`python -m app.collector` —— 采集 CLI（B26 合规自检 + B27 采集入库）。
 
-用途：**在真正开抓之前**，把配置里的每个采集源过一遍：
+`check`：**在真正开抓之前**，把配置里的每个采集源过一遍：
 
 1. 参数是否合法（url 是 http/https、`rate_limit_qps` 非负）；
 2. robots.txt 是否允许抓它（联网，除 `--offline`）；
 3. 实际生效的抓取间隔是多少（`max(1/qps, Crawl-delay)`）。
 
-退出码：`0` = 所有启用中的源都可抓；`1` = 存在被 robots 拒绝或参数非法的源。
+`run`：按同一份配置**真正抓取并入库**（B27），全程过 B26 的闸门并留痕。
+
+`check` 退出码：`0` = 所有启用中的源都可抓；`1` = 存在被 robots 拒绝或参数非法的源。
+`run` 退出码：`0` = 每个源都没有错误；`1` = 至少一个源报错或被拒绝。
+「列表页一条都没匹配到」（站点改版 / 选择器写错）默认只在 **stderr** 打 ⚠️ 而不判失败
+—— 页面本来可能就是空的；要让定时任务据此报警就加 `--fail-on-empty`。
 
 用法：
     cd backend
+    # —— 合规自检（B26），不会写入任何数据 ——
     python -m app.collector check app/adapters/configs/xiaojietong.yml
     python -m app.collector check <config.yml> --offline        # 只校验参数，不联网
     python -m app.collector check <config.yml> --json report.json
+
+    # —— 采集入库（B27）——
+    python -m app.collector run <config.yml> --dry-run          # 试跑：抓取+解析，不写库
+    python -m app.collector run <config.yml> --source jlu_oa --limit 10
 """
 from __future__ import annotations
 
@@ -22,29 +32,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import FetchGuard
+from .fetcher import HttpFetcher
 from .journal import CollectJournal
 from .limiter import RateLimiter
+from .pipeline import NoticeStore, load_sources, run_config
 from .robots import RobotsGate
 
-OK, FAIL, SKIP = "✅", "❌", "⏭"
-
-
-def _load_sources(path: Path) -> list[dict[str, Any]]:
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() in (".yml", ".yaml"):
-        try:
-            import yaml  # noqa: PLC0415 - 按需导入，JSON 配置时无需 PyYAML
-        except ImportError as exc:  # pragma: no cover
-            raise SystemExit(f"读取 YAML 需要 PyYAML：{exc}") from exc
-        data = yaml.safe_load(text)
-    else:
-        data = json.loads(text)
-    if not isinstance(data, dict):
-        raise SystemExit(f"配置顶层必须是对象：{path}")
-    sources = data.get("sources") or []
-    if not isinstance(sources, list):
-        raise SystemExit(f"{path} 的 sources 必须是数组")
-    return [s for s in sources if isinstance(s, dict)]
+OK, FAIL, WARN, SKIP = "✅", "❌", "⚠️", "⏭"
 
 
 def _validate(src: dict[str, Any]) -> list[str]:
@@ -77,7 +72,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if not path.exists():
         print(f"{FAIL} 配置不存在：{path}")
         return 1
-    sources = _load_sources(path)
+    sources = load_sources(path)
     if not sources:
         print(f"{FAIL} {path} 里没有 sources")
         return 1
@@ -154,8 +149,79 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """B27：按配置真正抓取并入库（每一条请求都过 B26 的闸门并留痕）。"""
+    path = Path(args.config)
+    if not path.exists():
+        print(f"{FAIL} 配置不存在：{path}")
+        return 1
+
+    guard = FetchGuard(default_qps=args.qps, on_robots_error=args.on_robots_error)
+    fetcher = HttpFetcher(timeout=args.timeout, user_agent=guard.user_agent)
+
+    print("=" * 78)
+    print(f"采集执行 · {path}")
+    print(f"  模式：{'试跑 DRY-RUN（不写库）' if args.dry_run else '正式入库'}"
+          f"　｜　每源上限：{args.limit} 条"
+          f"　｜　默认 qps：{args.qps}")
+    print(f"  合规：robots 取不到时 {'放行' if args.on_robots_error == 'allow' else '保守拒绝'}"
+          f"　｜　日志：{guard.journal.path or '（未落盘）'}")
+    print("=" * 78)
+
+    results = run_config(
+        path, guard=guard, fetcher=fetcher,
+        store=None if args.dry_run else NoticeStore(),
+        only=args.source, limit=args.limit, dry_run=args.dry_run,
+    )
+    if not results:
+        print(f"{FAIL} 没有匹配的启用源（--source 是否写错？）")
+        return 1
+
+    bad = 0
+    empty = 0
+    for r in results:
+        if r.blocked:
+            print(f"  {FAIL} {r.key:<20} 被拒绝：{r.blocked}")
+        else:
+            # 空列表用 ⚠️ 而不是 ✅：退出码语义不变，但别让一个"✅"把上面的告警盖过去
+            mark = FAIL if not r.ok else (WARN if r.empty_list else OK)
+            print(f"  {mark} {r.key:<20} 列表 {r.listed} 条 → 详情 {r.fetched} 条 → "
+                  f"新增 {r.inserted}，跳过 {r.skipped}")
+        for err in r.errors:
+            print(f"        · {err}")
+        if not r.ok:
+            bad += 1
+        if r.empty_list:
+            # 走 stderr：退出码可能仍是 0，但日志里必须留下显式痕迹，
+            # 否则站点改版后采集会**安静地停止工作**而无人察觉。
+            empty += 1
+            print(f"  {WARN} {r.key:<20} 列表选择器匹配到 0 条 —— 确认站点结构未变"
+                  f"（selectors.list: {r.list_selector or '（未配置）'}）", file=sys.stderr)
+
+    print("-" * 78)
+    print(f"共 {len(results)} 个源；新增 {sum(r.inserted for r in results)} 条；"
+          f"异常 {bad} 个" + (f"；空列表 {empty} 个" if empty else ""))
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps({"config": str(path), "dry_run": args.dry_run,
+                        "sources": [r.as_dict() for r in results]},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"结果已落盘：{args.json}")
+    print("=" * 78)
+
+    if bad or (args.fail_on_empty and empty):
+        print(f"{FAIL} 有源执行失败，详见上方错误与采集日志")
+        return 1
+    if empty:
+        print(f"{WARN} 有 {empty} 个源列表为空 —— 已按非失败处理；"
+              f"定时任务可加 --fail-on-empty 据此报警")
+    print(f"{OK} 采集完成")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m app.collector", description="采集合规工具（B26）")
+    ap = argparse.ArgumentParser(
+        prog="python -m app.collector", description="采集工具（B26 合规自检 / B27 采集入库）")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     check = sub.add_parser("check", help="检查采集源是否可抓（robots + 参数）")
@@ -165,6 +231,22 @@ def main(argv: list[str] | None = None) -> int:
                        help="robots.txt 取不到时的策略（默认 block，保守）")
     check.add_argument("--json", default="", help="自检报告落盘路径")
     check.set_defaults(func=cmd_check)
+
+    run = sub.add_parser("run", help="按配置抓取并入库（B27）")
+    run.add_argument("config", help="学校适配器配置（yml/yaml/json）")
+    run.add_argument("--source", action="append", default=[], metavar="KEY",
+                     help="只跑指定的源 key（可重复；默认跑全部启用源）")
+    run.add_argument("--limit", type=int, default=20, help="每个源最多抓多少条详情（默认 20）")
+    run.add_argument("--dry-run", action="store_true", help="试跑：抓取并解析，但不写数据库")
+    run.add_argument("--fail-on-empty", action="store_true",
+                     help="列表页一条都没匹配到时以退出码 1 结束（默认只在 stderr 告警）")
+    run.add_argument("--timeout", type=float, default=10.0, help="单次请求超时秒数（默认 10）")
+    run.add_argument("--qps", type=float, default=0.5,
+                     help="源里没写 rate_limit_qps 时用的默认值（默认 0.5）")
+    run.add_argument("--on-robots-error", choices=("block", "allow"), default="block",
+                     help="robots.txt 取不到时的策略（默认 block，保守）")
+    run.add_argument("--json", default="", help="采集结果落盘路径")
+    run.set_defaults(func=cmd_run)
 
     args = ap.parse_args(argv)
     return int(args.func(args))

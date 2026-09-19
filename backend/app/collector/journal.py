@@ -67,7 +67,14 @@ class CollectJournal:
         clock: Callable[[], float] = time.time,
         keep_memory: int = 200,
     ) -> None:
-        resolved = path if path is not None else os.environ.get(ENV_LOG_PATH) or DEFAULT_LOG_RELPATH
+        if path is None:
+            env = os.environ.get(ENV_LOG_PATH)
+            # 区分"没设这个变量"与"显式设成空串"：前者走默认路径，后者表示
+            # **不落盘**（只走 logging）。原先的 `env or DEFAULT_LOG_RELPATH` 会把
+            # 空串也当成默认路径，"关掉落盘"实际上做不到，与上面的说明矛盾。
+            resolved = DEFAULT_LOG_RELPATH if env is None else env
+        else:
+            resolved = path
         self.path = Path(resolved) if resolved else None
         self.echo = bool(os.environ.get(ENV_LOG_ECHO)) if echo is None else echo
         self._clock = clock

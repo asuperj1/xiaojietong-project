@@ -28,9 +28,15 @@ from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
 #: 默认 UA：**必须能表明身份**（不伪装浏览器），并给出可联系的地址。
+#:
+#: ⚠️ 这里**只能放 ASCII**：HTTP 头字段在 `http.client` 里按 latin-1 编码，
+#: 混进任何中文都会让**每一次**请求在发出去之前就抛 `UnicodeEncodeError`
+#: —— B26 曾因此 100% 抓不到任何页面（robots.txt 与业务页面一起失效，
+#: 而且报错被包成"抓取失败"，看起来像对方站点的问题）。见 PR #132 复检。
+#: 中文说明写在注释里即可；robots.txt 的 UA 匹配也用不上中文。
 DEFAULT_USER_AGENT = (
     "XJTCampusBot/1.0 (+https://github.com/asuperj1/xiaojietong-project; "
-    "校园通知采集; contact: admin@xiaojietong.example)"
+    "contact: admin@xiaojietong.example)"
 )
 
 #: 视为"不存在 robots.txt、因而无限制"的状态码（RFC 9309 §2.3.1.3）。
