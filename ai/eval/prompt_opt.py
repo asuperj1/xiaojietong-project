@@ -166,6 +166,15 @@ def paired_bootstrap_delta(rows_a: list[dict], rows_b: list[dict], *,
         "significant": (lo > 0) or (hi < 0),
     }
 
+def reproduce_applicable(backend_name: str, model: str, reproduce_model: str) -> bool:
+    """复现校验是否适用于本次运行。
+
+    只有「真 ollama 后端」+「就是发布那个数字时用的模型」才有意义：
+    拿 xjt-extract-3b 去对 C34 在 qwen2.5:3b 上的 0.4693，必然“不一致”，
+    而那条 ⚠️ 就印在报告第六节 —— 读者极易把它读成“实验有问题”，
+    而它恰恰就是本次实验要量的那个差值。
+    """
+    return backend_name == "ollama" and model == reproduce_model
 
 def label_budget(records: list[dict], *, naive: str, optimized: str) -> dict:
     """标注预算：优化 prompt 用 0 条示例 ≈ 朴素 prompt 用多少条？
@@ -333,9 +342,14 @@ def render_markdown(result: dict) -> str:
         rp = result["reproduce"]
         lines += ["", "## 六、复现校验（本脚本 vs C34 已发布数字）", "",
                   f"- C34 README 记录 few-shot micro-F1 = {rp['c34_published_f1']}"
-                  f"（`qwen2.5:3b`，其 `--few-shot-k` 默认 3）",
-                  f"- 本脚本 `V0-naive` @ k={rp['k']}、num_ctx={rp['our_num_ctx']} 实测 = {rp['our_f1']}",
-                  f"- ⇒ {'✅ 一致（同口径复现成功）' if rp['matched'] else '⚠️ 不一致：先查清原因再看其它结论'}"]
+                  f"（`{rp.get('reproduce_model', 'qwen2.5:3b')}`，其 `--few-shot-k` 默认 3）",
+                  f"- 本脚本 `V0-naive` @ k={rp['k']}、num_ctx={rp['our_num_ctx']} 实测 = {rp['our_f1']}"]
+        if rp.get("applicable"):
+            lines.append(f"- ⇒ {'✅ 一致（同口径复现成功）' if rp['matched'] else '⚠️ 不一致：先查清原因再看其它结论'}")
+        else:
+            lines.append(f"- ⇒ — 不适用：本次测的是 `{rp.get('our_model')}`，与发布数字所在模型"
+                         f"`{rp.get('reproduce_model')}` 不同，两者的差就是「本次实验要量的东西」，"
+                         f"不能当复现失败读。")
 
     if result.get("caveats"):
         lines += ["", "## 七、诚实边界", ""]
@@ -415,6 +429,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="C34 README 记录的 few-shot micro-F1，用于复现校验")
     ap.add_argument("--reproduce-k", type=int, default=3,
                     help="C34 那次 few-shot 的示例条数（extract_bench 的 --few-shot-k 默认 3）")
+    ap.add_argument("--reproduce-model", default="qwen2.5:3b",
+                    help="--reproduce-f1 这个数字是在哪个模型上测的；换个模型跑时该校验自动标为不适用"
+                         "（否则会拿「别的模型」的成绩去对「qwen2.5:3b 的历史数字」，得出假告警）")
     ap.add_argument("--slim", action="store_true", help="输出不含逐条明细")
     ap.add_argument("--out", default="")
     args = ap.parse_args(argv)
@@ -518,9 +535,14 @@ def main(argv: list[str] | None = None) -> int:
             repro_cfg = r
     if repro_cfg and repro_cfg["metrics"]["micro"]["f1"] is not None:
         ours = repro_cfg["metrics"]["micro"]["f1"]
+        # 只有被测模型就是发布那个数字时用的模型，这条校验才有意义：
+        # 拿 xjt-extract-3b 去对 C34 的 qwen2.5:3b 数字，必然“不一致”，是假告警。
+        applicable = reproduce_applicable(args.backend, args.model, args.reproduce_model)
         reproduce = {"k": args.reproduce_k, "c34_published_f1": args.reproduce_f1,
                      "our_f1": ours, "our_num_ctx": args.num_ctx,
-                     "matched": abs(ours - args.reproduce_f1) < 0.001}
+                     "our_model": args.model, "reproduce_model": args.reproduce_model,
+                     "applicable": applicable,
+                     "matched": (abs(ours - args.reproduce_f1) < 0.001) if applicable else None}
 
     caveats = [
         "评测集只有 24 条且是**合成数据**（C34 已注明）：几个百分点的差异可能只是抽样噪声，"

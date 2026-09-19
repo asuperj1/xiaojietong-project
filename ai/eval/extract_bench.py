@@ -410,6 +410,8 @@ def render_markdown(report: dict) -> str:
         f"- macro-F1：{m['macro_f1']}",
         f"- 严格匹配率：{m['strict_accuracy']}（整条 JSON 全对）",
         f"- JSON 解析失败率：{report['parse_error_rate']}（{report['parse_errors']} 条）",
+        f"- 请求失败：{report.get('transport_errors', 0)} 条"
+        + (" —— ⚠️ 有请求失败，F1 含失败样本" if report.get("transport_errors") else ""),
         f"- 平均耗时：{report['avg_latency_s']} s/条",
         "",
     ]
@@ -549,6 +551,7 @@ def run_mode(args, dataset: dict, cases: list[dict], backend,
 
     rows: list[dict] = []
     parse_errors = 0
+    transport_errors: list[dict] = []
     latencies: list[float] = []
     prompt_tokens: list[int] = []
     failures: list[dict] = []
@@ -558,6 +561,7 @@ def run_mode(args, dataset: dict, cases: list[dict], backend,
         prompt = build_prompt(case["text"], args.mode, examples)
         raw, latency, err = backend.generate(case, prompt)
         if err:
+            transport_errors.append({"id": case["id"], "error": err})
             print(f"  [{i}/{len(cases)}] {case['id']} ⚠️  {err}")
         parsed, perr = parse_output(raw)
         if parsed is None:
@@ -585,6 +589,21 @@ def run_mode(args, dataset: dict, cases: list[dict], backend,
             print("  ⚠️ finetuned 与 zero-shot 的 prompt 不一致 —— 提升无法归因到微调")
 
     metrics = aggregate(rows)
+    # 传输失败必须**响亮地失败**，不能只打一行警告就算完：
+    # 报告里只剩「micro-F1=0.0 / 解析失败=24」，读者会把「服务没跑起来」当成「模型很差」。
+    # 实测踩过：Ollama 0.33 把纯 safetensors 导入的模型交给 MLX runner，
+    # 每条请求都 HTTP 500（mlx runner failed: MLX not available），16 个配置全被算成 0.0。
+    if transport_errors:
+        ratio = len(transport_errors) / len(cases)
+        head = transport_errors[0]
+        detail = (f"请求失败 {len(transport_errors)}/{len(cases)} 条（{ratio:.0%}），"
+                  f"首条 {head['id']}: {head['error']}")
+        if ratio >= 0.5:
+            raise SystemExit(
+                f"❌ 请求大面积失败，F1 无意义，已中止。{detail}\n"
+                "   先查服务/模型是否真能推理（例如直接 POST /api/chat 看 HTTP 状态），"
+                "   或改用 --backend scripted 先跑通流程。")
+        print(f"  ⚠️  {detail} —— 下面的 F1 含失败样本，结论需谨慎")
     return {
         "mode": args.mode,
         "backend": backend.name,
@@ -598,6 +617,8 @@ def run_mode(args, dataset: dict, cases: list[dict], backend,
         "metrics": metrics,
         "parse_errors": parse_errors,
         "parse_error_rate": round(parse_errors / len(rows), 4) if rows else None,
+        "transport_errors": len(transport_errors),
+        "errors": transport_errors[:10],
         "avg_latency_s": round(statistics.fmean(latencies), 3) if latencies else None,
         "prompt_tokens_avg": round(statistics.fmean(prompt_tokens), 1) if prompt_tokens else None,
         "prompt_tokens_max": max(prompt_tokens) if prompt_tokens else None,

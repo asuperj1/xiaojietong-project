@@ -1,0 +1,39 @@
+# 校捷通校园公告抽取器 · Ollama 模型定义（C33）
+#
+# 用法（在仓库根目录）：
+#   ollama create xjt-extract-3b -f ai/finetune/Modelfile.extract
+#
+# 【为什么 FROM 是 GGUF 而不是 safetensors 目录】
+#   Ollama 0.33 支持 `--experimental` 直接导入 safetensors 目录，导入过程看起来是成功的
+#   （`successfully imported ... with 438 layers`），但**一请求就 500**：
+#       {"error":"mlx runner failed: Error: MLX not available: failed to load MLX dynamic library"}
+#   —— 纯 safetensors 导入在 Windows 上会走 MLX runner（Apple 平台的东西），跑不起来。
+#   所以先转 GGUF（本仓 `E:\tools\llama.cpp\convert_hf_to_gguf.py`，C5 的 xjt-3b 也是这么转的）：
+#       python convert_hf_to_gguf.py D:/models/xjt-extract-3b-merged \
+#           --outfile D:/models/xjt-extract-3b-f16.gguf --outtype f16
+#   再拿 GGUF 建模型，走的是 llama.cpp runner（与 xjt-3b/qwen2.5:3b 同一条路）。
+#
+# 说明：
+# - 权重与合并产物都不入 Git（见 .gitignore），FROM 路径按本机实际情况调整。
+# - SYSTEM 必须与训练数据里的 system 消息**逐字一致**（C33 的 V0-naive，220 字符）：
+#   train/dev 都是「这条 system + 公告原文 → JSON」，注册时若换成别的措辞
+#   就变成分布外输入，抽取质量与训练报告里的数字对不上。
+#   评测脚本（prompt_opt.py / extract_bench.py）会自己带 system 消息，
+#   请求里的 system 会覆盖这里的默认值，所以这里是给 `ollama run` 手工试用的兜底。
+# - 不写 TEMPLATE：用 GGUF 内置的 Qwen2.5 ChatML 模板，避免手写模板和训练时的
+#   apply_chat_template 输出不一致。
+# - temperature 0：抽取是确定性任务；num_ctx 8192 与 C35 评测口径一致。
+
+FROM D:/models/xjt-extract-3b-f16.gguf
+
+SYSTEM """你是校园公告信息抽取器。只输出 JSON，不要任何解释、不要 markdown 代码块。
+输出格式：
+{
+  "category": "通知类别（如 奖学金/活动/通知/讲座/竞赛）",
+  "importance": 3,
+  "deadline": "YYYY-MM-DD 或 null",
+  "entities": [{"type": "time", "text": "原文片段", "norm": "YYYY-MM-DD"}]
+}"""
+
+PARAMETER temperature 0
+PARAMETER num_ctx 8192

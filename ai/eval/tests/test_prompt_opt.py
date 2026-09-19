@@ -385,7 +385,7 @@ def test_unknown_variant_is_rejected(tmp_path):
 
 
 def test_reference_date_mismatch_is_rejected(tmp_path):
-    """评测集基准日与 prompt 里的不一致时必须拒绝开跑（而不是照跑出个怪数字）。"""
+    """评测集基准日与 prompt 里的不一致时必须拒绍开跑（而不是照跑出个怪数字）。"""
     bad = tmp_path / "bad.json"
     data = json.loads(DATASET_PATH.read_text(encoding="utf-8"))
     data["reference_date"] = "2020-01-01"
@@ -395,6 +395,40 @@ def test_reference_date_mismatch_is_rejected(tmp_path):
                   "--dataset", str(bad), "--variants", "V0-naive", "--ks", "0",
                   "--curve-variants", "V0-naive", "--curve-ks", "0"])
     assert rc == 2
+
+
+# ==================== 复现校验的适用性（C33 实测踩过）====================
+#
+# 背景：第六节那条「复现校验」拿本脚本的 V0-naive@k=3 去对 C34 在 `qwen2.5:3b` 上
+# 发布的 0.4693。C33 换成微调模型后这里必然打印「⚠️ 不一致：先查清原因再看其它结论」——
+# 而那个差值恰恰就是 C33 要量的东西。假告警比没有告警更糟：它会让人去查一个不存在的问题。
+
+
+def test_reproduce_applicable_only_for_the_published_model():
+    assert po.reproduce_applicable("ollama", "qwen2.5:3b", "qwen2.5:3b") is True
+    # 换了模型：本次的差异就是实验结论本身，不能当复现失败
+    assert po.reproduce_applicable("ollama", "xjt-extract-3b", "qwen2.5:3b") is False
+    # scripted 后端的"模型名"没有意义
+    assert po.reproduce_applicable("scripted", "qwen2.5:3b", "qwen2.5:3b") is False
+
+
+def test_reproduce_section_marks_inapplicable_run(tmp_path):
+    """离线跑一遍：换模型时报告第六节必须写"不适用"，而不是标红。"""
+    out = tmp_path / "r.json"
+    rc = po.main(["--backend", "scripted",
+                  "--scripted-answers", str(EVAL_DIR / "fixtures" / "answers_upper_bound.json"),
+                  "--variants", "V0-naive", "--ks", "0",
+                  "--curve-variants", "V0-naive", "--curve-ks", "0,3",
+                  "--model", "xjt-extract-3b", "--min-gain-pt", "0",
+                  "--out", str(out)])
+    assert rc == 0
+    rp = json.loads(out.read_text(encoding="utf-8"))["reproduce"]
+    assert rp["applicable"] is False
+    assert rp["matched"] is None
+    assert rp["our_model"] == "xjt-extract-3b"
+    md = (tmp_path / "r.md").read_text(encoding="utf-8")
+    assert "不适用" in md
+    assert "不一致" not in md
 
 
 # ==================== 已落盘基线的离线自洽守卫（评审 P2）====================

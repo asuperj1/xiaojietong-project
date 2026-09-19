@@ -79,25 +79,60 @@ python ai/finetune/eval.py --base_model Qwen/Qwen2.5-3B-Instruct --model ai/fine
 ⇒ 用 `ai/dataset/synth_notice.py` 程序构造 **800 条**（标签由构造保证正确）。
 
 ```bash
+# 0) 取基座（国内网络；⚠️ 别用 snapshot_download 的多线程流，本机会卡住）
+#    HF_ENDPOINT=https://hf-mirror.com + HF_HUB_DISABLE_XET=1，两个分片**一个一个下**
+#    ⚠️ 坑：hf_hub_download 被硬杀后**不复用** .incomplete（每次换随机后缀）还留 .lock，
+#       「杀掉重试」等于每次从 0 重下 ⇒ 自己用 `Range: bytes=N-` 续传（镜像支持 206）
+#    ⚠️ 校验：不要拿 HTTP ETag 当 sha256（镜像是 xetHash）；权威哈希是 tree API 的 lfs.oid
+
 # 1) 构建数据集（离线，不需 GPU/网络）
 python ai/finetune/build_extract_dataset.py --count 800
 #    → data/extract_train.jsonl（641）· data/extract_dev.jsonl（159）· data/extract_dataset.json（元数据）
+
+# 1b) 自检（离线）：分层切分的闸门有 7 条回归测试
+python -m pytest ai/dataset/tests/test_extract_dataset_split.py -q
 
 # 2) 训练（QLoRA 4bit；⚠️ 训练前先卸载 Ollama 模型，否则 16GB 显存会被挤爆）
 ollama stop xjt-3b
 python ai/finetune/train.py --base_model <本地基座路径> \
     --data ai/finetune/data/extract_train.jsonl \
-    --output ai/finetune/out/xjt-extract-3b --epochs 3
+    --eval_data ai/finetune/data/extract_dev.jsonl \
+    --output ai/finetune/out/xjt-extract-3b \
+    --epochs 3 --early_stopping_patience 3 --eval_steps 50
+#    `--eval_data` 给了就按步评估 dev 并**保存最优 checkpoint**（load_best_model_at_end），
+#    不给则与旧版行为逐字一致（eval_strategy=no、无早停）。
 
-# 3) 合并 + 注册进 Ollama
-python ai/finetune/merge_lora.py --base_model <基座> --lora ai/finetune/out/xjt-extract-3b \
-    --output ai/finetune/out/xjt-extract-3b-merged
-#    再用 ai/finetune/register_model.py / Modelfile 注册为 xjt-extract-3b
+# 3) 合并 → GGUF → 注册进 Ollama
+python ai/finetune/merge_lora.py --base_model <基座> --adapter ai/finetune/out/xjt-extract-3b \
+    --output D:/models/xjt-extract-3b-merged
+python <llama.cpp>/convert_hf_to_gguf.py D:/models/xjt-extract-3b-merged \
+    --outfile D:/models/xjt-extract-3b-f16.gguf --outtype f16
+ollama create xjt-extract-3b -f ai/finetune/Modelfile.extract
+#    ⚠️ 别用 `ollama create --experimental` 直接喂 safetensors 目录：导入会“成功”，
+#       但推理时走 MLX runner（Apple 平台）⇒ 每条请求 HTTP 500，必须转 GGUF。
+#    ⚠️ 别忘了 `merge_lora.py` 的参数名是 `--adapter`（旧文档写成 `--lora` 会报未知参数）。
 
-# 4) 评测（C34 的工具直接复用，只换模型名）
+# 4) 评测（两套口径都跑，别只跑一套）
+#    ① 与 C35 基线**同脚本同配置**（推荐，能直接对上 0.4767/0.3043 那批数字）
+python ai/eval/prompt_opt.py --model xjt-extract-3b --num-ctx 8192 \
+    --out ai/eval/baselines/c33_extract_ft_<日期>.json
+#    ② C34 原始协议（zero-shot / few-shot / finetuned 三模式，含 prompt_mismatch 自检）
 python ai/eval/extract_bench.py --backend ollama --model xjt-extract-3b \
-    --modes zero-shot,few-shot,finetuned
+    --modes zero-shot,few-shot,finetuned --num-ctx 8192
 ```
+
+### 实测结果（2026-09-18，全量报告见 `训练报告-C33-抽取微调.md`）
+
+| 配置 | `qwen2.5:3b` | `xjt-3b`（C34 对话微调） | **`xjt-extract-3b`（C33）** |
+|---|---|---|---|
+| `V0-naive` @k=0 | 0.3043 | 0.2418 | **0.7579** |
+| `V3-optimized` @k=0 | 0.4767 | 0.4795 | **0.7234** |
+| `V0-naive` @k=16 | 0.7182 | — | **0.8021** |
+
+三条验收线全部达标（① ≥0.4767 ✅ ② ≥+15pt ✅ ③ 微调@k=0 > 基座@k=16 ✅）。
+**额外结论：微调后长 prompt 反而有害**（V3−V0 在基座上是 +17.24pt 显著为正，
+在本模型上变成 −3.45pt，k=1~3 上显著为负）⇒ 线上配 **V0-naive**（147 token，省 429 token/次）。
+
 
 ### 三条硬约束（不遵守，结论就不成立）
 1. **训练样本的 `system` 必须是 `ai/eval/extract_bench.py::SYSTEM_PROMPT` 原文**
