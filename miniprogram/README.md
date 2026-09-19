@@ -18,7 +18,7 @@ miniprogram/
 │   └── user/            # 我的
 ├── components/          # 复用组件
 ├── services/            # API 封装（request.js）
-├── utils/               # format.js / glass.js（F10）/ tab-order.js + tabbar.js（F12）
+├── utils/               # format.js / glass.js（F10）/ map.js（F18）/ tab-order.js + tabbar.js（F12）
 └── static/
 ```
 
