@@ -41,7 +41,22 @@
  *     node tools/verify_f17_user_profile.js [--src <repo-root>]
  *
  * 输出：`[OK]` / `[NG]` 逐项断言 + 末尾汇总；有失败则退出码 1。
- * R 段是**反向对照**：对真实源码做一处语义突变后，对应断言必须转为失败（证明不是空跑）。
+ * R 段是**反向对照（negative control）**：对真实源码做一处语义突变后，
+ * 对应断言必须转为失败（证明不是空跑）。另有 5 项「判据自证」同属对照类。
+ *
+ * ⚠️ 口径（**自动统计，不要手写**）
+ * ------------------------------
+ * 末尾会打印「产品断言 N 项 + 反向对照/判据自证 M 项」与「反向对照 K 组」。
+ * 历史教训：PR 描述曾写「166 项断言 + 9 组反向对照（R1~R9）」，实测为
+ * 166 项里含 16 项对照、且源码里**根本没有 R9** —— 手写数字必然漂，故改为运行时统计。
+ *
+ * ⚠️ 已知未覆盖（如实登记，不要当作已验证）
+ * ----------------------------------------
+ *   · 交叉并发守卫以外的并发路径（onUnload / 页面离开时中断在途请求）；
+ *   · 普通 `request()` 的 4xx/5xx 与 `code:0` 但 data 为 null 等响应形状边界；
+ *   · WXML/WXSS **编译期**合法性（本脚本不跑模版/样式编译器，只做结构对账）；
+ *   · 媒体 URL 绝对化（`/static/uploads/...` 能否真正加载）—— 属跨端契约，见 PR 已知项；
+ *   · `page.data.avatarUploading` 的 UI 观感（disabled 只断言了表达式口径）。
  */
 
 'use strict'
@@ -83,7 +98,22 @@ for (const f of [USER_JS, USER_WXML, USER_WXSS, PROFILE_JS, PROFILE_WXML, PROFIL
 let pass = 0
 let fail = 0
 
+/** 口径计数器：把「产品断言」与「反向对照检查」分开统计，末尾自动对账。
+ *  为什么必须自动：PR 描述曾声称「166 项断言 + 9 组反向对照（R1~R9）」，
+ *  而实际是 166 项里含 16 项对照、且根本没有 R9 —— 手写数字漂了没人发现。 */
+let productChecks = 0
+let controlChecks = 0
+/** 出现过的反向对照编号（用于末尾如实报「几组」而不是手写） */
+const controlNames = new Set()
+
 function check(name, ok, detail) {
+  // 名称里带 R\d 的即为反向对照/判据自证类检查（非产品语义断言）
+  const m = /^\s*(R\d+)\b/.exec(name)
+  if (m) {
+    controlChecks++
+    controlNames.add(m[1])
+  } else if (/判据自证/.test(name)) controlChecks++
+  else productChecks++
   ok ? pass++ : fail++
   console.log(`  [${ok ? 'OK' : 'NG'}] ${name}` + (ok || !detail ? '' : `\n         <- ${detail}`))
   return ok
@@ -95,13 +125,65 @@ function bar(title) {
   console.log('='.repeat(84))
 }
 
-/** 读取文本并归一化行尾：仓库 blob 为 LF，Windows 检出可能为 CRLF。
- *  突变锚点含 \n，不归一化会让 replace 静默变成空操作（F16 踩过）。 */
+/** 读取文本并归一化行尾：仓库 blob **是 CRLF**（`core.autocrlf=true`，已实测），
+ *  Windows 检出时 `readFileSync` 拿到的可能是 CRLF 也可能是 LF，取决于 `.gitattributes`。
+ *  突变锚点与 `\n\}` 之类的正则锚点都含 `\n`，不归一化会让 replace / match 静默变成空操作
+ *  （F16 踩过；本文件 `settleBody` 抽取的 `\n\}` 锚点同样依赖它）。 */
 function readText(p) {
   return fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n')
 }
 
 const readRel = (rel) => readText(path.join(MP, rel))
+
+/**
+ * 去注释后再做「源码里有没有这个语义」的断言。
+ *
+ * 为什么必需：`RegExp.test(fileText)` 对注释同样成立 —— 本文件注释里大量出现
+ * `.me-*.xj-glass-card` / `var(--xj-*)` / `syncTabBar(this, 'user')` 之类的字样，
+ * 于是「删掉生产代码」后断言**仍然是绿的**（独立评审已实测复现）。
+ * 凡是要证明「代码里真的有」的检查，都必须跑在去注释后的文本上。
+ *
+ * 保留换行：让失败信息里的行号/片段仍可读。
+ */
+function stripJsComments(src) {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/^([ \t]*)\/\/[^\n]*/gm, (m, ind) => ind)
+    .replace(/([^:'"\\])\/\/[^\n]*/g, (m, pre) => pre)
+}
+
+/** 去 WXML 注释（`<!-- ... -->`），保留换行 */
+function stripWxmlComments(src) {
+  return src.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '))
+}
+
+/** 去 WXSS 注释，保留换行 */
+function stripWxssComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+}
+
+/**
+ * 按大括号配平抽出一个方法/函数的**真实函数体**（含 `{` `}`）。
+ *
+ * 为什么不能用 `indexOf` + 长度阈值：那样只能说明「同步调用出现在文件的某个位置」，
+ * 无法证明它**在函数体内**、也无法证明它**在任何提前 return 之前**。
+ * 独立评审实测：把 `syncTabBar(this, 'user')` 注释掉后，旧的 `indexOf` 判据依旧为真。
+ */
+function functionBody(src, signature) {
+  const start = src.indexOf(signature)
+  if (start < 0) return ''
+  const open = src.indexOf('{', start)
+  if (open < 0) return ''
+  let depth = 0
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '{') depth++
+    else if (src[i] === '}') {
+      depth--
+      if (depth === 0) return src.slice(open, i + 1)
+    }
+  }
+  return ''
+}
 
 // ---------------------------------------------------------------- 结构工具 ----
 
@@ -139,6 +221,23 @@ function classTokens(src, attr) {
   return out
 }
 
+/**
+ * 取某个标签上 `disabled` 属性的**表达式原文**（去注释后）。
+ *
+ * 为什么不用 `/disabled="\{\{saving\}\}"/` 了事：那种写法既会被注释里的同名字样满足，
+ * 又钉死了属性顺序与空格（一次格式化就误报），且**无法表达 `||` 复合条件**。
+ */
+function disabledExpr(src, tag) {
+  const code = stripWxmlComments(src)
+  const re = tag
+    ? new RegExp(`<${tag}\\b[^>]*\\bdisabled="([^"]*)"`, 'g')
+    : /\bdisabled="([^"]*)"/g
+  const out = []
+  let m
+  while ((m = re.exec(code))) out.push(m[1].trim())
+  return out.join(' | ')
+}
+
 /** WXML 标签配平（无 DevTools 时唯一可做的语法结构校验） */
 function checkTagBalance(src) {
   const noComment = src.replace(/<!--[\s\S]*?-->/g, '')
@@ -159,16 +258,73 @@ function checkTagBalance(src) {
 }
 
 /**
- * WXSS 注释健康度：两个**互补**的检测（单靠任一个都漏检）。
+ * 扫描式检测：注释体内出现注释开启符 —— 注释被**提前闭合**的真实机理。
  *
- * 1. 定界符配平：`/*` 与 `*` + `/` 数量必须相等 —— 抓「注释未闭合」；
- * 2. 注释剥离后不得残留中日韩文字 —— 抓「注释被提前闭合」。
+ * 为什么不只数字符：WXSS 词法器遇到注释内的开启符会当作**嵌套注释开启**，
+ * 于是原本用来闭合外层注释的那个结束符只闭合了内层，外层注释继续吞掉后面的代码。
+ * 后果可能比 F12 那次更隐蔽：**代码被吞掉**（不会报 unexpected，而是样式静默失效），
+ * 而定界符计数与「注释外残留中文」两条**都可能照样通过**。
+ * 因此这一条必须独立扫描，不能靠数定界符替代。
  *
- * 第 2 条来自 F12 一次真实编译事故（commit 1ef3245）：注释正文里写了 glob
- * `pages/` + `*` + `/` + `*.wxss`，其中的注释结束符让注释**提前闭合**，
- * 后续中文说明被当作样式源码解析 → `[WXSS 文件编译错误] unexpected`。
- * 该写法会让 `/*` 与 `*`+`/` **各自多出一个**，计数仍然配平（3 vs 3 也可能），
- * 所以必须再加「剥离注释后不得有中文」这条：合法 WXSS 的源码区不应出现中文。
+ * （本条注释自身就避开了在块注释里写出「星号+斜杠」连续两个字符 ——
+ *   那正是本文件检查的那种写法在源码里提前闭合注释的原因。）
+ */
+function scanCommentNesting(src) {
+  const hits = []
+  let i = 0
+  let line = 1
+  while (i < src.length) {
+    if (src[i] === '\n') {
+      line++
+      i++
+      continue
+    }
+    if (src[i] === '/' && src[i + 1] === '*') {
+      const startLine = line
+      i += 2
+      let body = ''
+      let nested = false
+      while (i < src.length) {
+        if (src[i] === '\n') line++
+        if (src[i] === '*' && src[i + 1] === '/') {
+          i += 2
+          break
+        }
+        if (src[i] === '/' && src[i + 1] === '*') {
+          hits.push({ startLine, nestedAtLine: line, ctx: body.slice(-40) })
+          nested = true
+          break
+        }
+        body += src[i]
+        i++
+      }
+      if (nested) {
+        // 已记一次：跳到下一个 `*/` 继续扫描，避免连环误报
+        while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++
+        i += 2
+      }
+      continue
+    }
+    i++
+  }
+  return hits
+}
+
+/**
+ * WXSS 注释健康度：三个**互补**的检测（单靠任一个都漏检）。
+ *
+ * 1. 定界符配平：开启符与结束符数量必须相等 —— 抓「注释未闭合」；
+ * 2. 注释剥离后不得残留中日韩文字 —— 抓「注释被提前闭合」；
+ * 3. 扫描式嵌套检测（`scanCommentNesting`）—— 抓「注释体内的注释开启符」。
+ *
+ * ⚠️ 口径更正（独立评审实测，2026-09）：原先此处的注释声称第 1、2 条是
+ * **互补**且"计数仍然配平（3 vs 3）也可能漏检"。实测结论更精确：
+ *   · 注释体内出现注释**结束符** → 开启符与结束符计数**必然不再相等** → 第 1 条已能抓到；
+ *   · 因此「计数配平 + 残留中文」这一组合在注入场景下**构造不出来**，
+ *     第 2 条实际是第 1 条的**冗余加固**，而不是一条可独立触发的判据；
+ *   · 真正独立、且第 1/2 条都抓不到的是第 3 条：注释体内出现注释**开启符**
+ *     （计数可配平、注释外也未必有中文）→ 代码被吞掉。
+ * 旧文案把它写成"互补"属于过度声称，这里按实测更正。
  */
 function wxssCommentHealth(src) {
   const open = (src.match(/\/\*/g) || []).length
@@ -176,7 +332,15 @@ function wxssCommentHealth(src) {
   const stripped = src.replace(/\/\*[\s\S]*?\*\//g, '')
   const cjk = /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/
   const leakLine = (stripped.split('\n').find((l) => cjk.test(l)) || '').trim()
-  return { open, close, balanced: open === close, leakLine }
+  const nested = scanCommentNesting(src)
+  return {
+    open,
+    close,
+    balanced: open === close,
+    leakLine,
+    nested,
+    healthy: open === close && !leakLine && nested.length === 0,
+  }
 }
 
 // ---------------------------------------------------------------- 沙箱 ----
@@ -204,6 +368,18 @@ const OK = (data) => ({ code: 0, message: 'ok', data })
 /** 上传成功响应：与 upload.py 的真实形状一致 —— **带签名**的访问 URL（本地 /static/uploads） */
 const UPLOAD_OK = { url: '/static/uploads/ab12cd34_1700000000.png?e=1700604800&s=deadbeefcafe', size: 2048 }
 const UPLOAD_STABLE_PATH = '/static/uploads/ab12cd34_1700000000.png'
+
+/**
+ * 两类学号错误**期望展示给用户**的文案（本任务验收点）。
+ *
+ * 刻意在验证侧独立写死、断言 `===` 全等（而不是 `/已被其他账号绑定/.test(...)`）：
+ * 后者只要生产代码把后端 message 原文回显就能通过，等于没有校验「前端自己有一版
+ * 规范化文案」这件事。全等断言下，回显实现、改文案、改标点都会被抓到。
+ */
+const STUDENT_NO_ERRORS_EXPECTED = {
+  occupied: '该学号已被其他账号绑定，请核对后重试',
+  frequent: '学号 7 天内只能修改一次，请稍后再试',
+}
 
 const FIXTURE_USER = {
   id: 7,
@@ -398,7 +574,7 @@ async function probeStudentNoError(opts = {}) {
   return { studentNoError: page.data.studentNoError, formError: page.data.formError, state }
 }
 
-/** 探针：学号留空（库内原值非空）时点保存 */
+/** 探针：学号留空（库内原值非空）时点保存 —— negative control R7 复用 */
 async function probeEmptyStudentNoSave(opts = {}) {
   const { page, state } = await probeProfilePage({
     user: Object.assign({ student_no: '2024001234' }, opts.user || {}),
@@ -417,6 +593,114 @@ async function probeEmptyStudentNoSave(opts = {}) {
   }
 }
 
+/**
+ * 探针：**交叉守卫** —— `saving` 期间选头像 / `avatarUploading` 期间保存。
+ *
+ * 独立评审已实测生产代码当前正确，但原 verifier 只测了
+ * 「同操作连点两次」（save→save、chooseAvatar→chooseAvatar），
+ * **没测交叉方向**；而交叉方向恰好是唯一能让 `PUT {avatar}` 与 `PUT {nickname}`
+ * 在途交错的路径。两个方向都必须断言，缺一不可。
+ */
+async function probeCrossGuards(opts = {}) {
+  const out = {}
+
+  // 方向一：saving=true（PUT 挂起）时点头像 → 不得进入 chooseMedia
+  {
+    const { page, state } = await probeProfilePage({
+      mutations: opts.mutations,
+      responder: (req) => (isMeReq(req) && req.method === 'PUT' ? null : undefined),
+    })
+    page.onNicknameInput(inputEvent('保存中改头像'))
+    page.save()
+    await tick()
+    const savingBefore = page.data.saving
+    const chooseBefore = state.chooseMedia
+    page.chooseAvatar()
+    await tick()
+    out.savingBefore = savingBefore
+    out.chooseMediaWhileSaving = state.chooseMedia - chooseBefore
+    out.uploadsWhileSaving = state.uploads.length
+  }
+
+  // 方向二：avatarUploading=true（上传挂起）时点保存 → 不得发出 PUT
+  {
+    const { page, state } = await probeProfilePage({
+      mutations: opts.mutations,
+      uploadResponder: () => null,
+    })
+    page.chooseAvatar()
+    await tick()
+    const uploadingBefore = page.data.avatarUploading
+    const putsBefore = putMe(state).length
+    page.onNicknameInput(inputEvent('上传中改昵称'))
+    page.save()
+    await tick()
+    out.uploadingBefore = uploadingBefore
+    out.putsWhileUploading = putMe(state).length - putsBefore
+  }
+
+  // 方向三：上传中 disabled 的 UI 口径必须与 JS 守卫同口径
+  {
+    const { page } = await probeProfilePage({
+      mutations: opts.mutations,
+      uploadResponder: () => null,
+    })
+    page.chooseAvatar()
+    await tick()
+    out.avatarUploading = page.data.avatarUploading
+  }
+
+  return out
+}
+
+/**
+ * 探针：保存失败后回读（resync）的**状态有效性**。
+ *
+ * 原 verifier 只断言「GET /user/me 次数 ≥ 2」——那只证明"又发了一次请求"，
+ * 完全没证明回读结果真的落到页面上。这里断言三件事：
+ *   1. `page.data.user` 变成服务端真值（部分成功写入的 nickname 不丢）；
+ *   2. 用户正在编辑的输入框**不被回读覆盖**（否则改完再提交会丢字）；
+ *   3. 回读失败时不得抛出 / 不得把已有错误吞掉。
+ */
+async function probeResync(opts = {}) {
+  const serverNickname = opts.serverNickname || '服务端已落库的昵称'
+  // ⚠️ 用独立计数器，不引用解构出来的 `state` —— responder 在 loadPage 内首次 GET 就会执行，
+  //    那一刻 `const { state } = await ...` 尚未完成，闭包引用 state 会命中 TDZ 抛错。
+  let meCount = 0
+  const { page, state } = await probeProfilePage({
+    user: Object.assign({ nickname: '旧昵称', student_no: '' }, opts.user || {}),
+    mutations: opts.mutations,
+    responder: (req) => {
+      if (isMeReq(req) && req.method === 'PUT') return { code: 3001, message: opts.message || '该学号已被其他账号绑定', data: {} }
+      if (isMeReq(req) && req.method === 'GET') {
+        meCount += 1
+        // 首次 GET（加载）走默认成功；第二次（回读）返回「nickname 已落库、学号仍未绑定」
+        if (meCount >= 2) return OK(Object.assign({}, FIXTURE_USER, { nickname: serverNickname, student_no: '' }))
+        return undefined
+      }
+      return undefined
+    },
+  })
+  if (!page) return { loadFailed: true }
+  const typedNickname = '用户刚敲的昵称'
+  page.onNicknameInput(inputEvent(typedNickname))
+  page.onStudentNoInput(inputEvent('2024999999'))
+  page.save()
+  await tick()
+  await tick()
+  return {
+    page,
+    state,
+    typedNickname,
+    serverNickname,
+    getCount: meCount,
+    user: page.data.user,
+    formNickname: page.data.nickname,
+    formStudentNo: page.data.studentNo,
+    studentNoError: page.data.studentNoError,
+  }
+}
+
 // ================================================================ 主流程 ====
 
 async function main() {
@@ -429,6 +713,13 @@ async function main() {
   const profileWxss = readText(PROFILE_WXSS)
   const userJs = readText(USER_JS)
   const profileJs = readText(PROFILE_JS)
+
+  // 去注释版本：「源码里真的有这段语义」类断言必须跑在它上面，
+  // 否则注释里的同名字样会让「删掉生产代码」的断言继续为真（独立评审已实测复现）。
+  const userWxmlCode = stripWxmlComments(userWxml)
+  const profileWxmlCode = stripWxmlComments(profileWxml)
+  const userJsCode = stripJsComments(userJs)
+  const profileJsCode = stripJsComments(profileJs)
 
   // ================================================================ A ====
   bar('A. 页面注册与跳转目标一致性（设置页正式注册 + 跳转目标一致）')
@@ -613,9 +904,17 @@ async function main() {
     const { page } = await probeUserPage({ glassSupported: true })
     check('反向对照：glassSupported=true → glassFallback=false（保留毛玻璃）', !!page && page.data.glassFallback === false)
   }
-  check('WXML 根节点挂 {{glassFallback}} 降级类入口', /glassFallback\s*\?\s*'is-glass-fallback'/.test(userWxml))
-  check('资料区与列表用玻璃卡片类 .xj-glass-card', /me-profile xj-glass-card/.test(userWxml) && /me-menu xj-glass-card/.test(userWxml))
-  check('页面用低饱和渐变底 .xj-page-bg（§1.1）', /xj-page-bg/.test(userWxml))
+  check('WXML 根节点挂 {{glassFallback}} 降级类入口（去注释后）', /glassFallback\s*\?\s*'is-glass-fallback'/.test(userWxmlCode))
+  check(
+    '资料区与列表用玻璃卡片类 .xj-glass-card（按 class 属性核，不做全文 grep）',
+    classTokens(userWxml, 'class').has('xj-glass-card'),
+    JSON.stringify([...classTokens(userWxml, 'class')])
+  )
+  check(
+    '页面用低饱和渐变底 .xj-page-bg（§1.1；按根节点 class token 核，注释里的同名字样不算）',
+    classTokens(userWxml, 'class').has('xj-page-bg'),
+    JSON.stringify([...classTokens(userWxml, 'class')])
+  )
 
   const rootTokens = rootClassTokens(userWxml)
   check('WXML 根节点带 xj-page 类（F12 留白规则不会退化成死规则）', rootTokens.includes('xj-page'), `根类=[${rootTokens.join(' ')}]`)
@@ -636,17 +935,25 @@ async function main() {
     )
   }
 
-  check(
-    'user.js 在 onShow 同步自定义 TabBar 选中项（F12 语义保留）',
-    /utils\/tabbar/.test(userJs) && /syncTabBar\(this,\s*'user'\)/.test(userJs)
-  )
   {
-    const onShowAt = userJs.indexOf('onShow()')
-    const syncAt = userJs.indexOf("syncTabBar(this, 'user')")
+    // onShow 的**真实函数体**（去注释）——不用 indexOf 找字符串：
+    // 注释里出现同名调用时，旧的「indexOf + 长度阈值」判据依旧为真（独立评审实测复现）。
+    const onShowBody = functionBody(userJs, 'onShow()')
+    const onShowCode = stripJsComments(onShowBody)
+    check('user.js 存在 onShow 函数体且去注释后仍调用 syncTabBar(this, \'user\')',
+      !!onShowBody && /syncTabBar\(\s*this\s*,\s*'user'\s*\)/.test(onShowCode),
+      onShowBody ? JSON.stringify(onShowCode.trim().slice(0, 80)) : '未找到 onShow()')
+    // 语义：调用必须位于任何提前 return **之前**（有 return 在它前面就等于被跳过）
+    const syncAt = onShowCode.search(/syncTabBar\s*\(/)
+    const firstReturn = onShowCode.search(/\breturn\b/)
     check(
-      'syncTabBar 位于 onShow 函数体内靠前位置（不会被提前 return 跳过）',
-      onShowAt > -1 && syncAt > onShowAt && syncAt - onShowAt < 400,
-      `onShow@${onShowAt} sync@${syncAt}`
+      'syncTabBar 位于 onShow 内任何提前 return 之前（不会被跳过）',
+      syncAt > -1 && (firstReturn === -1 || syncAt < firstReturn),
+      `syncAt=${syncAt} firstReturn=${firstReturn}`
+    )
+    check(
+      'onShow 内确实 require 了 utils/tabbar（去注释）',
+      /utils\/tabbar/.test(stripJsComments(userJs)) && /syncTabBar/.test(stripJsComments(userJs))
     )
   }
 
@@ -743,6 +1050,24 @@ async function main() {
       '反向对照：非 /static/uploads/ 的外链保留原样（不误剥第三方签名）',
       puts.length === 1 && puts[0].data.avatar === 'https://bucket.example.com/a.png?X-Amz-Signature=abc123',
       JSON.stringify(puts.map((p) => p.data))
+    )
+  }
+
+  {
+    // ★ 边界：外链的**路径里含** `/static/uploads/` 子串（不是本地路径）——必须原样保留。
+    //   这条正是旧「整串 indexOf」实现的误判面，也是 R9 反向对照所守护的正向语义；
+    //   原 verifier 完全没有覆盖它（只测了「外链完全不含该子串」）。
+    const PRESIGNED = 'https://bucket.example.com/static/uploads/a.png?X-Amz-Signature=abc123'
+    const { page, state } = await probeProfilePage({
+      uploadResponder: () => OK({ url: PRESIGNED, size: 2048 }),
+    })
+    page.chooseAvatar()
+    await tick()
+    const puts = putMe(state)
+    check(
+      '★ 外链路径里含 /static/uploads/ 子串时仍原样保留（判据是前缀，不是子串包含）',
+      puts.length === 1 && puts[0].data.avatar === PRESIGNED,
+      `avatar=${JSON.stringify((puts[0] || {}).data && puts[0].data.avatar)}`
     )
   }
 
@@ -908,6 +1233,32 @@ async function main() {
   }
 
   {
+    // ★ 交叉守卫（两个方向）——原 verifier 只测了同操作连点，没测交叉方向，
+    //   而交叉方向才是 PUT{avatar} 与 PUT{nickname} 在途交错的唯一入口。
+    const g = await probeCrossGuards()
+
+    check('前置：PUT 挂起期间 saving=true', g.savingBefore === true, `saving=${g.savingBefore}`)
+    check(
+      '★ saving 期间点头像 → 不进入 chooseMedia、不发生上传',
+      g.chooseMediaWhileSaving === 0 && g.uploadsWhileSaving === 0,
+      `chooseMedia+${g.chooseMediaWhileSaving} uploads=${g.uploadsWhileSaving}`
+    )
+
+    check('前置：上传挂起期间 avatarUploading=true', g.uploadingBefore === true, `uploading=${g.uploadingBefore}`)
+    check(
+      '★ avatarUploading 期间点保存 → 不发 PUT（不会与上传的 PUT 交错）',
+      g.putsWhileUploading === 0,
+      `puts+${g.putsWhileUploading}`
+    )
+
+    check(
+      '上传中保存按钮 disabled 口径与 JS 守卫一致（saving || avatarUploading）',
+      disabledExpr(profileWxml).indexOf('avatarUploading') !== -1,
+      `disabled="${disabledExpr(profileWxml)}"`
+    )
+  }
+
+  {
     const { page, state, app } = await probeProfilePage({ storage: { token: 't', user: { nickname: '旧' } } })
     page.onNicknameInput(inputEvent('新昵称'))
     page.save()
@@ -916,8 +1267,16 @@ async function main() {
     check('保存成功 → 同步 globalData.userInfo', !!app.globalData.userInfo && app.globalData.userInfo.nickname === '新昵称', JSON.stringify(app.globalData.userInfo))
   }
 
-  check('保存按钮在 saving 期间禁用', /disabled="\{\{saving\}\}"/.test(profileWxml))
-  check('保存中按钮文案切换（保存中…）', /saving \? '保存中…'/.test(profileWxml))
+  {
+    const d = disabledExpr(profileWxml, 'button')
+    check('保存按钮在 saving 期间禁用', /saving/.test(d), `disabled="${d}"`)
+    check(
+      '保存按钮在上传期间同样禁用（与 profile.js:158/215 的守卫同口径）',
+      /avatarUploading/.test(d),
+      `disabled="${d}"（缺 avatarUploading 会让"上传中"按钮看起来可点、点了静默 return）`
+    )
+  }
+  check('保存中按钮文案切换（保存中…）', /saving \? '保存中…'/.test(profileWxmlCode))
 
   {
     const { page } = await probeProfilePage({
@@ -945,17 +1304,17 @@ async function main() {
 
   const occupied = await probeStudentNoError({ message: '该学号已被其他账号绑定' })
   check(
-    '「已被占用」类（message=该学号已被其他账号绑定）→ 归入 occupied 文案',
-    /已被其他账号绑定/.test(occupied.studentNoError || ''),
-    `studentNoError=${occupied.studentNoError}`
+    '「已被占用」类（message=该学号已被其他账号绑定）→ 归入 occupied 文案（全等，不是子串）',
+    occupied.studentNoError === STUDENT_NO_ERRORS_EXPECTED.occupied,
+    `studentNoError=${JSON.stringify(occupied.studentNoError)}（期望 ${JSON.stringify(STUDENT_NO_ERRORS_EXPECTED.occupied)}）`
   )
   check('「已被占用」不进 formError（分类明确，不重复提示）', occupied.formError === '', `formError=${occupied.formError}`)
 
   const frequent = await probeStudentNoError({ message: '学号 7 天内只能修改一次，还需等待 3 天' })
   check(
-    '「修改过于频繁」类（message=学号 7 天内只能修改一次，还需等待 3 天）→ 归入 frequent 文案',
-    /7 天内只能修改一次/.test(frequent.studentNoError || ''),
-    `studentNoError=${frequent.studentNoError}`
+    '「修改过于频繁」类（message=学号 7 天内只能修改一次，还需等待 3 天）→ 归入 frequent 文案（全等）',
+    frequent.studentNoError === STUDENT_NO_ERRORS_EXPECTED.frequent,
+    `studentNoError=${JSON.stringify(frequent.studentNoError)}（期望 ${JSON.stringify(STUDENT_NO_ERRORS_EXPECTED.frequent)}）`
   )
   check('「修改过于频繁」不进 formError', frequent.formError === '', `formError=${frequent.formError}`)
   check(
@@ -963,10 +1322,17 @@ async function main() {
     !!occupied.studentNoError && !!frequent.studentNoError && occupied.studentNoError !== frequent.studentNoError,
     `occupied=${occupied.studentNoError} / frequent=${frequent.studentNoError}`
   )
+  // 防「回显后端 message」的实现骗过上面两条：前端文案不得等于后端原文
+  check(
+    '★ 展示文案是前端规范化过的，不是后端 message 原文回显（防止「回显也全绿」）',
+    occupied.studentNoError !== '该学号已被其他账号绑定' &&
+      frequent.studentNoError !== '学号 7 天内只能修改一次，还需等待 3 天',
+    `occupied=${JSON.stringify(occupied.studentNoError)} frequent=${JSON.stringify(frequent.studentNoError)}`
+  )
 
   const other = await probeStudentNoError({ message: '学号不能为空' })
   check(
-    '未识别错误（1001 学号不能为空）→ 走 formError 展示后端原文',
+    '未识别错误（后端原文「学号不能为空」）→ 走 formError 展示后端原文',
     other.formError === '学号不能为空' && other.studentNoError === '',
     `formError=${other.formError} studentNoError=${other.studentNoError}`
   )
@@ -974,6 +1340,63 @@ async function main() {
   {
     const { state } = await probeStudentNoError({ message: '该学号已被其他账号绑定' })
     check('学号被拒后回读服务端真实值（GET /user/me ≥ 2 次：初次 + 回读）', getMe(state).length >= 2, `GET /user/me = ${getMe(state).length}`)
+  }
+
+  {
+    // ★ 回读的**状态有效性** —— 只数 GET 次数证明不了「回读结果真的落到页面上」。
+    const r = await probeResync()
+
+    check('回读确实发生（GET /user/me ≥ 2）', !r.loadFailed && r.getCount >= 2, `GET=${r.getCount}`)
+    check(
+      '★ 回读后 page.data.user 变成服务端真值（部分成功写入的 nickname 不丢）',
+      !r.loadFailed && !!r.user && r.user.nickname === r.serverNickname,
+      `user.nickname=${r.user && r.user.nickname}（期望 ${r.serverNickname}）`
+    )
+    check(
+      '★ 回读不得覆盖用户仍在编辑的昵称输入框',
+      !r.loadFailed && r.formNickname === r.typedNickname,
+      `form.nickname=${r.formNickname}（期望 ${r.typedNickname}）`
+    )
+    check(
+      '★ 回读不得覆盖用户仍在编辑的学号输入框',
+      !r.loadFailed && r.formStudentNo === '2024999999',
+      `form.studentNo=${r.formStudentNo}`
+    )
+    check('回读后学号错误提示仍在（不因回读被清掉）', !r.loadFailed && r.studentNoError === STUDENT_NO_ERRORS_EXPECTED.occupied, `studentNoError=${r.studentNoError}`)
+  }
+
+  {
+    // ★ 反向对照：**回读**失败（首次加载正常、回读的 GET 报错）不得抛出、不得吞掉已有错误。
+    //   注意首次 GET 必须返回 undefined（用默认成功），否则页面停在 error 态、根本走不到保存。
+    //
+    //   ⚠️ 计数不能用 `const { page, state } = await probeProfilePage(...)` 里的 `state` ——
+    //   responder 在 loadPage 内部**首次 GET 时就会执行**，而那一刻解构赋值尚未完成，
+    //   `state` 仍处于 TDZ，闭包引用它会抛 ReferenceError（被桩吞掉 → 首次加载被误判为失败）。
+    //   用独立计数器，彻底避开这个陷阱。
+    let meCount = 0
+    const { page, state } = await probeProfilePage({
+      user: { nickname: '旧', student_no: '' },
+      responder: (req) => {
+        if (isMeReq(req) && req.method === 'PUT') return { code: 3001, message: '该学号已被其他账号绑定', data: {} }
+        if (isMeReq(req) && req.method === 'GET') {
+          meCount += 1
+          return meCount > 1 ? { code: 5001, message: '服务端错误', data: {} } : undefined
+        }
+        return undefined
+      },
+    })
+    if (page) {
+      page.onStudentNoInput(inputEvent('2024999999'))
+      page.save()
+      await tick()
+      await tick()
+      await tick()
+      check(
+        '反向对照：回读自身失败时不抛出、学号错误提示不被吞、saving 归位',
+        page.data.studentNoError === STUDENT_NO_ERRORS_EXPECTED.occupied && page.data.saving === false && meCount >= 2,
+        `studentNoError=${JSON.stringify(page.data.studentNoError)} saving=${page.data.saving} GET=${meCount}`
+      )
+    }
   }
 
   check('WXML 提供学号错误展示位', /class="pf-error" wx:if="\{\{studentNoError\}\}"/.test(profileWxml))
@@ -1163,9 +1586,63 @@ async function main() {
   ]) {
     const d = wxssCommentHealth(fs.readFileSync(p, 'utf8'))
     check(
-      `${label} 注释健康（定界符配平 ${d.open}/${d.close}，且注释外无中文残留）`,
-      d.balanced && !d.leakLine,
-      d.balanced ? `注释提前闭合，残留源码：${d.leakLine}` : `/*=${d.open} */=${d.close}`
+      `${label} 注释定界符配平（${d.open}/${d.close}）`,
+      d.balanced,
+      `/*=${d.open} */=${d.close}`
+    )
+    check(
+      `${label} 注释外无中文残留（注释被提前闭合时会外露）`,
+      !d.leakLine,
+      `残留源码：${d.leakLine}`
+    )
+    check(
+      `${label} 注释体内无嵌套注释开启符（F12 提前闭合事故类型；计数与中文残留都可能抓不到）`,
+      d.nested.length === 0,
+      JSON.stringify(d.nested)
+    )
+  }
+
+  {
+    // ★ 探测力自证：三个判据各自**独立可失败**（否则 I 段上面三条就是在空跑）。
+    //
+    //   1) 注释体内的注释**开启符** → 只有 `nested` 抓到（计数与中文残留都不动）；
+    //   2) 注释内的注释**结束符** → 计数配平抓到，且此时中文残留实测为空；
+    //   3) 注释被提前闭合后**中文外露** → 中文残留抓到，且此时它单独给出了额外信息。
+    //
+    //   ⚠️ 实测不变式（已单独验证，含真实 34 个 WXSS 零反例）：
+    //      open − close === 被提前闭合的注释数；
+    //      因此 nested>0 ⇒ 计数必然不配平。
+    //      换句话说「计数配平 + nested」与「计数配平 + 中文残留」这两个组合
+    //      **在当前判据体系下构造不出来** —— 判据 2、3 都是判据 1 的严格补充，
+    //      而不是与它正交的独立判据。这里如实断言该不变式，不假装它们是正交的。
+    const SABOTAGE = {
+      nestedOnly: '/* x */\n/* a /* b */\n.y{color:red}\n',
+      unbalanceOnly: '/* a */ b */\n.x{color:red}\n',
+      leakOnly: '/* a */ 中文说明 */\n.x{color:red}\n',
+    }
+    const n1 = wxssCommentHealth(SABOTAGE.nestedOnly)
+    check(
+      '判据自证 a：注释体内的开启符被 nested 独立抓到（计数与中文残留均未参与判定）',
+      n1.nested.length === 1 && n1.leakLine === '',
+      JSON.stringify({ nested: n1.nested.length, balanced: n1.balanced, leak: n1.leakLine })
+    )
+    const n2 = wxssCommentHealth(SABOTAGE.unbalanceOnly)
+    check(
+      '判据自证 b：多余注释结束符被「定界符配平」独立抓到（此时中文残留为空）',
+      !n2.balanced && n2.leakLine === '',
+      JSON.stringify({ balanced: n2.balanced, leak: n2.leakLine })
+    )
+    const n3 = wxssCommentHealth(SABOTAGE.leakOnly)
+    check(
+      '判据自证 c：注释提前闭合后的中文外露被「中文残留」抓到（并给出残留原文）',
+      !!n3.leakLine,
+      JSON.stringify({ balanced: n3.balanced, leak: n3.leakLine })
+    )
+    check('判据自证 d：三个 sabotage 都判为不健康', !n1.healthy && !n2.healthy && !n3.healthy)
+    check(
+      '判据自证 e：不变式 nested>0 ⇒ 计数不配平（故「配平+nested」不可构造，不冒充正交判据）',
+      n1.nested.length > 0 && !n1.balanced,
+      JSON.stringify({ nested: n1.nested.length, open: n1.open, close: n1.close })
     )
   }
 
@@ -1181,7 +1658,7 @@ async function main() {
     })(MP)
     const bad = all.filter((p) => {
       const h = wxssCommentHealth(fs.readFileSync(p, 'utf8'))
-      return !h.balanced || h.leakLine
+      return !h.healthy
     })
     console.log(
       `  [INFO] miniprogram 下 ${all.length} 个 WXSS 同类扫描：${bad.length === 0 ? '全部健康' : '异常 ' + bad.map((p) => path.relative(MP, p)).join(', ')}`
@@ -1236,11 +1713,13 @@ async function main() {
     const { page, state } = await probeUserPage({ mutations: { 'pages/user/user.js': mutated } })
     page.onProfileTap()
     const target = state.navigate[0]
-    check(
-      'R1 反证：目标打错时 A 段「跳转 + 已注册」会失败',
-      !(target === '/pages/user/profile' && registered.has(String(target).replace(/^\//, ''))),
-      String(target)
-    )
+    const bare = String(target || '').split('?')[0].replace(/^\//, '')
+    // ★ 必须**两条独立求值**：原先写成
+    //   `!(target === '/pages/user/profile' && registered.has(...))`
+    //   目标打错时 `&&` 短路，registration 半句**从未执行** ——
+    //   该对照因此不保护它声称的「已注册」要求（独立评审指出）。
+    check('R1 反证 a：目标打错时 A 段「跳转目标正确」独立失败', target !== '/pages/user/profile', String(target))
+    check('R1 反证 b：跳到了未注册页（registration 半句独立失败）', !registered.has(bare), `bare=${bare}`)
   }
 
   // R2 去掉保存的防重复守卫
@@ -1321,15 +1800,66 @@ async function main() {
     )
   }
 
-  // R8 在 WXSS 注释里写入 F12 那类 glob（注释被提前闭合）
+  // R8 在 WXSS 注释里写入 F12 那类 glob（`pages/*/*.wxss` 内含注释结束符）
   {
     const mutated = userWxss.replace('/* ---- 退出登录 ---- */', '/* ---- 退出登录 / 见 pages/*/*.wxss ---- */')
     check('R8 突变可用（源码确实被改写）', mutated !== userWxss)
     const d = wxssCommentHealth(mutated)
+    // ★ 口径更正：该突变让 `/*` 与 `*/` 计数**不再相等**，所以命中的是「定界符配平」，
+    //   此时 leakLine 实测为空 —— 本对照**不能**声称为「中文残留」检测提供了证明（独立评审实测）。
     check(
-      'R8 反证：注释里写入 glob 后 I 段注释健康断言会失败',
-      !d.balanced || !!d.leakLine,
-      `/*=${d.open} */=${d.close} leak=${JSON.stringify(d.leakLine)}`
+      'R8 反证 a：注释里写入 glob 后 I 段「定界符配平」断言会失败',
+      !d.balanced,
+      `/*=${d.open} */=${d.close}`
+    )
+    check(
+      'R8 反证 b：注释体内嵌套 /* 被扫描式检测独立抓到（这条才是 F12 的真实机理）',
+      d.nested.length > 0,
+      JSON.stringify(d.nested)
+    )
+    check(
+      'R8 反证 c：该突变下「中文残留」判据确实为空（如实记录，不冒充它的功劳）',
+      d.leakLine === '',
+      `leakLine=${JSON.stringify(d.leakLine)}`
+    )
+  }
+
+  // R9 把 stableUploadPath 换回旧的「整串 indexOf」实现
+  //
+  // 这条是**新增的独立对照**：`stableUploadPath` 的判据语义原本**只有正向断言、
+  // 没有任何反向对照**，也就没有证据证明那条正向断言有区分度。
+  //
+  // ⚠️ 区分两种实现的输入必须挑对（独立变异计数实测踩过两次坑）：
+  //    · 错选 `https://cdn.example.com/go?to=/static/uploads/a.png`（外链 query 里含该前缀）：
+  //      两种实现都是「先 split('?') 再判」，剥完的外链没有该前缀 → **区分不出来**；
+  //    · 正确输入是「**整串**含该前缀、但**剥掉 query 后不含**」的 URL —— 这正是旧写法的
+  //      误判面：它只看整串有没有出现过这个子串。
+  //    · 突变必须整体替换函数体（不能只改一行 return）：否则若只改 `return` 行、
+  //      而 `bare` 行保持 `split('?')[0]`，两种实现的差异恰好被抹平。
+  {
+    const mutated = profileJs.replace(
+      'function stableUploadPath(url) {\n' +
+        "  const s = String(url || '')\n" +
+        "  const bare = s.split('?')[0]\n" +
+        "  return bare.startsWith('/static/uploads/') ? bare : s\n" +
+        '}',
+      'function stableUploadPath(url) {\n' +
+        "  const s = String(url || '')\n" +
+        "  return s.indexOf('/static/uploads/') !== -1 ? s.split('?')[0] : s\n" +
+        '}'
+    )
+    check('R9 突变可用（源码确实被改回旧的整串 indexOf 实现）', mutated !== profileJs)
+    const { page, state } = await probeProfilePage({
+      mutations: { 'pages/user/profile.js': mutated },
+      uploadResponder: () => OK({ url: 'https://cdn.example.com/static/uploads/a.png?X-Amz-Signature=abc', size: 1 }),
+    })
+    page.chooseAvatar()
+    await tick()
+    const puts = putMe(state)
+    check(
+      'R9 反证：旧 indexOf 实现把「路径含该子串的外链」误判为本地路径并剥掉预签名 query',
+      puts.length === 1 && puts[0].data.avatar === 'https://cdn.example.com/static/uploads/a.png',
+      `avatar=${JSON.stringify((puts[0] || {}).data && puts[0].data.avatar)}（期望被误剥掉 ?X-Amz-Signature=…）`
     )
   }
 
@@ -1344,6 +1874,10 @@ async function main() {
   })
 
   console.log('\n' + '-'.repeat(84))
+  const negativeControls = new Set()
+  for (const n of controlNames) negativeControls.add(n)
+  console.log(`口径：产品断言 ${productChecks} 项 + 反向对照/判据自证 ${controlChecks} 项 = ${pass + fail} 项`)
+  console.log(`      反向对照组数：${negativeControls.size} 组（${[...negativeControls].sort().join(', ')}）`)
   if (fail === 0) {
     console.log(`[PASS] F17 我的 + 资料设置页校验通过（${pass} 项）`)
     console.log('⚠️ 仅覆盖请求分派 / 状态机 / 错误归类 / 结构对账 / 注册一致性；')

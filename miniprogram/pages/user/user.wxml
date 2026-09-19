@@ -23,6 +23,12 @@
       hover-start-time="20"
       hover-stay-time="140"
     >
+      <!-- ⚠️ 已知未解决（**刻意不在本 PR 内修**）：`GET /user/me` 返回的 avatar 是
+           无 host 的根相对路径（`/static/uploads/<key>?e=..&s=..`），而小程序 `<image src>`
+           的前导 `/` 解析为**包内路径**，包内并无 `static/uploads/` → 头像加载不出来，
+           且 `wx:if="{{user.avatar}}"` 对非空串恒真，字母兜底也不会显示。
+           属跨端「媒体 URL 绝对化 / host 契约」问题（同样影响 F8 既有实现），
+           需客户端补 mediaUrl() 或后端返回绝对 URL + 配置 downloadFile 域名，另立任务。 -->
       <image wx:if="{{user.avatar}}" class="me-avatar" src="{{user.avatar}}" mode="aspectFill" />
       <view wx:else class="me-avatar me-avatar-text">{{avatarText}}</view>
       <view class="me-info">

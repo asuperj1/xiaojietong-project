@@ -15,6 +15,10 @@
 //      → 必须按 message 区分展示（本任务验收点），见 classifyStudentNoError；
 //   3. **不支持清空学号**（`''` 会与其它账号撞唯一索引，文档明确拒绝）→ 输入留空 = 不改动。
 //
+// 另注（独立评审实测更正）：`student_no` 未绑定时后端返回的是 **`''`**，不是 `null` ——
+// SQL NULL 在 `db/cpp_driver/src/mysql_connection.cpp` 就被转成空串，
+// `utils/profile.js` 的 NULL 分支是 defensive fallback，不是当前真实契约。
+//
 // 职责分离：本页是**唯一**发起 `PUT /user/me` 的页面；「我的」主页只读 + 做导航。
 const { request, uploadImage } = require('../../services/request')
 // 学号归一化 / 头像兜底字符与「我的」页共用（utils/profile.js），避免两页各写一套
@@ -80,13 +84,21 @@ function messageOf(err, fallback) {
  * - `/user/me` 对外返回时会重新签名，所以库里存裸路径不影响显示；
  *   反之把签名存进库，7 天后 `user.avatar` 就带着一个**已过期**的签名。
  *
- * ⚠️ 只对本地签名上传路径剥离：换成对象存储后返回的可能是第三方预签名 URL
- * （如 S3 的 `X-Amz-Signature`），剥掉 query 会让它直接失效 —— 判定规则与后端 `resign()` 一致。
+ * ⚠️ 剥离条件必须与后端 `storage.resign()` **逐字对齐**：后者是
+ *   `if not path.startswith(f"{_URL_PREFIX}/")` —— 即**先剥 query，再判断**
+ *   `/static/uploads/` 前缀（含尾斜杠），而不是在整串上做 `indexOf`。
+ *   这个差异是真实可达的：`/go?to=/static/uploads/a.jpg` 那种「该字符串只出现在 query 里」
+ *   的地址，用 `indexOf` 会被误判成本地上传路径并剥掉 query；
+ *   而换成对象存储后返回的第三方预签名 URL（如 S3 的 `X-Amz-Signature`）**必须原样保留**，
+ *   剥掉 query 会让它直接失效。
+ *
+ * @param {string} url 后端 `POST /upload/image` 返回的 url
+ * @returns {string} 可入库的稳定路径（第三方 URL / 非本地上传路径原样返回）
  */
 function stableUploadPath(url) {
   const s = String(url || '')
-  const path = s.split('?')[0]
-  return path.indexOf('/static/uploads/') !== -1 ? path : s
+  const bare = s.split('?')[0]
+  return bare.startsWith('/static/uploads/') ? bare : s
 }
 
 Page({

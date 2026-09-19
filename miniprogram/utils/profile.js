@@ -5,16 +5,23 @@
 // （学号 NULL / 空串 / 首尾空白三种形态各写一套兜底），故收敛到一处。
 //
 // 依据：docs/api.md §2（`GET /user/me` 的 user 结构）、
-//      db/sql/17_user_student_no.sql（student_no 可空）+ backend/app/routers/user.py `_view()`
-//      （对 NULL 直接返回 None，不是 ''）。
+//      db/sql/17_user_student_no.sql（student_no 可空）+ backend/app/routers/user.py `_view()`。
 // 职责边界：只做归一化与兜底，不发请求、不读 globalData、不写 storage。
 
 /**
  * 学号归一化：NULL / undefined / 空白 → ''，其余去首尾空白。
  *
- * ⚠️ 后端 `_view()` 用 `u.get('student_no', '')` —— 该默认值**只在键缺失时**生效，
- * 而 17_user_student_no.sql 把存量空串清成了 NULL 且列可空，所以实际会返回 **null**。
- * 直接插值会渲染出字符串 "null"，输入框也会带上无意义的值。
+ * ⚠️ 这是 **defensive fallback，不是当前真实后端契约**（独立评审实测更正，2026-09）。
+ *
+ * 真实链路：MySQL NULL 在 C++ 驱动层就被写成**空串**，不是 None ——
+ *   · `db/cpp_driver/src/mysql_connection.cpp` 取列时 `if (is_null[i]) row[col] = "";`
+ *   · `db/cpp_driver/pybind/pybind_wrapper.cpp` 再统一 `py::str(v)`，
+ * 所以 `_view()` 的 `u.get('student_no', '')` 拿到的**永远是 `''`**（该默认值只在键缺失时生效，
+ * 而 `find_by_id` 的 SELECT 明确包含 student_no 列，键不会缺失）。
+ * 即：前端不写这层兜底也**不会**渲染出字符串 "null"。
+ *
+ * 保留它的理由：函数是两页共用 + 直连 mock/其它数据源时的口径统一，
+ * 且对 `''` / `'  '` / `undefined` 也一并归一，成本为零。
  */
 function studentNoOf(raw) {
   return raw === null || raw === undefined ? '' : String(raw).trim()

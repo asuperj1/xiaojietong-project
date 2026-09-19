@@ -23,6 +23,9 @@
         hover-start-time="20"
         hover-stay-time="140"
       >
+        <!-- ⚠️ 已知未解决（**刻意不在本 PR 内修**）：同 user.wxml —— avatar 是根相对路径，
+             小程序 `<image src="/static/uploads/..">` 按包内路径解析，包内无该目录。
+             跨端绝对化/域名问题，另立任务。 -->
         <image wx:if="{{user.avatar}}" class="pf-avatar" src="{{user.avatar}}" mode="aspectFill" />
         <view wx:else class="pf-avatar pf-avatar-text">{{avatarText}}</view>
         <view class="pf-avatar-info">
@@ -64,7 +67,9 @@
     </view>
 
     <view class="pf-actions">
-      <button class="xj-btn-primary pf-save" bindtap="save" disabled="{{saving}}">{{saving ? '保存中…' : '保存'}}</button>
+      <!-- disabled 必须与 profile.js 的守卫同口径（saving || avatarUploading），
+           否则「上传中」按钮看起来可点、点了却静默 return -->
+      <button class="xj-btn-primary pf-save" bindtap="save" disabled="{{saving || avatarUploading}}">{{saving ? '保存中…' : '保存'}}</button>
       <view class="pf-error pf-form-error" wx:if="{{formError}}">{{formError}}</view>
     </view>
   </block>
