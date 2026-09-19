@@ -141,8 +141,14 @@ def _selectors(source: Any) -> dict[str, str]:
             for name in ("list", "title", "content", "date")}
 
 
-def extract_list(html: str, source: Any, base_url: str) -> list[dict[str, str]]:
-    """按 `selectors.list` 解析列表页，返回 `[{title, url}]`（去重、保持文档顺序）。"""
+def extract_list(
+    html: str, source: Any, base_url: str, *, skipped: Optional[list[str]] = None
+) -> list[dict[str, str]]:
+    """按 `selectors.list` 解析列表页，返回 `[{title, url}]`（去重、保持文档顺序）。
+
+    `skipped` 传一个列表进来可以收集**被跳过**的 href（畸形链接），供调用方如实报告
+    —— 静默跳过会让"少采了几条"永远查不出来。
+    """
     expr = _selectors(source).get("list", "")
     if not expr:
         return []
@@ -153,7 +159,16 @@ def extract_list(html: str, source: Any, base_url: str) -> list[dict[str, str]]:
         href = node.get("href") or node.get("data-href")
         if not href:
             continue
-        url = absolutize(href, base_url)
+        try:
+            url = absolutize(href, base_url)
+        except ValueError:
+            # ⚠️ 畸形 href（如 `http://a[b/`）会让 `urljoin` 抛 `Invalid IPv6 URL`。
+            # 这是**单条**的问题，不该让整源零采集；更不能让它冒泡到调用方 ——
+            # 那里的 `except ValueError` 是给"选择器写错"准备的，会把错误信息
+            # 说成「selectors.list 无效」，让运维跑去改一个本来没问题的配置。
+            if skipped is not None:
+                skipped.append(href)
+            continue
         if url in seen:
             continue
         seen.add(url)
@@ -290,13 +305,23 @@ def collect_source(
                 elapsed_ms=int((time.perf_counter() - t0) * 1000))
 
     # ② 解析列表
+    #    走到 `except` 的**只剩选择器语法错**（单条畸形 href 已在 `extract_list`
+    #    内部跳过并收集进 skipped_hrefs）—— 这两种失败必须分开报，
+    #    否则运维会被引去改一个本来没问题的配置。
+    skipped_hrefs: list[str] = []
     try:
-        listed = extract_list(page.text, source, page.final_url or url)
-    except ValueError as exc:                 # 选择器写错 —— 明确报出来，别静默零条
+        listed = extract_list(page.text, source, page.final_url or url,
+                              skipped=skipped_hrefs)
+    except ValueError as exc:
         result.ok = False
         result.errors.append(f"selectors.list 无效：{exc}")
         return result
     result.listed = len(listed)
+    if skipped_hrefs:
+        more = f"（共 {len(skipped_hrefs)} 条）" if len(skipped_hrefs) > 1 else ""
+        result.errors.append(
+            f"跳过畸形链接（无法补全为绝对地址）：{skipped_hrefs[0]!r}{more}"
+        )
 
     # ③ 逐条详情（**每条都要过闸门**，不是只过一次）
     for item in listed[:max(0, limit)]:

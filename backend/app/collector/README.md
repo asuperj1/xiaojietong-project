@@ -232,6 +232,10 @@ python -m app.collector run <config.yml> --json result.json   # 结果落盘
 12. **配置里的 `key` 与 `name` 都强制唯一**（B27 review P3）：判重键落在入库的
     `source` 列（= name）上，name 撞车会让两个源互相判重、**静默少采**；
     宁可加载时直接报错。
+13. **两种 `ValueError` 不能混**（B27 review P2）：`extract_list` 在内部消化畸形 href
+    （单条跳过并如实上报），让 `collect_source` 的 `except ValueError` **只接**
+    "选择器语法错"。混在一起会把 URL 畸形报成「`selectors.list` 无效」，
+    把运维引向一个本来没问题的配置 —— 而且会让整源零采集。
 
 ---
 
@@ -246,14 +250,15 @@ python -m pytest tests/test_collector.py tests/test_collector_b27.py -q    # 97 
 缓存与过期、`Crawl-delay` 解析、限速取更严值、注册表复用、JSONL 落盘与坏行容错、
 `FetchGuard` 的拒绝路径 / 等待路径 / `respect_robots=false` 绕过路径 / 结果记录。
 
-`test_collector_b27.py`（B27，67 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
+`test_collector_b27.py`（B27，70 项）覆盖：选择器（含**真实 C21 配置里的全部写法**）、
 列表页去重与相对链接补全、缺 `content` 选择器时退化为 body、
 **详情页逐条过 robots**（被禁的那条一条请求都不发、其余照常入库）、
 限速作用于每一次请求、`Crawl-delay` 压过 qps、单条失败不拖累其余、
 幂等重跑、`--dry-run` 不碰数据库、`--limit`、
 **空列表告警与 `--fail-on-empty`**、CLI 退出码与 `check` 回归；
-另有 review 复检补的三组：**出网安全闸门**（含"内网链接连 robots 都不去问"的端到端断言）、
-**单条入库失败不拖垮整轮**（含"后面的源照跑"）、**配置 key/name 唯一性**。
+另有 review 复检补的四组：**出网安全闸门**（含"内网链接连 robots 都不去问"的端到端断言）、
+**单条入库失败不拖垮整轮**（含"后面的源照跑"）、**配置 key/name 唯一性**、
+**单条畸形链接 vs 选择器错误**（两种 `ValueError` 分开报，别把 URL 问题说成配置问题）。
 
 **其中最后 3 项是"真发请求"的**（起一个只监听 `127.0.0.1` 随机端口的
 `http.server`，不注入 opener）：校验默认 UA 可 latin-1 编码、HTTP 请求能真的把 UA

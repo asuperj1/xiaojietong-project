@@ -812,3 +812,46 @@ def test_load_sources_rejects_duplicate_key(tmp_path):
     with pytest.raises(SystemExit) as exc:
         load_sources(path)
     assert "key 重复" in str(exc.value)
+
+
+# ======================= review 复检：单条畸形链接 vs 选择器错误 ====
+#
+# `urljoin` 对 `http://a[b/` 这类畸形 href 会抛 `Invalid IPv6 URL`。它原先冒泡到
+# `collect_source` 那句**专为选择器写错准备**的 `except ValueError`，于是：
+# ① 整源零采集（不是跳过坏的那条）；② 报成「selectors.list 无效」，
+# 把运维引去改一个本来没问题的配置。下面三条把两者钉开。
+
+LIST_HTML_WITH_BAD_HREF = """<html><body><ul class="news-list">
+  <li><a href="/notice/1.html">第1条通知</a></li>
+  <li><a href="http://a[b/">畸形链接</a></li>
+  <li><a href="/notice/2.html">第2条通知</a></li>
+</ul></body></html>"""
+
+
+def test_extract_list_skips_malformed_href_and_reports_it():
+    """单条畸形 href 只跳过它自己，并如实报告（不是静默吞掉）。"""
+    skipped: list[str] = []
+    items = extract_list(LIST_HTML_WITH_BAD_HREF, SOURCE, LIST_URL, skipped=skipped)
+
+    assert [i["url"] for i in items] == [_detail_url(1), _detail_url(2)]
+    assert skipped == ["http://a[b/"]
+
+
+def test_malformed_href_does_not_kill_the_whole_source():
+    """一条畸形链接不该让整源零采集，也不该被误报成选择器问题。"""
+    result, store, _, _ = _run(pages=_pages(LIST_HTML_WITH_BAD_HREF, numbers=(1, 2)))
+
+    assert (result.listed, result.fetched, result.inserted) == (2, 2, 2)
+    assert len(result.errors) == 1
+    assert "畸形链接" in result.errors[0]
+    assert "选择器" not in result.errors[0], "别把畸形链接误报成选择器问题"
+    assert result.ok is False          # 该提醒照提醒（退出码 1），但采集照常完成
+
+
+def test_bad_selector_still_reports_selector_problem():
+    """回归：真正的选择器语法错仍要说「selectors.list 无效」—— 两种失败别混。"""
+    src = {**SOURCE, "selectors": {**SOURCE["selectors"], "list": "a > b"}}
+    result, _, _, _ = _run(source=src)
+
+    assert result.errors and "selectors.list 无效" in result.errors[0]
+    assert (result.listed, result.inserted) == (0, 0)
