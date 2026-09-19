@@ -1,39 +1,160 @@
-<!-- 校园地图（F9-C） -->
-<view class="xj-page">
-  <view class="topbar">
-    <input class="search" placeholder="搜索地点名称" value="{{q}}" bindinput="onSearchInput" confirm-type="search" bindconfirm="onSearch" />
-    <view class="nearby-btn" bindtap="onNearby">附近</view>
+<!-- 校园地图（F18 · 需求 10）：全屏地图容器 + 玻璃顶部导航 + POI 玻璃信息卡 -->
+<view class="map-root {{glassFallback ? 'is-glass-fallback' : ''}}">
+
+  <!-- ① 地图主体：占满页面（100vh），顶部导航/底部信息卡均为浮层，不挤占地图 -->
+  <!-- enable-poi=false：关闭腾讯底图自带 POI 图层。校园点位全部由本页自绘 marker
+       承载，底图 POI 会与自绘 marker 视觉竞争并在点击时抢事件。
+       enable-building 保留 true：建筑轮廓有助于辨识方位，且不与 marker 冲突。 -->
+  <map
+    id="campus-map"
+    class="map-canvas"
+    latitude="{{center.latitude}}"
+    longitude="{{center.longitude}}"
+    scale="{{scale}}"
+    markers="{{markers}}"
+    polyline="{{polyline}}"
+    show-location="{{showLocation}}"
+    enable-3D="{{false}}"
+    enable-rotate="{{false}}"
+    enable-overlooking="{{false}}"
+    enable-traffic="{{false}}"
+    enable-poi="{{false}}"
+    enable-building="{{true}}"
+    bindmarkertap="onMarkerTap"
+    bindtap="onMapTap"
+    binderror="onMapError"
+  ></map>
+
+  <!-- ② 顶部导航（浮层）：返回 + 标题 + 建筑入口 + 定位按钮 -->
+  <!-- 自定义导航下微信胶囊按钮仍绘制在右上角，故右侧预留 capsuleReserve 宽度 -->
+  <view class="nav-bar" style="padding-top: {{statusBarHeight}}px">
+    <view class="nav-inner" style="padding-right: {{capsuleReserve}}px">
+      <view
+        class="nav-btn nav-back"
+        hover-class="is-pressed"
+        hover-stay-time="80"
+        bindtap="onBack"
+      >
+        <!-- 线性返回箭头：纯 CSS 边框（本仓无专用于导航的线性 SVG 图标，故不自造资产） -->
+        <view class="glyph-back"></view>
+      </view>
+
+      <view class="nav-title">
+        <text class="nav-title-main">校园地图</text>
+        <text class="nav-title-sub" wx:if="{{!loading && !error}}">{{items.length}} 个地点</text>
+      </view>
+
+      <view
+        class="nav-btn nav-building"
+        hover-class="is-pressed"
+        hover-stay-time="80"
+        bindtap="onOpenBuildings"
+      >
+        <view class="glyph-building"></view>
+      </view>
+
+      <view
+        class="nav-btn nav-locate {{locating ? 'is-loading' : ''}}"
+        hover-class="is-pressed"
+        hover-stay-time="80"
+        bindtap="onLocate"
+      >
+        <view class="glyph-locate"></view>
+      </view>
+    </view>
+
+    <!-- 分类 chips：成员由真实 POI 数据推导（不写死分类）；【附近】为一次性周边查询 -->
+    <scroll-view class="chips" scroll-x show-scrollbar="{{false}}">
+      <view class="chips-row">
+        <view
+          class="chip {{catIndex === index ? 'chip--active' : ''}}"
+          wx:for="{{cats}}"
+          wx:key="*this"
+          data-index="{{index}}"
+          bindtap="onCatChange"
+        >{{item}}</view>
+
+        <view
+          class="chip chip--nearby {{nearbyActive ? 'chip--active' : ''}} {{locating ? 'is-loading' : ''}}"
+          bindtap="onNearby"
+        >
+          <view class="chip-dot"></view>
+          <text>{{nearbyActive ? '周边 ' + nearbyCount + ' 个' : '附近'}}</text>
+        </view>
+      </view>
+    </scroll-view>
   </view>
 
-  <view class="tabs">
-    <view class="tab {{catIndex === index ? 'tab-active' : ''}}" wx:for="{{cats}}" wx:key="*this" data-index="{{index}}" bindtap="onCatChange">{{item}}</view>
+  <!-- ③ 加载态：仅在尚无 markers 时全屏提示，已有数据时保持地图可交互 -->
+  <view wx:if="{{loading && items.length === 0}}" class="overlay-state xj-glass-strong">
+    <view class="spinner"></view>
+    <text class="overlay-text">正在加载地点…</text>
   </view>
 
-  <view class="xj-card">
-    <view class="sec-title">校园建筑</view>
-    <view class="building-item" wx:for="{{buildings}}" wx:key="id" data-id="{{item.id}}" bindtap="onBuildingTap">
-      <text>{{item.name}}</text>
-      <text class="arrow">›</text>
+  <!-- ④ 失败态：区分「接口失败」与「无 POI 数据」，失败可重试（重试保留当前分类） -->
+  <view wx:elif="{{error}}" class="overlay-state overlay-state--error xj-glass-strong">
+    <text class="overlay-text">地点加载失败</text>
+    <view class="overlay-retry" hover-class="is-pressed" bindtap="retryFetch">重试</view>
+  </view>
+
+  <view wx:elif="{{empty}}" class="overlay-state xj-glass-strong">
+    <text class="overlay-text">暂无地点数据</text>
+    <view class="overlay-retry" hover-class="is-pressed" bindtap="retryFetch">刷新</view>
+  </view>
+
+  <!-- ⑤ 地图自身渲染失败（真机常见于离线 / 无地图能力）如实提示，不假装地图正常 -->
+  <view wx:if="{{mapError}}" class="map-error">{{mapError}}</view>
+
+  <!-- ⑥ 底部信息卡（浮层）：导航路线态 优先于 POI 详情态 -->
+  <view wx:if="{{nav.active}}" class="poi-card xj-glass-panel">
+    <view class="card-head">
+      <view class="card-head-text">
+        <text class="card-title">步行导航 · {{nav.targetName}}</text>
+        <text class="card-sub">
+          <text wx:if="{{nav.distanceText}}">{{nav.distanceText}}</text><text wx:if="{{nav.durationText}}"> · 约 {{nav.durationText}}</text><text wx:if="{{nav.detourText}}"> · {{nav.detourText}}</text>
+        </text>
+      </view>
+      <view class="card-close" hover-class="is-pressed" bindtap="onClearNav"><view class="glyph-close"></view></view>
+    </view>
+
+    <!-- 起点来源如实展示：nearest_poi 时明确说明不是用户真实位置 -->
+    <view wx:if="{{nav.fromUserLocation}}" class="nav-src">起点：你的当前位置（已授权定位）</view>
+    <view wx:else class="nav-src nav-src--warn">起点：距目标最近的地标（未获取到你的位置）</view>
+    <view wx:if="{{nav.isStraightFallback}}" class="nav-src nav-src--warn">路网受阻，本条为直线示意</view>
+
+    <view class="card-actions">
+      <view class="act act--ghost" hover-class="is-pressed" bindtap="onOpenBuildings">建筑</view>
+      <view class="act act--primary" hover-class="is-pressed" bindtap="onClearNav">结束导航</view>
     </view>
   </view>
 
-  <view wx:if="{{loading}}" class="xj-loading">加载中…</view>
-
-  <block wx:elif="{{error}}">
-    <view class="xj-empty">
-      <text class="xj-empty-icon">⚠️</text>{{error}}
-      <view><button class="xj-btn-plain retry" bindtap="fetch">重试</button></view>
+  <view wx:elif="{{selectedPoi}}" class="poi-card xj-glass-panel">
+    <view class="card-head">
+      <view class="card-head-text">
+        <text class="card-title">{{selectedPoi.name || '未命名地点'}}</text>
+        <text class="card-sub">
+          <text wx:if="{{selectedPoi.category}}">{{selectedPoi.category}}</text><text wx:if="{{selectedPoi.floor}}"> · {{selectedPoi.floor}} 楼</text><text wx:if="{{selectedPoi.distanceText}}"> · {{selectedPoi.distanceText}}</text>
+        </text>
+      </view>
+      <view class="card-close" hover-class="is-pressed" bindtap="onCloseCard"><view class="glyph-close"></view></view>
     </view>
-  </block>
 
-  <block wx:elif="{{items.length === 0}}">
-    <view class="xj-empty"><text class="xj-empty-icon">🗺️</text>暂无地点数据</view>
-  </block>
+    <view class="card-coord">{{selectedPoi.latitude}}, {{selectedPoi.longitude}}</view>
 
-  <block wx:else>
-    <view class="xj-card" wx:for="{{items}}" wx:key="id" data-id="{{item.id}}" bindtap="onPoiTap">
-      <view class="poi-name">{{item.name}}</view>
-      <view class="poi-sub">{{item.category}}<text wx:if="{{item.floor}}"> · {{item.floor}} 楼</text><text wx:if="{{item.distance}}"> · {{item.distance}} 米</text></view>
+    <!-- 「建筑详情」按钮仅在接口真的带回 building_id 时出现：
+         GET /map/pois 当前不返回该列，因此正常数据下按钮不渲染，
+         不会出现「永远点不动的假入口」；后端补出该列即自动生效。 -->
+    <view class="card-actions">
+      <view class="act act--primary" hover-class="is-pressed" bindtap="onNavigate">到这去</view>
+      <view wx:if="{{selectedPoi.buildingId}}" class="act act--ghost" hover-class="is-pressed" bindtap="onOpenBuilding">建筑详情</view>
     </view>
-  </block>
+  </view>
+
+  <!-- ⑦ 路线计算中：卡片尚未激活，但必须让用户看到"点到了、正在算"，
+       否则"到这去"看起来像没反应（导航请求有防重入，重复点击不会重发） -->
+  <view wx:if="{{nav.loading}}" class="overlay-state xj-glass-strong">
+    <view class="spinner"></view>
+    <text class="overlay-text">正在规划步行路线…</text>
+  </view>
+
 </view>

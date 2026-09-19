@@ -1,73 +1,417 @@
-/* 校园地图（F9-C） */
-.topbar {
+/* ============================================================
+   校园地图（F18 · 需求 10）
+   视觉：二阶段「苹果风 + 液态玻璃」，复用 F10 token / glass 基础设施
+   布局：地图占满页面（100vh），导航与信息卡均为浮层 —— 地图不被顶部/底部挤占
+   ============================================================ */
+@import "../../styles/tokens.wxss";
+@import "../../styles/glass.wxss";
+
+/* ---- 根容器：地图铺满，浮层按需定位 ---- */
+.map-root {
+  position: relative;
+  width: 100%;
+  /* 地图容器高度 = 整屏（需求要求「占屏 ≥ 60%」）；用 vh 而非 % 以摆脱父级高度依赖 */
+  height: 100vh;
+  overflow: hidden;
+  background-color: #EDF1F7;
+  /* 安全区变量：浮层抬升，地图本体仍铺满。
+     顶部安全区由 JS 注入 statusBarHeight（env(safe-area-inset-top) 在部分安卓
+     WebView 取不到值），因此这里只保留底部变量，不定义用不到的 --map-safe-top。 */
+  --map-safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.map-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ---- 顶部玻璃导航（浮层）---- */
+.nav-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: var(--xj-space-sm, 16rpx) var(--xj-space-md, 24rpx) var(--xj-space-xs, 8rpx);
+}
+.nav-inner {
   display: flex;
-  align-items: center;
-  padding: 16rpx 24rpx;
-}
-.search {
-  flex: 1;
-  height: 68rpx;
-  background: #ffffff;
-  border-radius: 34rpx;
-  padding: 0 28rpx;
-  font-size: 28rpx;
-  box-sizing: border-box;
-}
-.nearby-btn {
-  margin-left: 16rpx;
-  color: #4A90D9;
-  font-size: 28rpx;
-}
-.tabs {
-  display: flex;
-  flex-wrap: wrap;
-  padding: 0 24rpx 16rpx;
-}
-.tab {
-  font-size: 26rpx;
-  color: #666666;
-  padding: 8rpx 20rpx;
-  margin: 0 8rpx 8rpx 0;
-  border-radius: 28rpx;
-  background: #ffffff;
-}
-.tab-active {
-  background: #4A90D9;
-  color: #ffffff;
-}
-.sec-title {
-  font-size: 30rpx;
-  font-weight: 600;
-  color: #333333;
-  margin-bottom: 8rpx;
-}
-.building-item {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
   height: 88rpx;
-  font-size: 28rpx;
-  color: #333333;
-  border-bottom: 1rpx solid #f5f5f5;
+  /* padding-right 由 JS 按胶囊按钮实测位置注入（capsuleReserve），
+     保证右侧「定位」按钮不被微信原生胶囊盖住 */
+  box-sizing: border-box;
 }
-.building-item:last-child {
-  border-bottom: none;
+/* 轻量玻璃：半透明 + 细边 + 柔和阴影，不使用厚重纯色块 */
+.nav-btn {
+  flex: none;
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.86);
+  background: var(--xj-glass-bg-reduced, rgba(255, 255, 255, 0.86));
+  border: 1rpx solid var(--xj-glass-border, rgba(255, 255, 255, 0.55));
+  box-shadow: 0 4rpx 16rpx rgba(31, 38, 135, 0.1);
 }
-.arrow {
-  color: #cccccc;
-  font-size: 36rpx;
+/* 正向增强：仅当引擎支持 backdrop-filter 时才转为真玻璃（不用 @supports not） */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .nav-btn {
+    background: var(--xj-glass-bg, rgba(255, 255, 255, 0.62));
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
 }
-.poi-name {
-  font-size: 30rpx;
-  font-weight: 600;
-  color: #333333;
+/* 无 backdrop-filter 能力（低端 Android / 用户减弱透明）→ 实心底，保证可读 */
+.is-glass-fallback .nav-btn {
+  background: #FFFFFF;
+  background: var(--xj-glass-bg-fallback, #FFFFFF);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
-.poi-sub {
-  margin-top: 8rpx;
-  font-size: 24rpx;
-  color: #999999;
+.nav-btn--active {
+  background: rgba(255, 255, 255, 0.92);
 }
-.retry {
-  margin: 24rpx auto 0;
-  width: 240rpx;
+/* 降级态下 .is-glass-fallback .nav-btn（特异性 0,2,0）会压过上面的
+   .nav-btn--active（0,1,0），必须补一条同特异性的规则，
+   否则实心底模式下按压没有任何视觉反馈。 */
+.is-glass-fallback .nav-btn--active {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+/* 返回箭头：线性描边（与二阶段线性图标语言一致，不引入新的位图/emoji） */
+.glyph-back {
+  width: 18rpx;
+  height: 18rpx;
+  border-left: 3rpx solid var(--xj-text-primary, #1F2329);
+  border-bottom: 3rpx solid var(--xj-text-primary, #1F2329);
+  border-radius: 2rpx;
+  transform: rotate(45deg);
+  margin-left: 6rpx;
+}
+
+/* 建筑入口：4 格方形网格（"楼群"意象），纯 CSS 绘制 */
+.nav-building {
+  margin-right: var(--xj-space-xs, 8rpx);
+}
+.glyph-building {
+  width: 24rpx;
+  height: 24rpx;
+  background-image: linear-gradient(var(--xj-text-primary, #1F2329), var(--xj-text-primary, #1F2329)),
+    linear-gradient(var(--xj-text-primary, #1F2329), var(--xj-text-primary, #1F2329)),
+    linear-gradient(var(--xj-text-primary, #1F2329), var(--xj-text-primary, #1F2329)),
+    linear-gradient(var(--xj-text-primary, #1F2329), var(--xj-text-primary, #1F2329));
+  background-size: 10rpx 10rpx;
+  background-position: 0 0, 14rpx 0, 0 14rpx, 14rpx 14rpx;
+  background-repeat: no-repeat;
+}
+
+/* 定位控件：同心圆 + 圆心点，纯 CSS 绘制 */
+.glyph-locate {
+  position: relative;
+  width: 30rpx;
+  height: 30rpx;
+  border: 3rpx solid var(--xj-text-primary, #1F2329);
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.glyph-locate::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 10rpx;
+  height: 10rpx;
+  margin: -5rpx 0 0 -5rpx;
+  border-radius: 50%;
+  background: var(--xj-color-primary, #4A90D9);
+}
+/* 定位中：呼吸态（仅由 locating 状态驱动，非常驻动画，不占用地图渲染） */
+.nav-locate.is-loading .glyph-locate {
+  opacity: 0.45;
+}
+.nav-locate.is-loading {
+  animation: map-pulse 1s ease-in-out infinite;
+}
+@keyframes map-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* 标题：渐进增强——不支持 backdrop-filter 时用实心浅色底保证地图上的可读性 */
+.nav-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0 var(--xj-space-sm, 16rpx);
+  padding: var(--xj-space-xs, 8rpx) var(--xj-space-sm, 16rpx);
+  border-radius: var(--xj-radius-pill, 999rpx);
+  background: rgba(255, 255, 255, 0.86);
+  background: var(--xj-glass-bg-reduced, rgba(255, 255, 255, 0.86));
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .nav-title {
+    background: var(--xj-glass-bg, rgba(255, 255, 255, 0.62));
+    border: 1rpx solid var(--xj-glass-border, rgba(255, 255, 255, 0.55));
+    -webkit-backdrop-filter: var(--xj-glass-blur, blur(20px) saturate(180%));
+    backdrop-filter: var(--xj-glass-blur, blur(20px) saturate(180%));
+  }
+}
+.is-glass-fallback .nav-title {
+  background: #FFFFFF;
+  background: var(--xj-glass-bg-fallback, #FFFFFF);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.nav-title-main {
+  font-size: var(--xj-font-size-md, 28rpx);
+  font-weight: var(--xj-font-weight-semibold, 600);
+  color: var(--xj-text-primary, #1F2329);
+  line-height: 1.2;
+}
+.nav-title-sub {
+  margin-top: 2rpx;
+  font-size: 20rpx;
+  color: var(--xj-text-secondary, #8A9099);
+  line-height: 1.2;
+}
+
+/* ---- 分类 chips（横向滚动，不换行、不挤压地图）---- */
+.chips {
+  margin-top: var(--xj-space-sm, 16rpx);
+  width: 100%;
+  white-space: nowrap;
+}
+.chips-row {
+  display: inline-flex;
+  align-items: center;
+  padding-bottom: 4rpx;
+}
+.chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  margin-right: 12rpx;
+  padding: 10rpx 24rpx;
+  border-radius: var(--xj-radius-pill, 999rpx);
+  font-size: var(--xj-font-size-sm, 24rpx);
+  color: var(--xj-text-primary, #1F2329);
+  background: rgba(255, 255, 255, 0.86);
+  background: var(--xj-glass-bg-reduced, rgba(255, 255, 255, 0.86));
+  box-shadow: 0 2rpx 10rpx rgba(31, 38, 135, 0.08);
+}
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .chip {
+    background: var(--xj-glass-bg, rgba(255, 255, 255, 0.62));
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
+}
+.is-glass-fallback .chip {
+  background: #FFFFFF;
+  background: var(--xj-glass-bg-fallback, #FFFFFF);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* 选中态：主色淡底 + 主色文字（避免大面积纯色厚块） */
+.chip--active {
+  background: var(--xj-color-primary-soft, rgba(74, 144, 217, 0.12));
+  color: var(--xj-color-primary-strong, #3F82C7);
+  font-weight: var(--xj-font-weight-semibold, 600);
+}
+/* 看似与上面的 .chip--active 重复，实为必要：本规则必须压过
+   .is-glass-fallback .chip 才能保住选中态的主色底（两者特异性相同，靠顺序取胜）。 */
+.is-glass-fallback .chip--active {
+  background: var(--xj-color-primary-soft, rgba(74, 144, 217, 0.12));
+}
+.chip--nearby .chip-dot {
+  width: 12rpx;
+  height: 12rpx;
+  margin-right: 8rpx;
+  border-radius: 50%;
+  background: var(--xj-color-primary, #4A90D9);
+  box-shadow: 0 0 0 4rpx rgba(74, 144, 217, 0.18);
+}
+.chip--nearby.is-loading {
+  opacity: 0.6;
+}
+
+/* ---- 全屏状态浮层（加载 / 失败 / 空数据）---- */
+.overlay-state {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 30;
+  min-width: 300rpx;
+  padding: var(--xj-space-lg, 32rpx);
+  border-radius: var(--xj-radius-panel, 28rpx);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.overlay-text {
+  font-size: var(--xj-font-size-md, 28rpx);
+  color: var(--xj-text-secondary, #8A9099);
+}
+.overlay-state--error .overlay-text {
+  color: var(--xj-text-primary, #1F2329);
+}
+.overlay-retry {
+  margin-top: var(--xj-space-md, 24rpx);
+  padding: 10rpx 40rpx;
+  border-radius: var(--xj-radius-pill, 999rpx);
+  border: 1rpx solid var(--xj-color-primary, #4A90D9);
+  color: var(--xj-color-primary, #4A90D9);
+  font-size: var(--xj-font-size-sm, 24rpx);
+}
+.spinner {
+  width: 44rpx;
+  height: 44rpx;
+  margin-bottom: var(--xj-space-sm, 16rpx);
+  border: 4rpx solid rgba(74, 144, 217, 0.2);
+  border-top-color: var(--xj-color-primary, #4A90D9);
+  border-radius: 50%;
+  animation: map-spin 0.8s linear infinite;
+}
+@keyframes map-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 地图组件自身失败提示：贴在导航下方，不遮挡地图交互 */
+.map-error {
+  position: absolute;
+  top: 240rpx;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  max-width: 80%;
+  padding: 10rpx 24rpx;
+  border-radius: var(--xj-radius-pill, 999rpx);
+  background: rgba(222, 107, 124, 0.92);
+  color: #FFFFFF;
+  font-size: var(--xj-font-size-sm, 24rpx);
+}
+
+/* ---- 底部 POI 信息卡 / 导航卡（玻璃浮层）---- */
+.poi-card {
+  position: absolute;
+  left: var(--xj-space-md, 24rpx);
+  right: var(--xj-space-md, 24rpx);
+  bottom: calc(var(--xj-space-md, 24rpx) + var(--map-safe-bottom, 0px));
+  z-index: 20;
+  padding: var(--xj-space-md, 24rpx);
+}
+.card-head {
+  display: flex;
+  align-items: flex-start;
+}
+.card-head-text {
+  flex: 1;
+  min-width: 0;
+}
+.card-title {
+  display: block;
+  font-size: var(--xj-font-size-lg, 32rpx);
+  font-weight: var(--xj-font-weight-semibold, 600);
+  color: var(--xj-text-primary, #1F2329);
+  line-height: 1.3;
+}
+.card-sub {
+  display: block;
+  margin-top: 6rpx;
+  font-size: var(--xj-font-size-sm, 24rpx);
+  color: var(--xj-text-secondary, #8A9099);
+}
+.card-close {
+  flex: none;
+  width: 48rpx;
+  height: 48rpx;
+  margin-left: var(--xj-space-sm, 16rpx);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(31, 35, 41, 0.05);
+}
+/* 关闭叉：两条描边交叉（线性图标语言，不用 emoji/粗填充符号） */
+.glyph-close {
+  position: relative;
+  width: 22rpx;
+  height: 22rpx;
+}
+.glyph-close::before,
+.glyph-close::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 3rpx;
+  margin-top: -1rpx;
+  border-radius: 2rpx;
+  background: var(--xj-text-secondary, #8A9099);
+}
+.glyph-close::before {
+  transform: rotate(45deg);
+}
+.glyph-close::after {
+  transform: rotate(-45deg);
+}
+.card-coord {
+  margin-top: var(--xj-space-xs, 8rpx);
+  font-size: 22rpx;
+  color: var(--xj-text-disabled, #C4C9D0);
+}
+.nav-src {
+  margin-top: var(--xj-space-xs, 8rpx);
+  font-size: 22rpx;
+  color: var(--xj-text-secondary, #8A9099);
+}
+.nav-src--warn {
+  color: #C79A4A;
+}
+.card-actions {
+  display: flex;
+  align-items: center;
+  margin-top: var(--xj-space-md, 24rpx);
+}
+.act {
+  height: 72rpx;
+  padding: 0 36rpx;
+  border-radius: var(--xj-radius-pill, 999rpx);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--xj-font-size-md, 28rpx);
+  margin-right: var(--xj-space-sm, 16rpx);
+}
+/* 主操作：主色实心（页面内唯一的强调块，克制使用） */
+.act--primary {
+  background: var(--xj-color-primary, #4A90D9);
+  color: var(--xj-text-inverse, #FFFFFF);
+  font-weight: var(--xj-font-weight-semibold, 600);
+}
+/* 次操作：描边幽灵按钮 */
+.act--ghost {
+  background: transparent;
+  border: 1rpx solid var(--xj-color-primary, #4A90D9);
+  color: var(--xj-color-primary, #4A90D9);
+}
+
+/* ---- 按压反馈（本页专用） ----
+   不能复用 .chip--active / .nav-btn--active 当 hover-class：它们出现在各自元素规则
+   之前且特异性相同，会被元素自身的 background 覆盖，按压时看不到任何变化。
+   本类追加在样式表末尾，特异性 0,1,0，可稳定压过 .act--primary / .act--ghost /
+   .card-close / .overlay-retry 的常态背景。 */
+.is-pressed {
+  opacity: 0.72;
 }

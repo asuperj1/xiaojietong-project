@@ -51,5 +51,11 @@
       { "pagePath": "pages/user/user", "text": "我的" }
     ]
   },
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于地图定位、查找周边地点与步行导航"
+    }
+  },
+  "requiredPrivateInfos": ["getLocation"],
   "style": "v2"
 }

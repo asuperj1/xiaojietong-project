@@ -1,4 +1,5 @@
 {
   "usingComponents": {},
-  "navigationBarTitleText": "校园地图"
+  "navigationStyle": "custom",
+  "disableScroll": true
 }
