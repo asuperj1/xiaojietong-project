@@ -1,70 +1,136 @@
-/* 我的（F8） */
-.profile {
+/* ============================================================
+   我的（需求 9 / F17）—— 个人信息区 + 玻璃分割列表
+   依据：docs/二阶段整改方案-前端UI重构与后端支撑.md §2.5、视觉规范 §1.1 / §1.3
+   玻璃与令牌：复用 app.wxss 全局引入的 styles/tokens.wxss + styles/glass.wxss
+              （.xj-glass-card / .xj-page-bg / var(--xj-*)）；不新增主题变量、不改公共样式。
+   能力降级：根节点 .is-glass-fallback 由 user.js 读 globalData.glassSupported 决定
+            （第三层运行时降级，规则见 styles/glass.wxss）。
+   注：`.me-*.xj-glass-card` 是复合类选择器，把本页几何覆盖到库类上，
+       (0,2,0) > 库的 (0,1,0)，与 app.wxss / 页面 wxss 的先后顺序无关。
+   ============================================================ */
+
+/* ---- 个人信息区 ----
+   库类 .xj-glass-card 只给圆角与内边距，外边距由本页提供（与 .xj-card 的 24rpx 对齐）。 */
+.me-profile {
   display: flex;
   align-items: center;
+  margin: 0 24rpx 20rpx;
+  /* 按压反馈（§1.3：scale(.96) / 150ms / cubic-bezier(.4,0,.2,1)） */
+  transition: transform var(--xj-duration-fast, 150ms) var(--xj-ease-press, cubic-bezier(0.4, 0, 0.2, 1));
 }
-.avatar {
+.me-pressed {
+  transform: scale(0.96);
+}
+
+.me-avatar {
   width: 120rpx;
   height: 120rpx;
   border-radius: 50%;
-  background: #eef5fc;
+  background: rgba(74, 144, 217, 0.12);
+  background: var(--xj-color-primary-soft, rgba(74, 144, 217, 0.12));
+  flex-shrink: 0;
 }
-.avatar-text {
+.me-avatar-text {
   display: flex;
   align-items: center;
   justify-content: center;
   color: #4A90D9;
+  color: var(--xj-color-primary, #4A90D9);
   font-size: 48rpx;
   font-weight: 600;
+  font-weight: var(--xj-font-weight-semibold, 600);
 }
-.profile-info {
+
+.me-info {
   margin-left: 24rpx;
+  margin-left: var(--xj-space-md, 24rpx);
   flex: 1;
+  /* 长昵称/长学号不撑破卡片：文本省略交给子项 */
+  min-width: 0;
 }
-.nickname {
+.me-nickname {
   font-size: 36rpx;
+  font-size: var(--xj-font-size-title, 36rpx);
   font-weight: 600;
-  color: #333333;
+  font-weight: var(--xj-font-weight-semibold, 600);
+  line-height: var(--xj-line-height, 1.6);
+  color: #1F2329;
+  color: var(--xj-text-primary, #1F2329);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.sub {
+.me-sub {
   margin-top: 6rpx;
   font-size: 24rpx;
-  color: #999999;
+  font-size: var(--xj-font-size-sm, 24rpx);
+  line-height: var(--xj-line-height, 1.6);
+  color: #8A9099;
+  color: var(--xj-text-secondary, #8A9099);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.menu {
+.me-arrow {
+  color: #C4C9D0;
+  color: var(--xj-text-disabled, #C4C9D0);
+  font-size: 36rpx;
+  line-height: 1;
+  padding-left: 16rpx;
+  padding-left: var(--xj-space-sm, 16rpx);
+}
+
+/* ---- 列表：玻璃底 + 单元格细分割线（§2.5 要求 3）----
+   纵向内边距收到 0，让分割线贯穿整行；左右沿用库类的 24rpx。 */
+.me-menu.xj-glass-card {
+  margin: 0 24rpx 20rpx;
   padding: 0 24rpx;
+  padding: 0 var(--xj-space-md, 24rpx);
 }
-.menu-item {
+.me-menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 96rpx;
   font-size: 30rpx;
-  color: #333333;
-  border-bottom: 1rpx solid #f5f5f5;
+  line-height: var(--xj-line-height, 1.6);
+  color: #1F2329;
+  color: var(--xj-text-primary, #1F2329);
+  /* 发丝分割线（暗色 6% 透明）：玻璃底上比 #f5f5f5 实色线更贴合 §1.1 */
+  border-bottom: 1rpx solid rgba(31, 35, 41, 0.06);
+  border-bottom: 1rpx solid var(--xj-border-hairline, rgba(31, 35, 41, 0.06));
+  transition: background-color var(--xj-duration-fast, 150ms) var(--xj-ease-press, cubic-bezier(0.4, 0, 0.2, 1));
 }
-.menu-item:last-child {
+/* 最后一行不画线：否则会与卡片底边叠成双线 */
+.me-menu-item:last-child {
   border-bottom: none;
 }
-.arrow {
-  color: #cccccc;
-  font-size: 36rpx;
+.me-menu-pressed {
+  /* 与列表项的玻璃底配合：按下时用主色的低透明态（tokens.wxss --xj-color-primary-soft） */
+  background-color: rgba(74, 144, 217, 0.12);
+  background-color: var(--xj-color-primary-soft, rgba(74, 144, 217, 0.12));
 }
-.logout-wrap {
+
+/* ---- 退出登录 ---- */
+.me-logout-wrap {
   padding: 24rpx;
+  padding: var(--xj-space-md, 24rpx);
 }
-.logout-btn {
+.me-logout {
   width: 100%;
   color: #e5484d;
   border-color: #e5484d;
 }
-.retry {
+.me-retry {
   margin: 24rpx auto 0;
   width: 240rpx;
 }
 
 /* F12：为 fixed 定位的自定义 TabBar 自留底部空间（原生 tabBar 由框架预留，自定义不会）。
-   留白 = 底栏占用高度(110rpx + 安全区) + 24rpx 呼吸位；改动需同步 custom-tab-bar/index.wxss。 */
+   留白 = 底栏占用高度(110rpx + 安全区) + 24rpx 呼吸位；改动需同步 custom-tab-bar/index.wxss。
+   ⚠️ 本规则必须留在文件末尾、且选择器保持 .xj-page（根节点真实带的类）：
+   tools/verify_f12_tabbar_poc.js 的 G 段取**最后一个** .xj-page 规则体断言留白数值，
+   并单独断言该规则挂在根节点真实类上（F15 曾因换类名产生过死规则）。 */
 .xj-page {
   padding-bottom: calc(134rpx + env(safe-area-inset-bottom));
 }

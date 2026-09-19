@@ -28,7 +28,8 @@
     "pages/forum/detail",
     "pages/forum/create",
     "pages/forum/mine",
-    "pages/user/favorites"
+    "pages/user/favorites",
+    "pages/user/profile"
   ],
   "window": {
     "navigationBarBackgroundColor": "#4A90D9",
