@@ -104,6 +104,8 @@ event: citations  data: {"fabricated":["学生手册"],"final":"（剔除伪造�
 | 论坛 | topics(列表/创建/我的/详情/点赞/举报/hot/feed) / comments |
 | 地图 | pois / nearby / navigate / building/{id} |
 | 生活 | merchants / menu / orders / notices / notice-read / notice-feed |
+| 首页 | banners / feed（B21） |
+| 搜索 | history(增/列/单删/清空)（B22） |
 | 管理 | metrics / knowledge/ingest / forum/audit / train/corpus |
 | 收藏 | favorites(切换/我的收藏，target_type: topic·item) |
 
@@ -623,6 +625,74 @@ refresh_token 载荷同样带 `tv`；老 refresh_token 无 `tv` 时按 0 处理�
 
 ---
 
+## 10.5 首页与搜索（B21 / B22）
+
+> 均需登录：无 / 无效 token → **401**。
+
+### GET /home/banners — 首页轮播位（B21）
+查询参数：`?limit=20`（1~200，默认 20）。
+响应 `data.items[]`：
+```json
+{ "items": [ { "id":1, "title":"校园通知新版上线",
+               "image":"/static/images/banner-notice.png",
+               "link_type":"page", "link_target":"/pages/notice/index",
+               "sort":30, "start_at":null, "end_at":null,
+               "enabled":1, "created_at":"2026-09-18 22:18:02" } ] }
+```
+- 过滤：`enabled = 1` **且** 在有效期内（`start_at IS NULL OR <= NOW()`；`end_at IS NULL OR >= NOW()`）；
+- 排序：**`sort` 倒序**（越大越前），同分按 `id` 倒序；
+- `start_at` / `end_at` 为 `null` 表示**不限制**（立即生效 / 永不过期）；
+- **实现要求**：直接调 `HomeDAO.list_banners()` —— 「启用 + 有效期 + 排序」的口径写死在
+  `db/cpp_driver/src/dao/home_dao.cpp` 里，路由**不要**另拼一条 SELECT，否则口径会走样；
+- **v1.25 定稿说明**：本接口原先因 `home_banner` 的"漂移形状"（`image_url`/`link_url`）
+  用 `information_schema` 探测列名，并额外返回 `columns` 供排查。C46 已把该表收敛为
+  **权威形状**（`db/sql/15_home_banner.sql`），因此**探测与 `columns` 字段都已删除**，
+  输出字段名与权威列名一致（`image` / `link_type` / `link_target`），
+  不再输出 `image_url` / `link_url` 别名（前端此前未接入本接口，无兼容包袱）。
+
+### GET /home/feed — 首页信息流（B21）
+查询参数：`?sort=recommend|hot&page=&size=`（`sort` 默认 `recommend`；非法值 → **`1001`**，不是 422）
+- `recommend`：B11 个性化打分（兴趣标签 + 行为偏好 + 热度 + 时效），逐条带 `score`/`reason`/`matched_tags`，冷启动回落热度榜；
+- `hot`：论坛热度榜（`ForumDAO.hot_topics`，单次上限 50 条；`page * size > 50` → `1001`），
+  `data.total` 为**本次可取到的条数**；
+  > **安全兜底（必须保留）**：`hot_topics` 的 SQL 只过滤 `is_hot / status / is_deleted`，
+  > **不过滤 `audit_status`** —— 而 `is_hot` 是人工热度标，与审核状态是两条独立链路
+  > （实测把热度标打到违规帖「代考包过」后它会出现在热榜里）。路由按 id 复核
+  > `audit_status = 1 AND is_deleted = 0` 后才返回。
+  > 根治做法是给 `hot_topics` 的 SQL 直接加该条件（需重编译 C++），在那之前这层兜底不能删。
+
+### GET /search/history — 搜索历史（B22）
+查询参数：`?limit=20`（1~100，默认 20）。
+响应 `data`：`{ "items":[{"id":1,"keyword":"图书馆","created_at":"2026-09-19 14:59:41"}], "total":3 }`
+> 倒序（`created_at DESC, id DESC`，走索引 `idx_user_created`）。
+
+### POST /search/history — 写入搜索词（B22，**自动去重**）
+请求 `{ "keyword": "图书馆" }` → 响应 `{ "id":1, "keyword":"图书馆", "created_at":"...", "dedup": false }`
+- **同一用户同一个词只留一行**（唯一键 `uk_user_keyword(user_id, keyword)`）：
+  DAO 内部用 `ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), created_at = CURRENT_TIMESTAMP`
+  —— 重搜同词即**刷新时间、记录顶到最前**，并返回**同一个 `id`**；`dedup=true` 表示该词此前已存在；
+- 前后空白会被去掉；空 / 纯空白 → `1001`；
+- 长度 `> 128` 字 → `1001`（列 `VARCHAR(128)`；不让 MySQL 抛 1406，也不静默截断）；
+- 写入后**自动裁剪**为每人最近 50 条（防历史无限增长）。
+
+### DELETE /search/history/{id} — 单删（B22）
+只删**自己的**记录（DAO 的 `WHERE id = ? AND user_id = ?`）：
+不存在或不属于当前用户 → `1001`。
+
+### DELETE /search/history — 清空（B22）
+只清当前用户，响应 `{ "deleted": 2 }`。
+
+> **B22 实现说明**：读写走 `UserDAO` 的四个方法（C23 交付）——
+> 去重与越权防护都在 DAO 内，路由不再重复拼这两条 SQL；
+> 路由侧只保留两条 DAO 未覆盖的语句：`total` 的 `COUNT(*)` 与「保留最近 50 条」的裁剪。
+
+> **数值与空值归一化（两个接口共通）**：C++ 层的行结果是「列名 → 字符串」，
+> `id`、`sort`、计数类字段读出来是 `"508"` 而非 `508`；SQL `NULL` 读出来是 `""`。
+> 路由统一把数字字段转 `int`、把 `start_at`/`end_at` 的空值转 `null` 后再返回
+> —— 否则前端很容易踩 `"5" === 5` 与"两种空"的坑。
+
+---
+
 ## 11. 管理端（管理员角色）
 
 ### GET /admin/metrics — 系统指标
@@ -939,3 +1009,4 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/notices/purge-private" -Headers
 | v1.23 | 2026-09-16 | **B32 语音转文字**：新增 `POST /voice/transcribe`（wav/mp3/m4a/ogg/webm/amr，**按文件头魔数判定类型**，不信 `Content-Type`）；ASR 后端**配置驱动可插拔**（`XJT_ASR_BACKEND` = `none` / `http` / `whisper`，whisper 为**可选依赖、不进 requirements**）；**失败一律明确回码不静默**——格式/大小/时长 `1001`、服务不可用 `5002`、转写失败 `5003`（本次新增）；单文件 ≤2MB、时长 3~10 秒（WAV 精确校验，其它容器按大小兜底） |
 | v1.7 | 2026-09-11 | B7 Agent 三级链路：模型 Function Call → **规则执行器**（`services/rule_executor.py`，模型不可用时真写库）→ `status=3` 明确失败；移除"未执行工具却报成功"的假成功路径；相对时间换算改为基准日期注入（修复"明天"日期偏移） |
 | v1.24 | 2026-09-17 | **C36 抽取服务化（统一入口 + 与对话模型隔离）**：新增 `services/extract_model.py`（`XJT_EXTRACT_BACKEND` = `ollama`/`http`/`none`，`BASE_URL`/`MODEL`/`MAX_CHARS`/`MAX_CONCURRENCY`/`KEEP_ALIVE` 独立配置；失败**不静默降级**——抛 `ExtractUnavailable`/`ExtractFailure`，绝不返回 `{}`）；`secondhand_ai` 改接统一入口，`POST /secondhand/items/ai-describe` 新增 `model_truncated`（输入过长时先裁备注/标题，保证送进模型的是完整 JSON）；新增 `core/net.py`（回环地址绕过系统代理，修复 Windows 注册表代理导致的 502）；`GET /health/detail` 新增 `extract` 段（配置 / `available` / `ready` / **`isolation`** —— 只换模型不换地址**不算**隔离） |
+| v1.25 | 2026-09-18 | **B21 首页接口 + B22 搜索历史**：新增 `GET /home/banners`（轮播位：启用中 + 有效期内、`sort` 倒序；**直接调 `HomeDAO.list_banners()`**；C46 收敛后删除了 `information_schema` 列名探测与 `columns` 字段，输出字段与权威列名一致 `image`/`link_type`/`link_target`，不再有 `image_url`/`link_url` 别名）、`GET /home/feed`（`sort=recommend\|hot`，非法值 `1001` 而非 422；热榜按 id 复核 `audit_status`，防违规内容上首页）、`GET/POST/DELETE /search/history`（写入自动去重 = ODKU 刷新时间并返回同一 id、裁剪最近 50 条、长度按 `VARCHAR(128)` 校验、单删带 `user_id` 防越权）；`cpp_bridge` 新增 `home_dao()` 访问器。**数值/空值归一化**：C++ 层的行结果是字符串（`"508"`）且 SQL `NULL` 读成 `""`，路由统一转 `int` / `null` 后再返回 |

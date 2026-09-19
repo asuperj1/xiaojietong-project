@@ -133,6 +133,17 @@ def favorite_dao():
     return jt_db.FavoriteDAO()
 
 
+def home_dao():
+    """获取 C++ HomeDAO 实例（首页运营：轮播位，C24 交付）。
+
+    `HomeDAO::list_banners` 把「启用 + 有效期 + sort 倒序」的口径写在一处，
+    B21 的 `GET /home/banners` 直接调它 —— 不要在 Python 里另拼一条 SELECT，
+    否则排序与有效期口径会和 DAO 走样（`home_dao.h` 的注释也有同样要求）。
+    """
+    _require_pool()
+    return jt_db.HomeDAO()
+
+
 def _require_pool() -> None:
     if jt_db is None:
         raise RuntimeError("jt_db C++ 扩展未编译")
