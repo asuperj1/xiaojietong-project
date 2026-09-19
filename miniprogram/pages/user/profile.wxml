@@ -38,7 +38,7 @@
       <view class="pf-field">
         <text class="pf-label">昵称</text>
         <input
-          class="pf-input"
+          class="pf-input xj-glass"
           value="{{nickname}}"
           maxlength="64"
           placeholder="请输入昵称"
@@ -51,15 +51,15 @@
       <view class="pf-field pf-field-last">
         <text class="pf-label">学号</text>
         <input
-          class="pf-input"
+          class="pf-input xj-glass"
           value="{{studentNo}}"
-          maxlength="32"
+          maxlength="20"
           placeholder="未绑定"
           placeholder-class="pf-placeholder"
           bindinput="onStudentNoInput"
         />
       </view>
-      <view class="pf-hint" wx:if="{{!studentNoError}}">学号用于身份认证，绑定后 7 天内只能修改一次</view>
+      <view class="pf-hint" wx:if="{{!studentNoError}}">学号仅用于个人资料展示，绑定后 7 天内只能修改一次</view>
       <view class="pf-error" wx:if="{{studentNoError}}">{{studentNoError}}</view>
     </view>
 

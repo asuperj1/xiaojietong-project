@@ -106,7 +106,9 @@
   border-bottom: none;
 }
 .me-menu-pressed {
-  background-color: rgba(74, 144, 217, 0.06);
+  /* 与列表项的玻璃底配合：按下时用主色的低透明态（tokens.wxss --xj-color-primary-soft） */
+  background-color: rgba(74, 144, 217, 0.12);
+  background-color: var(--xj-color-primary-soft, rgba(74, 144, 217, 0.12));
 }
 
 /* ---- 退出登录 ---- */

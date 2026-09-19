@@ -17,11 +17,22 @@
 //
 // 职责分离：本页是**唯一**发起 `PUT /user/me` 的页面；「我的」主页只读 + 做导航。
 const { request, uploadImage } = require('../../services/request')
+// 学号归一化 / 头像兜底字符与「我的」页共用（utils/profile.js），避免两页各写一套
+const { studentNoOf, firstGlyph } = require('../../utils/profile')
 
 /** 昵称长度上限：db/sql/01_user.sql `nickname VARCHAR(64)` */
 const MAX_NICKNAME = 64
-/** 学号长度上限：db/sql/01_user.sql / 17_user_student_no.sql `student_no VARCHAR(32)` */
-const MAX_STUDENT_NO = 32
+/**
+ * 学号长度范围：任务单 §7.2 的**默认放宽规则** —— `^\S{4,20}$`（仅非空 + 长度）。
+ *
+ * ⚠️ 这不是「自造正则」：规格明确学号格式**因校而异**、由后端适配器配置提供
+ * （方案 §3.6「代码不写死正则」），4~20 是规格写死的**默认**兜底。
+ * 后端目前尚未把学校规则下发给客户端（B23/C21 遗留，见校验脚本 E 段的记录），
+ * 因此本地按默认规则提示；真正的判定仍以后端 message 为准（`classifyStudentNoError`）。
+ * 注：DB 列宽是 VARCHAR(32)，严格宽于 20 —— 本地上限取规格的 20，不取列宽。
+ */
+const STUDENT_NO_MIN = 4
+const STUDENT_NO_MAX = 20
 /** 头像大小上限：backend/app/routers/upload.py `MAX_SIZE = 5MB`（前端先拦，省一次往返） */
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024
 
@@ -34,23 +45,22 @@ const STUDENT_NO_ERRORS = {
   frequent: '学号 7 天内只能修改一次，请稍后再试',
 }
 
-/** 学号归一化：后端 `_view()` 对 NULL 学号返回 null（列可空）→ 输入框用 '' 表示未绑定 */
-function normalizeStudentNo(raw) {
-  return raw === null || raw === undefined ? '' : String(raw).trim()
-}
-
 /**
  * 把后端 `PUT /user/me` 的学号错误归类。
  *
  * ⚠️ 两类错误**都是 code=3001**，唯一区别在 message（docs/api.md §2 的表格），
  * 因此只能按文案归类；归类失败返回 ''，由调用方展示后端原文（不吞错误）。
+ *
+ * 同时兼容规格里的措辞（任务单 §7.2 写的是「学号修改过于频繁，请 X 天后重试」，
+ * 而当前实现拼的是「学号 7 天内只能修改一次，还需等待 N 天」）——两边都认，
+ * 后端哪天对齐规格文案也不会让这里退化成「未识别」。
  */
 function classifyStudentNoError(err) {
   const msg = String((err && err.message) || '')
   // 唯一索引冲突 → 「该学号已被其他账号绑定」
   if (/已被其他账号绑定|已被占用|已被绑定/.test(msg)) return 'occupied'
-  // 限频（后端拼的是「学号 7 天内只能修改一次，还需等待 N 天」）
-  if (/只能修改一次|还需等待/.test(msg)) return 'frequent'
+  // 限频（当前实现「学号 7 天内只能修改一次，还需等待 N 天」；规格措辞「修改过于频繁」）
+  if (/只能修改一次|还需等待|过于频繁/.test(msg)) return 'frequent'
   return ''
 }
 
@@ -60,10 +70,23 @@ function messageOf(err, fallback) {
   return msg || fallback
 }
 
-/** 头像兜底字符（与「我的」页一致：用 Array.from 避免截断 emoji 代理对） */
-function firstGlyph(nickname) {
-  const chars = Array.from(String(nickname || '').trim())
-  return chars.length ? chars[0] : '校'
+/**
+ * 去掉上传返回 URL 上的**签名 query**，得到可入库的稳定路径。
+ *
+ * 依据（后端契约，不是猜测）：
+ * - `POST /upload/image` 返回的是**带签名**的访问 URL（`?e=过期时间戳&s=HMAC`，默认 7 天）；
+ * - 而 `services/storage.py` 的 `resign()` 明确要求「**入库一律保存不带签名的稳定路径**
+ *   （避免过期签名入库）」—— `upload.py` 自己写 `image_asset` 时也做 `access_url.split('?')[0]`；
+ * - `/user/me` 对外返回时会重新签名，所以库里存裸路径不影响显示；
+ *   反之把签名存进库，7 天后 `user.avatar` 就带着一个**已过期**的签名。
+ *
+ * ⚠️ 只对本地签名上传路径剥离：换成对象存储后返回的可能是第三方预签名 URL
+ * （如 S3 的 `X-Amz-Signature`），剥掉 query 会让它直接失效 —— 判定规则与后端 `resign()` 一致。
+ */
+function stableUploadPath(url) {
+  const s = String(url || '')
+  const path = s.split('?')[0]
+  return path.indexOf('/static/uploads/') !== -1 ? path : s
 }
 
 Page({
@@ -110,7 +133,7 @@ Page({
     this.setData({
       user: u,
       nickname: u.nickname || '',
-      studentNo: normalizeStudentNo(u.student_no),
+      studentNo: studentNoOf(u.student_no),
       avatarText: firstGlyph(u.nickname),
       loading: false,
       error: '',
@@ -169,7 +192,8 @@ Page({
         const url = data && data.url
         // 上传成功但没拿到地址属异常响应：显式失败，避免把 undefined 写进库
         if (!url) throw new Error('上传成功但未返回图片地址，请重试')
-        return request('/user/me', { method: 'PUT', data: { avatar: url } })
+        // 落库用**不带签名**的稳定路径（见 stableUploadPath 的契约说明）
+        return request('/user/me', { method: 'PUT', data: { avatar: stableUploadPath(url) } })
       })
       .then((user) => {
         this.setData({ avatarUploading: false })
@@ -193,7 +217,7 @@ Page({
     const nickname = String(this.data.nickname || '').trim()
     const studentNo = String(this.data.studentNo || '').trim()
     const currentNickname = String((this.data.user && this.data.user.nickname) || '')
-    const currentStudentNo = normalizeStudentNo(this.data.user && this.data.user.student_no)
+    const currentStudentNo = studentNoOf(this.data.user && this.data.user.student_no)
 
     if (!nickname) {
       this.setData({ nicknameError: '昵称不能为空' })
@@ -203,8 +227,13 @@ Page({
       this.setData({ nicknameError: `昵称最多 ${MAX_NICKNAME} 个字符` })
       return
     }
-    if (studentNo.length > MAX_STUDENT_NO) {
-      this.setData({ studentNoError: `学号最多 ${MAX_STUDENT_NO} 个字符` })
+    if (studentNo.length > STUDENT_NO_MAX) {
+      this.setData({ studentNoError: `学号最长 ${STUDENT_NO_MAX} 位` })
+      return
+    }
+    if (studentNo && (studentNo.length < STUDENT_NO_MIN || /\s/.test(studentNo))) {
+      // 规格 §7.2 默认规则 `^\S{4,20}$`：非空 + 4~20 位非空白字符
+      this.setData({ studentNoError: `学号应为 ${STUDENT_NO_MIN}~${STUDENT_NO_MAX} 位且不含空格` })
       return
     }
     if (!studentNo && currentStudentNo) {
@@ -263,7 +292,7 @@ Page({
     this.setData({
       user: u,
       nickname: u.nickname || '',
-      studentNo: normalizeStudentNo(u.student_no),
+      studentNo: studentNoOf(u.student_no),
       avatarText: firstGlyph(u.nickname),
       nicknameError: '',
       studentNoError: '',

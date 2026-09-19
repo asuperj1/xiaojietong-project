@@ -13,6 +13,8 @@
 //   tools/verify_f12_tabbar_poc.js 守护，本任务不改其语义。
 const { request } = require('../../services/request')
 const { syncTabBar } = require('../../utils/tabbar')
+// 学号归一化 / 头像兜底字符与「资料设置」页共用（utils/profile.js），避免两页各写一套
+const { studentNoText, firstGlyph } = require('../../utils/profile')
 
 /** 资料设置页路径（唯一事实来源：onProfileTap 与校验脚本共用同一常量） */
 const PROFILE_URL = '/pages/user/profile'
@@ -29,24 +31,6 @@ const MENUS = [
   { name: '我的收藏', url: '/pages/user/favorites' },
   { name: '任务中心', url: '/pages/agent/index' },
 ]
-
-/**
- * 学号展示文案（含未绑定兜底）。
- *
- * ⚠️ 后端 `_view()` 对 NULL 学号返回的是 **null** 而不是 ''（`u.get('student_no', '')`
- * 只在键缺失时兜底，而 db/sql/17_user_student_no.sql 把空串清成了 NULL 且列可空）。
- * 直接用模板插值会渲染出字符串 "null"，故在 JS 侧统一归一化。
- */
-function studentNoDisplay(raw) {
-  const s = raw === null || raw === undefined ? '' : String(raw).trim()
-  return s ? '学号 ' + s : '未绑定学号'
-}
-
-/** 头像兜底字符：取昵称首字（用 Array.from 而非 [0]，避免把 emoji 的代理对截成半个字符） */
-function firstGlyph(nickname) {
-  const chars = Array.from(String(nickname || '').trim())
-  return chars.length ? chars[0] : '校'
-}
 
 Page({
   data: {
@@ -86,7 +70,7 @@ Page({
     const u = user || {}
     this.setData({
       user: u,
-      studentNoText: studentNoDisplay(u.student_no),
+      studentNoText: studentNoText(u.student_no),
       avatarText: firstGlyph(u.nickname),
       loading: false,
       error: '',

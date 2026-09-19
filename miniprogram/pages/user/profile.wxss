@@ -97,13 +97,23 @@
   line-height: var(--xj-line-height, 1.6);
   flex-shrink: 0;
 }
+/* 输入框走统一玻璃规范（§1.1「输入框 24rpx」+ §7 验收 #1「全部…输入框走统一玻璃规范」）：
+   玻璃底/发丝边/柔和阴影由库类 .xj-glass 提供（WXML 上与该类同时出现），
+   这里只补几何与排版 —— 复合类 (0,2,0) > 库的 (0,1,0)，与声明顺序无关。 */
 .pf-input {
   flex: 1;
   min-width: 0;
   font-size: 30rpx;
   color: #1F2329;
   color: var(--xj-text-primary, #1F2329);
-  text-align: right;
+}
+.pf-input.xj-glass {
+  height: 72rpx;
+  padding: 0 20rpx;
+  border-radius: 24rpx;
+  border-radius: var(--xj-radius-input, 24rpx);
+  box-sizing: border-box;
+  text-align: left;
 }
 .pf-placeholder {
   color: #C4C9D0;

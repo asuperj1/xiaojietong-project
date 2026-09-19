@@ -201,6 +201,10 @@ function makeSandbox(mutations) {
 
 const OK = (data) => ({ code: 0, message: 'ok', data })
 
+/** 上传成功响应：与 upload.py 的真实形状一致 —— **带签名**的访问 URL（本地 /static/uploads） */
+const UPLOAD_OK = { url: '/static/uploads/ab12cd34_1700000000.png?e=1700604800&s=deadbeefcafe', size: 2048 }
+const UPLOAD_STABLE_PATH = '/static/uploads/ab12cd34_1700000000.png'
+
 const FIXTURE_USER = {
   id: 7,
   openid: 'openid-fixture',
@@ -279,7 +283,7 @@ function loadPage(rel, opts = {}) {
       // '__NOT_JSON__'=非 JSON 响应体（如网关 HTML）/ 其它对象=该响应体
       const resp = state.uploadResponder
         ? state.uploadResponder(o, state.uploads.length)
-        : OK({ url: 'https://cdn.example/avatar.png?e=1&s=sign', size: 2048 })
+        : OK(UPLOAD_OK)
       if (resp === null) return
       if (resp === '__FAIL__') {
         if (o.fail) o.fail({ errMsg: 'uploadFile:fail mock' })
@@ -716,10 +720,30 @@ async function main() {
     const puts = putMe(state)
     check(
       '上传成功后 → PUT /user/me {avatar: 上传返回的 url}',
-      puts.length === 1 && /^https:\/\/cdn\.example\/avatar\.png/.test(String(puts[0].data.avatar)),
+      puts.length === 1 && String(puts[0].data.avatar).indexOf('/static/uploads/') === 0,
       JSON.stringify(puts.map((p) => p.data))
     )
+    check(
+      '落库头像剥离签名 query（避免过期签名入库；storage.resign 要求存裸路径）',
+      puts.length === 1 && puts[0].data.avatar === UPLOAD_STABLE_PATH,
+      `avatar=${JSON.stringify((puts[0] || {}).data && puts[0].data.avatar)}`
+    )
     check('头像更新成功 → toast「头像已更新」', state.toasts.indexOf('头像已更新') !== -1, JSON.stringify(state.toasts))
+  }
+
+  {
+    // 反向对照：对象存储返回的**第三方预签名 URL** 不得剥离 query（剥了就失效）
+    const { page, state } = await probeProfilePage({
+      uploadResponder: () => OK({ url: 'https://bucket.example.com/a.png?X-Amz-Signature=abc123', size: 2048 }),
+    })
+    page.chooseAvatar()
+    await tick()
+    const puts = putMe(state)
+    check(
+      '反向对照：非 /static/uploads/ 的外链保留原样（不误剥第三方签名）',
+      puts.length === 1 && puts[0].data.avatar === 'https://bucket.example.com/a.png?X-Amz-Signature=abc123',
+      JSON.stringify(puts.map((p) => p.data))
+    )
   }
 
   {
@@ -820,11 +844,21 @@ async function main() {
     )
   }
 
-  check(
-    '设置页不写死学号正则（§3.6：格式规则由后端适配器配置提供）',
-    !/new RegExp|\\d\{|\\\[A-Z\\\]|\.test\(studentNo/.test(profileJs.replace(/\/\/[^\n]*/g, '')),
-    '页面源码里出现了自造的学号格式校验'
-  )
+  {
+    // §3.6「代码不写死正则」的**可判定口径**：不得自造学校格式正则（字符类 / 位数模式 /
+    // 适配器配置项名），也不得动态 new RegExp；只允许规格 §7.2 写死的默认放宽规则（长度）。
+    const code = profileJs.replace(/\/\/[^\n]*/g, '')
+    check(
+      '设置页不自造学校格式正则（§3.6：格式规则由后端适配器配置提供）',
+      !/new RegExp/.test(code) && !/\[0-9A-Za-z\]|\[A-Z\]|\\d\{|student_no_pattern/.test(code),
+      '页面源码里出现了自造的学校格式校验'
+    )
+    check(
+      '只实现规格 §7.2 的默认放宽规则（非空 + 4~20 位）',
+      /STUDENT_NO_MIN\s*=\s*4/.test(code) && /STUDENT_NO_MAX\s*=\s*20/.test(code),
+      '未按规格默认规则定义 4~20 的长度边界'
+    )
+  }
 
   check('页面不硬编码后端地址（不出现 127.0.0.1 / http:// 字面量）', !/127\.0\.0\.1|http:\/\//.test(userJs + profileJs))
 
@@ -976,7 +1010,114 @@ async function main() {
   check('「我的」页有加载中文案', /class="xj-loading"/.test(userWxml))
   check('设置页有加载中文案', /class="xj-loading"/.test(profileWxml))
   check('未加载完成时不渲染表单（error 分支在前、表单在 wx:else）', /wx:elif="\{\{error\}\}"/.test(profileWxml) && /<block wx:else>/.test(profileWxml))
-  check('昵称/学号输入框 maxlength 与 DB 列宽一致（64 / 32）', /maxlength="64"/.test(profileWxml) && /maxlength="32"/.test(profileWxml))
+  check(
+    '昵称 maxlength 对齐列宽 64；学号 maxlength 对齐规格 §7.2 默认上限 20',
+    /maxlength="64"/.test(profileWxml) && /maxlength="20"/.test(profileWxml) && !/maxlength="32"/.test(profileWxml),
+    '学号上限应取规格默认 20（不是 DB 列宽 32）'
+  )
+
+  {
+    // §1.1「输入框 24rpx」+ §7 验收 #1「全部…输入框走统一玻璃规范」
+    check(
+      '两个输入框都挂玻璃类（class="pf-input xj-glass"）',
+      (profileWxml.match(/class="pf-input xj-glass"/g) || []).length === 2,
+      `匹配 ${(profileWxml.match(/class="pf-input xj-glass"/g) || []).length} 处`
+    )
+    const block = (profileWxss.match(/\.pf-input\.xj-glass\s*\{([^}]*)\}/) || [])[1] || ''
+    check(
+      '输入框圆角走 --xj-radius-input（§1.1「输入框 24rpx」）',
+      /border-radius:\s*24rpx/.test(block) && /--xj-radius-input/.test(block),
+      `规则体=${block.trim().replace(/\s+/g, ' ')}`
+    )
+  }
+
+  {
+    // 学号长度规则（规格 §7.2 默认 `^\S{4,20}$`，非学校格式正则）
+    const cases = [
+      ['202', false, '不足 4 位'],
+      ['2024', true, '恰好 4 位'],
+      ['20240012345678901234', true, '恰好 20 位'],
+      ['202400123456789012345', false, '超过 20 位'],
+      ['2024 0012', false, '含空格'],
+      ['A20240001', true, '字母+数字（4~20 位）'],
+    ]
+    for (const [value, shouldPass, label] of cases) {
+      const { page, state } = await probeProfilePage({ user: { student_no: '' } })
+      page.onStudentNoInput(inputEvent(value))
+      page.save()
+      await tick()
+      const sent = putMe(state).length > 0
+      check(
+        `学号「${value}」（${label}）→ ${shouldPass ? '放行' : '本地拦截'}`,
+        sent === shouldPass,
+        `PUT=${sent} studentNoError=${page.data.studentNoError}`
+      )
+    }
+  }
+
+  {
+    // 规格措辞的限频文案（任务单 §7.2 写的是「学号修改过于频繁，请 X 天后重试」）
+    const specVariant = await probeStudentNoError({ message: '学号修改过于频繁，请 3 天后重试' })
+    check(
+      '规格措辞「修改过于频繁」同样归入 frequent（后端对齐规格文案也不退化）',
+      /只能修改一次/.test(specVariant.studentNoError || '') && specVariant.formError === '',
+      `studentNoError=${specVariant.studentNoError} formError=${specVariant.formError}`
+    )
+  }
+
+  {
+    // utils/profile.js：两页共用的归一化/兜底，防再次各写一套
+    const helperSrc = readRel('utils/profile.js')
+    check('存在共用的 utils/profile.js', helperSrc.length > 0)
+    check(
+      '「我的」页与「资料设置」页都 require utils/profile（不各写一份）',
+      /require\(['"][^'"]*utils\/profile['"]\)/.test(userJs) && /require\(['"][^'"]*utils\/profile['"]\)/.test(profileJs)
+    )
+    check(
+      '两个页面内不再各自定义 firstGlyph（去重后不应回潮）',
+      !/function firstGlyph/.test(userJs) && !/function firstGlyph/.test(profileJs)
+    )
+    // 行为：helper 的三条归一化规则
+    const h = require(path.join(MP, 'utils', 'profile.js'))
+    check(
+      'helper：学号 NULL/空串/首尾空白归一化正确',
+      h.studentNoOf(null) === '' && h.studentNoOf('') === '' && h.studentNoOf('  2024001234 ') === '2024001234',
+      JSON.stringify([h.studentNoOf(null), h.studentNoOf(''), h.studentNoOf('  2024001234 ')])
+    )
+    check(
+      'helper：展示文案含未绑定兜底',
+      h.studentNoText(null) === '未绑定学号' && h.studentNoText('2024001234') === '学号 2024001234',
+      JSON.stringify([h.studentNoText(null), h.studentNoText('2024001234')])
+    )
+    check(
+      'helper：头像兜底字符取首字（emoji 不截半）',
+      h.firstGlyph('阿捷') === '阿' && h.firstGlyph('') === '校' && h.firstGlyph('👍赞') === '👍',
+      JSON.stringify([h.firstGlyph('阿捷'), h.firstGlyph(''), h.firstGlyph('👍赞')])
+    )
+  }
+
+  {
+    // request() / uploadImage() 的错误收口只应有一处（防再次分叉成两套语义）。
+    // 计数口径：settleBody 内 1 处 + sseRequest 的非流式错误处理 1 处（SSE 保持独立，
+    // 不在本次收敛范围）→ 全文件恰好 2 处；request()/uploadImage() 自身不得再各判一次。
+    const reqSrc = readRel('services/request.js')
+    const settleFn = (reqSrc.match(/function settleBody[\s\S]*?\n\}/) || [''])[0]
+    check(
+      '响应收口只在 settleBody 内判定登录态失效',
+      (settleFn.match(/AUTH_FAILURE_CODES\.indexOf/g) || []).length === 1,
+      `settleBody 内 ${(settleFn.match(/AUTH_FAILURE_CODES\.indexOf/g) || []).length} 处`
+    )
+    const authChecks = (reqSrc.match(/AUTH_FAILURE_CODES\.indexOf\(code\)/g) || []).length
+    check(
+      'request()/uploadImage() 共用同一处响应收口（不再各判一次）',
+      authChecks === 2,
+      `出现 ${authChecks} 处（期望 2 = settleBody 1 + sseRequest 非流式错误 1）`
+    )
+    check(
+      'request()/uploadImage() 共用同一处网络失败反馈（failNetwork 只有 1 处定义）',
+      (reqSrc.match(/function failNetwork/g) || []).length === 1
+    )
+  }
 
   // ================================================================ I ====
   bar('I. 结构对账（class 定义 / 事件函数 / 标签配平 / WXSS 注释定界符）')
@@ -1133,11 +1274,15 @@ async function main() {
     )
   }
 
-  // R4 去掉学号 NULL 兜底
+  // R4 去掉学号 NULL 兜底（共用 helper 里改，两页同时失效）
   {
-    const mutated = userJs.replace("  const s = raw === null || raw === undefined ? '' : String(raw).trim()", '  const s = String(raw).trim()')
-    check('R4 突变可用（源码确实被改写）', mutated !== userJs)
-    const { page } = await probeUserPage({ user: { student_no: null }, mutations: { 'pages/user/user.js': mutated } })
+    const helperSrc = readRel('utils/profile.js')
+    const mutated = helperSrc.replace(
+      "  return raw === null || raw === undefined ? '' : String(raw).trim()",
+      '  return String(raw).trim()'
+    )
+    check('R4 突变可用（源码确实被改写）', mutated !== helperSrc)
+    const { page } = await probeUserPage({ user: { student_no: null }, mutations: { 'utils/profile.js': mutated } })
     check('R4 反证：去掉 NULL 兜底后 B 段会失败（会渲染出 null）', page.data.studentNoText !== '未绑定学号', String(page.data.studentNoText))
   }
 
